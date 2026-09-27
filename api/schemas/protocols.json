@@ -1,0 +1,384 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Manually selected consumer wire subset; not a full upstream schema. Regenerate Go types with hack/generate-protocol-types.py. See api/schemas/PROVENANCE.md.",
+  "$defs": {
+    "LLDiscount": {
+      "type": "object",
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "x-go-name": "Adapter"
+        },
+        "tokenToRedeem": {
+          "type": "string",
+          "x-go-name": "TokenToRedeem"
+        },
+        "discount": {
+          "type": "string",
+          "x-go-name": "Discount"
+        },
+        "signer": {
+          "type": "string",
+          "x-go-name": "Signer"
+        },
+        "protocol": {
+          "type": "string",
+          "x-go-name": "Protocol"
+        },
+        "nonce": {
+          "type": "string",
+          "x-go-name": "Nonce"
+        },
+        "deadline": {
+          "type": "integer",
+          "x-go-name": "Deadline"
+        }
+      },
+      "additionalProperties": true
+    },
+    "LLResolved": {
+      "type": "object",
+      "properties": {
+        "discountId": {
+          "type": "string",
+          "x-go-name": "DiscountID"
+        },
+        "discount": {
+          "$ref": "#/$defs/LLDiscount",
+          "x-go-name": "Discount"
+        },
+        "signerSignature": {
+          "type": "string",
+          "x-go-name": "SignerSignature"
+        },
+        "protocolDeadline": {
+          "type": "integer",
+          "x-go-name": "ProtocolDeadline"
+        },
+        "protocolSignature": {
+          "type": "string",
+          "x-go-name": "ProtocolSignature"
+        }
+      },
+      "additionalProperties": true
+    },
+    "LLResolveResponse": {
+      "type": "object",
+      "properties": {
+        "discountId": {
+          "type": "string",
+          "x-go-name": "DiscountID"
+        },
+        "discount": {
+          "$ref": "#/$defs/LLDiscount",
+          "x-go-name": "Discount"
+        },
+        "signerSignature": {
+          "type": "string",
+          "x-go-name": "SignerSignature"
+        },
+        "protocolDeadline": {
+          "type": "integer",
+          "x-go-name": "ProtocolDeadline"
+        },
+        "protocolSignature": {
+          "type": "string",
+          "x-go-name": "ProtocolSignature"
+        },
+        "discounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LLResolved"
+          },
+          "x-go-name": "Discounts"
+        }
+      },
+      "additionalProperties": true
+    },
+    "LLListItem": {
+      "type": "object",
+      "properties": {
+        "discountId": {
+          "type": "string",
+          "x-go-name": "DiscountID"
+        },
+        "adapter": {
+          "type": "string",
+          "x-go-name": "Adapter"
+        },
+        "tokenToRedeem": {
+          "type": "string",
+          "x-go-name": "TokenToRedeem"
+        },
+        "collateral": {
+          "type": "string",
+          "x-go-name": "Collateral"
+        },
+        "maxRate": {
+          "type": "string",
+          "x-go-name": "MaxRate"
+        },
+        "maxAssets": {
+          "type": "string",
+          "x-go-name": "MaxAssets"
+        },
+        "deadline": {
+          "type": "integer",
+          "x-go-name": "Deadline"
+        }
+      },
+      "additionalProperties": true
+    },
+    "LLListResponse": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "x-go-name": "Protocol"
+        },
+        "discounts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LLListItem"
+          },
+          "x-go-name": "Discounts"
+        }
+      },
+      "additionalProperties": true
+    },
+    "MerklToken": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string",
+          "x-go-name": "Address"
+        },
+        "decimals": {
+          "type": "integer",
+          "x-go-name": "Decimals"
+        }
+      },
+      "additionalProperties": true
+    },
+    "MerklReward": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "$ref": "#/$defs/MerklToken",
+          "x-go-name": "Token"
+        },
+        "amount": {
+          "type": "string",
+          "x-go-name": "Amount"
+        },
+        "claimed": {
+          "type": "string",
+          "x-go-name": "Claimed"
+        },
+        "pending": {
+          "type": "string",
+          "x-go-name": "Pending"
+        },
+        "proofs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-name": "Proofs"
+        }
+      },
+      "additionalProperties": true
+    },
+    "MerklChain": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer",
+          "x-go-name": "ID"
+        }
+      },
+      "additionalProperties": true
+    },
+    "MerklEntry": {
+      "type": "object",
+      "properties": {
+        "chain": {
+          "$ref": "#/$defs/MerklChain",
+          "x-go-name": "Chain"
+        },
+        "rewards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MerklReward"
+          },
+          "x-go-name": "Rewards"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CowQuoteRequest": {
+      "type": "object",
+      "properties": {
+        "sellToken": {
+          "type": "string",
+          "x-go-name": "SellToken"
+        },
+        "buyToken": {
+          "type": "string",
+          "x-go-name": "BuyToken"
+        },
+        "from": {
+          "type": "string",
+          "x-go-name": "From"
+        },
+        "receiver": {
+          "type": "string",
+          "x-go-name": "Receiver"
+        },
+        "sellAmountBeforeFee": {
+          "type": "string",
+          "x-go-name": "SellAmountBeforeFee"
+        },
+        "kind": {
+          "type": "string",
+          "x-go-name": "Kind"
+        },
+        "signingScheme": {
+          "type": "string",
+          "x-go-name": "SigningScheme"
+        },
+        "validTo": {
+          "type": "integer",
+          "x-go-name": "ValidTo"
+        },
+        "appData": {
+          "type": "string",
+          "x-go-name": "AppData"
+        },
+        "partiallyFillable": {
+          "type": "boolean",
+          "x-go-name": "PartiallyFillable"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CowOrder": {
+      "type": "object",
+      "properties": {
+        "sellToken": {
+          "type": "string",
+          "x-go-name": "SellToken"
+        },
+        "buyToken": {
+          "type": "string",
+          "x-go-name": "BuyToken"
+        },
+        "receiver": {
+          "type": "string",
+          "x-go-name": "Receiver"
+        },
+        "sellAmount": {
+          "type": "string",
+          "x-go-name": "SellAmount"
+        },
+        "buyAmount": {
+          "type": "string",
+          "x-go-name": "BuyAmount"
+        },
+        "validTo": {
+          "type": "integer",
+          "x-go-name": "ValidTo"
+        },
+        "appData": {
+          "type": "string",
+          "x-go-name": "AppData"
+        },
+        "feeAmount": {
+          "type": "string",
+          "x-go-name": "FeeAmount"
+        },
+        "kind": {
+          "type": "string",
+          "x-go-name": "Kind"
+        },
+        "partiallyFillable": {
+          "type": "boolean",
+          "x-go-name": "PartiallyFillable"
+        },
+        "sellTokenBalance": {
+          "type": "string",
+          "x-go-name": "SellTokenBalance"
+        },
+        "buyTokenBalance": {
+          "type": "string",
+          "x-go-name": "BuyTokenBalance"
+        },
+        "signingScheme": {
+          "type": "string",
+          "x-go-name": "SigningScheme"
+        },
+        "signature": {
+          "type": "string",
+          "x-go-name": "Signature"
+        },
+        "from": {
+          "type": "string",
+          "x-go-name": "From"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CowQuoteResponse": {
+      "type": "object",
+      "properties": {
+        "quote": {
+          "$ref": "#/$defs/CowOrder",
+          "x-go-name": "Quote"
+        },
+        "id": {
+          "type": "integer",
+          "x-go-name": "ID"
+        },
+        "expiration": {
+          "type": "string",
+          "x-go-name": "Expiration"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CowOrderStatus": {
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "x-go-name": "UID"
+        },
+        "status": {
+          "type": "string",
+          "x-go-name": "Status"
+        },
+        "owner": {
+          "type": "string",
+          "x-go-name": "Owner"
+        },
+        "executedSellAmountBeforeFees": {
+          "type": "string",
+          "x-go-name": "ExecutedSellAmountBeforeFees"
+        },
+        "sellAmount": {
+          "type": "string",
+          "x-go-name": "SellAmount"
+        },
+        "buyAmount": {
+          "type": "string",
+          "x-go-name": "BuyAmount"
+        },
+        "validTo": {
+          "type": "integer",
+          "x-go-name": "ValidTo"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

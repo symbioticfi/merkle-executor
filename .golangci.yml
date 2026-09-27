@@ -1,0 +1,24 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - bodyclose
+    - errorlint
+    - loggercheck
+    - forbidigo
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: ^fmt\.Errorf$
+          msg: Use go-errors/errors.Errorf with boundary context.
+  exclusions:
+    generated: lax
+formatters:
+  enable:
+    - gofmt

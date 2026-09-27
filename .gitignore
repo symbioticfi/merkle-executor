@@ -1,0 +1,10 @@
+/bin/
+/state/
+/coverage.out
+/.cache/
+/.tools/
+.env*
+*.local.*
+*.key
+*.pem
+*.log

@@ -1,0 +1,10 @@
+.git
+bin
+state
+.cache
+.tools
+.env*
+*.local.*
+*.key
+*.pem
+coverage.out

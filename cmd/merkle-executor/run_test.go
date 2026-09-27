@@ -1,0 +1,373 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	ethereum "github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/go-errors/errors"
+	"gopkg.in/yaml.v3"
+
+	erc20 "github.com/symbioticfi/merkle-executor/api/bindings/erc20"
+	executor "github.com/symbioticfi/merkle-executor/api/bindings/recipesexecutor"
+	"github.com/symbioticfi/merkle-executor/internal/config"
+	"github.com/symbioticfi/merkle-executor/internal/keeper"
+	"github.com/symbioticfi/merkle-executor/internal/providers/data"
+	"github.com/symbioticfi/merkle-executor/internal/recipes"
+	"github.com/symbioticfi/merkle-executor/internal/state"
+)
+
+type serviceArtifact struct {
+	ABI      abi.ABI
+	Bytecode hexutil.Bytes
+}
+
+func loadServiceArtifact(t *testing.T, name string) serviceArtifact {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "recipes", "testdata", "anvil", name+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		ABI      json.RawMessage
+		Bytecode hexutil.Bytes
+	}
+	if err = json.Unmarshal(raw, &document); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := abi.JSON(bytes.NewReader(document.ABI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return serviceArtifact{ABI: parsed, Bytecode: document.Bytecode}
+}
+
+func servicePack(t *testing.T, contract serviceArtifact, method string, values ...any) []byte {
+	t.Helper()
+	encoded, err := contract.ABI.Pack(method, values...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
+}
+
+func startServiceAnvil(t *testing.T, ctx context.Context) (*ethclient.Client, string) {
+	t.Helper()
+	binary, err := exec.LookPath("anvil")
+	if err != nil {
+		t.Fatal("MERKLE_ANVIL_TEST requires anvil in PATH")
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err = listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(ctx, binary, "--host", "127.0.0.1", "--port", strconv.Itoa(port), "--chain-id", "31337", "--hardfork", "osaka", "--silent")
+	var output bytes.Buffer
+	command.Stdout, command.Stderr = &output, &output
+	if err = command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		if t.Failed() {
+			t.Log(output.String())
+		}
+	})
+	endpoint := fmt.Sprintf("http://127.0.0.1:%d", port)
+	client, err := ethclient.DialContext(ctx, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if chainID, err := client.ChainID(ctx); err == nil {
+			if chainID.Cmp(big.NewInt(31337)) != 0 {
+				t.Fatal("unexpected local chain identity")
+			}
+			return client, endpoint
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-timer.C:
+			t.Fatal("local Anvil startup timed out")
+		case <-ticker.C:
+		}
+	}
+}
+
+func serviceSeedTransaction(t *testing.T, ctx context.Context, client *ethclient.Client, from common.Address, to *common.Address, calldata []byte) *types.Receipt {
+	t.Helper()
+	args := map[string]any{"from": from, "gas": hexutil.Uint64(12_000_000), "data": hexutil.Bytes(calldata)}
+	if to != nil {
+		args["to"] = *to
+	}
+	var hash common.Hash
+	if err := client.Client().CallContext(ctx, &hash, "eth_sendTransaction", args); err != nil {
+		t.Fatal(err)
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		receipt, err := client.TransactionReceipt(ctx, hash)
+		if err == nil {
+			if receipt.Status != types.ReceiptStatusSuccessful {
+				t.Fatal("local fixture setup reverted")
+			}
+			return receipt
+		}
+		if !errors.Is(err, ethereum.NotFound) {
+			t.Fatal(err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func serviceNode(t *testing.T, value any) yaml.Node {
+	t.Helper()
+	var node yaml.Node
+	if err := node.Encode(value); err != nil {
+		t.Fatal(err)
+	}
+	return node
+}
+
+func serviceRecipe(t *testing.T, leaf common.Hash) recipes.Recipe {
+	t.Helper()
+	valueFields := []abi.ArgumentMarshaling{{Name: "source", Type: "uint8"}, {Name: "value", Type: "uint256"}}
+	valueType, err := abi.NewType("tuple", "", valueFields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leavesType, err := abi.NewType("bytes32[]", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindingsType, err := abi.NewType("tuple[][]", "", []abi.ArgumentMarshaling{{Name: "offset", Type: "uint256"}, {Name: "value", Type: "tuple", Components: valueFields}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack := func(args abi.Arguments, values ...any) []byte {
+		encoded, err := args.Pack(values...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	input := func(index int64) recipes.Value { return recipes.Value{Source: recipes.Input, Value: big.NewInt(index)} }
+	binary := abi.Arguments{{Type: valueType}, {Type: valueType}}
+	manage := abi.Arguments{{Type: valueType}, {Type: leavesType}, {Type: bindingsType}}
+	return recipes.Recipe{Steps: []recipes.Step{
+		{Operation: recipes.LessOrEqual, Data: pack(binary, input(0), input(1))},
+		{Operation: recipes.LessOrEqual, Data: pack(binary, input(2), input(1))},
+		{Operation: recipes.Manage, Data: pack(manage, recipes.Value{Source: recipes.Literal, Value: big.NewInt(1)}, [][32]byte{leaf}, [][]recipes.Binding{{{Offset: big.NewInt(36), Value: input(0)}}})},
+	}}
+}
+
+func TestAnvilServicePlanAndSend(t *testing.T) {
+	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
+		t.Skip("set MERKLE_ANVIL_TEST=1 for full local service integration")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	client, endpoint := startServiceAnvil(t, ctx)
+	var localAccounts []common.Address
+	if err := client.Client().CallContext(ctx, &localAccounts, "eth_accounts"); err != nil || len(localAccounts) < 2 {
+		t.Fatalf("local accounts unavailable: %v", err)
+	}
+	owner, recipient := localAccounts[0], localAccounts[1]
+	accountArtifact := loadServiceArtifact(t, "FixtureAccount")
+	tokenArtifact := loadServiceArtifact(t, "FixtureToken")
+	executorArtifact := loadServiceArtifact(t, "RecipesExecutor")
+	accountAddress := serviceSeedTransaction(t, ctx, client, owner, nil, accountArtifact.Bytecode).ContractAddress
+	tokenAddress := serviceSeedTransaction(t, ctx, client, owner, nil, tokenArtifact.Bytecode).ContractAddress
+	constructor := servicePack(t, executorArtifact, "", owner, accountAddress)
+	executorAddress := serviceSeedTransaction(t, ctx, client, owner, nil, append(bytes.Clone(executorArtifact.Bytecode), constructor...)).ContractAddress
+
+	// Generate an ephemeral test-only signer and fund it exclusively in this local
+	// node. No existing user key or configured external RPC is read by the test.
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := crypto.PubkeyToAddress(key.PublicKey)
+	if err = client.Client().CallContext(ctx, nil, "anvil_setBalance", caller, "0xde0b6b3a7640000"); err != nil {
+		t.Fatal(err)
+	}
+	tokenABI, executorABI := erc20.NewERC20(), executor.NewRecipesExecutor()
+	transfer := tokenABI.PackTransfer(recipient, new(big.Int))
+	mask := make([]byte, len(transfer))
+	for index := 36; index < len(mask); index++ {
+		mask[index] = 0xff
+	}
+	leaf := recipes.Leaf{Target: tokenAddress, Value: new(big.Int), Data: transfer, DataMask: mask}
+	leaf.Hash, err = recipes.HashLeaf(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceSeedTransaction(t, ctx, client, owner, &accountAddress, servicePack(t, accountArtifact, "configure", leaf.Hash, [][32]byte{leaf.Hash}, executorAddress))
+	serviceSeedTransaction(t, ctx, client, owner, &tokenAddress, servicePack(t, tokenArtifact, "mint", accountAddress, big.NewInt(1000)))
+	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, executorABI.PackSetCaller(caller))
+	recipe := serviceRecipe(t, leaf.Hash)
+	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
+
+	directory := t.TempDir()
+	cfg := testCLIConfig(directory)
+	cfg.Mode, cfg.Chain.RPCURL, cfg.Signer.Address = "send", endpoint, caller.Hex()
+	cfg.Strategies[0].Executor, cfg.Strategies[0].Account = executorAddress.Hex(), accountAddress.Hex()
+	permission, err := json.Marshal(map[string]any{"root": leaf.Hash.Hex(), "chainId": 31337, "account": accountAddress.Hex(), "leaves": []any{map[string]any{"hash": leaf.Hash.Hex(), "target": tokenAddress.Hex(), "value": "zero", "data": hexutil.Encode(transfer), "dataMask": hexutil.Encode(mask), "proof": []string{}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(cfg.Strategies[0].Tree, permission, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var httpCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		httpCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]string{"minimum": "900"}); err != nil {
+			t.Error(err)
+		}
+	}))
+	t.Cleanup(server.Close)
+	cfg.Strategies[0].Providers = []config.Provider{
+		{Name: "static", Config: serviceNode(t, data.StaticConfig{Inputs: map[uint]string{0: "17"}})},
+		{Name: "rpc", Config: serviceNode(t, data.RPCConfig{Reads: []data.Read{{Target: tokenAddress.Hex(), Data: hexutil.Encode(tokenABI.PackBalanceOf(accountAddress)), Input: 1}}})},
+		{Name: "http", Config: serviceNode(t, data.HTTPConfig{URL: server.URL, Inputs: map[uint]string{2: "/minimum"}})},
+	}
+	for name, mutate := range map[string]func(*config.Config){
+		"chain":   func(c *config.Config) { c.Chain.ChainID++ },
+		"caller":  func(c *config.Config) { c.Signer.Address = owner.Hex() },
+		"account": func(c *config.Config) { c.Strategies[0].Account = recipient.Hex() },
+	} {
+		invalid := cfg
+		invalid.Strategies = append([]config.Strategy(nil), cfg.Strategies...)
+		mutate(&invalid)
+		invalidPath := writeCLIConfig(t, directory, invalid)
+		if err = runBot(ctx, invalidPath, true, true, new(bytes.Buffer)); err == nil {
+			t.Fatalf("plan accepted wrong %s identity", name)
+		}
+	}
+	path := writeCLIConfig(t, directory, cfg)
+	for _, invalidKey := range []string{"invalid-test-key-that-plan-must-ignore", ""} {
+		t.Setenv(cfg.Signer.KeyEnv, invalidKey)
+		var output bytes.Buffer
+		if err = runBot(ctx, path, true, true, &output); err != nil {
+			t.Fatalf("plan read signer or failed: %v", err)
+		}
+		var plans map[string]keeper.Plan
+		if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
+			t.Fatal(err)
+		}
+		plan, exists := plans["funding"]
+		if !exists || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 3 || plan.Outputs[0].Inputs[0] != "17" || plan.Outputs[1].Inputs[1] != "1000" || plan.Outputs[2].Inputs[2] != "900" {
+			t.Fatal("plan lost configuration, provider output or transaction")
+		}
+	}
+	if _, err = os.Stat(cfg.StateDir); !os.IsNotExist(err) {
+		t.Fatalf("plan created signing state: %v", err)
+	}
+	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 0 {
+		t.Fatalf("plan sent a transaction: nonce=%d / %v", nonce, err)
+	}
+
+	// Finality requires descendants after inclusion; mine local empty blocks while
+	// the real transaction manager confirms and acknowledges the signed transaction.
+	mining, stopMining := context.WithCancel(ctx)
+	miningDone := make(chan struct{})
+	go func() {
+		defer close(miningDone)
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-mining.Done():
+				return
+			case <-ticker.C:
+				if err := client.Client().CallContext(mining, nil, "evm_mine"); err != nil && mining.Err() == nil {
+					t.Error(err)
+					return
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() { stopMining(); <-miningDone })
+	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
+	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
+		t.Fatalf("send-once failed: %v", err)
+	}
+	var job keeper.Job
+	if found, err := state.Read(cfg.StateDir, "strategy.funding.v1", &job); err != nil || !found {
+		t.Fatalf("durable job missing: %v", err)
+	}
+	if job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || job.Result.Hash == (common.Hash{}) || len(job.Progress) != 3 || job.FinishedAt.IsZero() {
+		t.Fatalf("job did not settle: %+v", job.Result)
+	}
+	for _, progress := range job.Progress {
+		if !progress.Done {
+			t.Fatal("provider progress was not persisted")
+		}
+	}
+	if found, err := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); err != nil || found {
+		t.Fatalf("terminal journal was not acknowledged: %v", err)
+	}
+	transaction, pending, err := client.TransactionByHash(ctx, job.Result.Hash)
+	if err != nil || pending {
+		t.Fatalf("canonical local transaction missing: %v", err)
+	}
+	signedBy, err := types.Sender(types.LatestSignerForChainID(big.NewInt(31337)), transaction)
+	if err != nil || signedBy != caller || transaction.To() == nil || *transaction.To() != executorAddress || !bytes.Equal(transaction.Data(), job.Plan.Calldata) || transaction.Nonce() != 0 {
+		t.Fatalf("sender/transaction differs from durable plan: %v", err)
+	}
+	for address, expected := range map[common.Address]int64{accountAddress: 983, recipient: 17} {
+		raw, err := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddress, Data: tokenABI.PackBalanceOf(address)}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		balance, err := tokenABI.UnpackBalanceOf(raw)
+		if err != nil || balance.Int64() != expected {
+			t.Fatalf("post-execution balance expected %d: %v / %v", expected, balance, err)
+		}
+	}
+	requests := httpCalls.Load()
+	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
+		t.Fatalf("restart failed: %v", err)
+	}
+	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || httpCalls.Load() != requests {
+		t.Fatalf("restart repeated completed work: nonce=%d / %v", nonce, err)
+	}
+}

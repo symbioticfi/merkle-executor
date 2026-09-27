@@ -1,0 +1,6 @@
+{
+  "src/contracts/merkle-adapter/automations/RecipesExecutor.sol": "2389bcd54aaad824745ad9f2fad99c855797bf81adfda035bbc9f833a5f65867",
+  "src/contracts/merkle-adapter/Recipes.sol": "616fce496060eefbfe7deeb9c72e08adebdcbf588db4d27ef365026a0ea012ea",
+  "src/contracts/merkle-adapter/libraries/MerkleAdapterVerifier.sol": "02d64c6a37097a919d70055832d4eec4ecc75446d1467c49873a3f7e0ac92555",
+  "Fixture.sol": "b7c925b89caff89e2aeaaf2ba729851654d004be869f4e73cfbfff87d4cb3437"
+}
