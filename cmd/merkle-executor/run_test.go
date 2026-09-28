@@ -29,7 +29,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	erc20 "github.com/symbioticfi/merkle-executor/api/bindings/erc20"
-	executor "github.com/symbioticfi/merkle-executor/api/bindings/recipesexecutor"
+	executor "github.com/symbioticfi/merkle-executor/api/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	"github.com/symbioticfi/merkle-executor/internal/keeper"
 	"github.com/symbioticfi/merkle-executor/internal/providers/data"
@@ -167,8 +167,7 @@ func serviceNode(t *testing.T, value any) yaml.Node {
 
 func serviceRecipe(t *testing.T, leaf common.Hash) recipes.Recipe {
 	t.Helper()
-	valueFields := []abi.ArgumentMarshaling{{Name: "source", Type: "uint8"}, {Name: "value", Type: "uint256"}}
-	valueType, err := abi.NewType("tuple", "", valueFields)
+	valueType, err := abi.NewType("uint256", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +175,7 @@ func serviceRecipe(t *testing.T, leaf common.Hash) recipes.Recipe {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bindingsType, err := abi.NewType("tuple[][]", "", []abi.ArgumentMarshaling{{Name: "offset", Type: "uint256"}, {Name: "value", Type: "tuple", Components: valueFields}})
+	bindingsType, err := abi.NewType("uint256[][]", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,13 +186,15 @@ func serviceRecipe(t *testing.T, leaf common.Hash) recipes.Recipe {
 		}
 		return encoded
 	}
-	input := func(index int64) recipes.Value { return recipes.Value{Source: recipes.Input, Value: big.NewInt(index)} }
+	input := func(index int64) *big.Int {
+		return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(1), 216), big.NewInt(index))
+	}
 	binary := abi.Arguments{{Type: valueType}, {Type: valueType}}
 	manage := abi.Arguments{{Type: valueType}, {Type: leavesType}, {Type: bindingsType}}
-	return recipes.Recipe{Steps: []recipes.Step{
-		{Operation: recipes.LessOrEqual, Data: pack(binary, input(0), input(1))},
-		{Operation: recipes.LessOrEqual, Data: pack(binary, input(2), input(1))},
-		{Operation: recipes.Manage, Data: pack(manage, recipes.Value{Source: recipes.Literal, Value: big.NewInt(1)}, [][32]byte{leaf}, [][]recipes.Binding{{{Offset: big.NewInt(36), Value: input(0)}}})},
+	return recipes.Recipe{Steps: [][]byte{
+		append([]byte{recipes.LessOrEqual}, pack(binary, input(0), input(1))...),
+		append([]byte{recipes.LessOrEqual}, pack(binary, input(2), input(1))...),
+		append([]byte{recipes.Manage}, pack(manage, big.NewInt(1), [][32]byte{leaf}, [][]*big.Int{{new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), input(0))}})...),
 	}}
 }
 
@@ -211,7 +212,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	owner, recipient := localAccounts[0], localAccounts[1]
 	accountArtifact := loadServiceArtifact(t, "FixtureAccount")
 	tokenArtifact := loadServiceArtifact(t, "FixtureToken")
-	executorArtifact := loadServiceArtifact(t, "RecipesExecutor")
+	executorArtifact := loadServiceArtifact(t, "RecipeExecutor")
 	accountAddress := serviceSeedTransaction(t, ctx, client, owner, nil, accountArtifact.Bytecode).ContractAddress
 	tokenAddress := serviceSeedTransaction(t, ctx, client, owner, nil, tokenArtifact.Bytecode).ContractAddress
 	constructor := servicePack(t, executorArtifact, "", owner, accountAddress)
@@ -227,7 +228,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if err = client.Client().CallContext(ctx, nil, "anvil_setBalance", caller, "0xde0b6b3a7640000"); err != nil {
 		t.Fatal(err)
 	}
-	tokenABI, executorABI := erc20.NewERC20(), executor.NewRecipesExecutor()
+	tokenABI, executorABI := erc20.NewERC20(), executor.NewRecipeExecutor()
 	transfer := tokenABI.PackTransfer(recipient, new(big.Int))
 	mask := make([]byte, len(transfer))
 	for index := 36; index < len(mask); index++ {

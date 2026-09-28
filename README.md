@@ -1,8 +1,12 @@
 # Merkle executor
 
-A Go keeper for curator-committed `RecipesExecutor` strategies. It discovers the
+A Go keeper for curator-committed `RecipeExecutor` strategies. It discovers the
 current `SetRecipe`, assembles runtime calldata from the active permission tree,
 resolves protocol data, simulates the complete call and optionally sends it.
+
+Recipes use opcode-prefixed `bytes[]` steps and packed operands/bindings from
+the current `IRecipes` schema. Literal values and indices fit `uint216`;
+runtime inputs and computed results retain all 256 bits. [Wire format](docs/DESIGN.md#recipe-encoding).
 
 The layout and style follow `../vault-solver`: integration-neutral infrastructure,
 isolated protocol packages, strict YAML, generated ABI bindings, Cobra, logr and
@@ -13,10 +17,12 @@ one serialized transaction sender. [Design and comparison](docs/DESIGN.md).
 | Flow | Implementation |
 | --- | --- |
 | Ordered Morpho/Aave funding, caps and overflow deposits | Execute the configured on-chain recipe; all 12 current operations are supported. No hardcoded lending strategy in Go. |
-| LL connector swap and issuer redemption request | `liquidlane` provider supplies connector-domain signed terms, exact calldata and quoted input amounts. |
+| LL connector swap | `liquidlane` provider supplies connector-domain signed terms, exact calldata and quoted input amounts. |
+| All 15 documented LL assets plus sUSN | `redemptions` provider prepares Midas, Centrifuge, OpenEden, Figure, Pareto and Noon requests and eligible claims. [Catalogue and lifecycle](docs/LIQUID-LANE-ASSETS.md). |
+| Securitize EVM assets | `securitize` provider prepares wallet requests and legacy/modern atomic offramps for all 10 symbols in the public feed. [Deployment coverage and limits](docs/SECURITIZE-ASSETS.md). |
 | CoW Swap | Quote, build account ERC-1271 authorization, wait for its confirmed transaction, submit/reconcile deterministic order UID, verify full fill on-chain. |
 | Merkl reward claims | Read V4 rewards, use cumulative amounts, verify effective distributor root/proof and recipient, encode an approved bounded claim. |
-| Issuer claims, 3F reads and other protocols | `rpc`, `http` and `static` providers resolve committed inputs/payloads. Add a provider for protocol-specific discovery or asynchronous effects. |
+| 3F reads and other protocols | `rpc`, `http` and `static` providers resolve committed inputs/payloads. Add a provider for protocol-specific discovery or asynchronous effects. |
 
 The engine supports programs expressible by the current Solidity interpreter.
 It does not infer economic intent, invent calldata layouts or automatically
@@ -66,7 +72,7 @@ are errors. Result bindings and arithmetic execute on-chain. An explicit skipped
 Manage step still occupies a runtime slot and must pass full simulation.
 
 For a claim → Morpho-cap → Aave-overflow recipe, compose a Merkl provider with an
-issuer RPC/HTTP provider. The committed recipe measures received cash, computes
+issuer claim provider. The committed recipe measures received cash, computes
 remaining Morpho capacity, deposits there and routes the remaining cash to Aave.
 These choices stay in the curator's recipe. The keeper only supplies unavailable
 proofs, request IDs or signatures.
@@ -78,6 +84,13 @@ broadcast. An ambiguous send or timeout retains the same signed transaction and
 nonce. Restart resumes it; it never assumes a missing receipt permits a new nonce.
 Receipts require canonical ancestry and the configured number of descendant
 blocks. There is no automatic fee bump or cancellation in this version.
+
+Issuer providers require the account's confirmed `Manage` logs to match their
+prepared calls, so a skipped recipe group cannot count as a request. Request jobs
+finish as `requested` and release the account for later claim recipes. This records
+submission, not issuer payout. Receipt evidence survives restarts. Securitize wallet
+requests additionally require exact token delivery; atomic offramps require payment
+evidence. Issuer enrollment and external settlement remain issuer-controlled.
 
 After authorization confirms, external progress is checkpointed separately.
 CoW API status alone is insufficient to finish a trade. Full on-chain fill or
@@ -108,7 +121,7 @@ the process's single sender; pure data providers never submit transactions.
 
 ```sh
 make check       # build, race tests with coverage, vet and lint
-make integration # ephemeral loopback Anvil, real RecipesExecutor bytecode
+make integration # ephemeral loopback Anvil, real RecipeExecutor bytecode
 make generate    # regenerate committed bindings/wire types from vendored artifacts
 ```
 
@@ -117,7 +130,8 @@ The service uses Go 1.27.1. Generation installs pinned `abigen` 1.17.5 locally i
 also required for wire type generation.
 
 The local integration exercises event discovery, permissions, arithmetic/bindings,
-managed transfers, allowance resets, direct Call and skipped gates. Provider tests
+managed transfers, allowance resets, direct Call, skipped gates and a request →
+issuer fulfillment → independent claim lifecycle with restart recovery. Provider tests
 use HTTP/RPC fixtures and independent digest vectors. They do not certify live
 third-party deployments. Contract/protocol artifacts record their sources;
 refresh them when the on-chain ABI or upstream API changes.

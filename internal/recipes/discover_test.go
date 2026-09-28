@@ -104,7 +104,7 @@ func (reader *fakeReader) CallContract(_ context.Context, msg ethereum.CallMsg, 
 		}
 		method = candidate
 		switch method.Name {
-		case "merkleRoot":
+		case "root":
 			value = reader.root
 		case "hasRole":
 			args, err := method.Inputs.Unpack(msg.Data[4:])
@@ -127,7 +127,7 @@ func (reader *fakeReader) CallContract(_ context.Context, msg ethereum.CallMsg, 
 }
 
 func TestDiscoverPinsAndChoosesLatestEvent(t *testing.T) {
-	current := Recipe{Steps: []Step{{Operation: Call, Data: pack(t, callArgs, common.HexToAddress("0x9999"), []byte{1, 2, 3, 4}, []Binding{})}}}
+	current := Recipe{Steps: [][]byte{step(Call, pack(t, callArgs, common.HexToAddress("0x9999"), []byte{1, 2, 3, 4}, []*big.Int{}))}}
 	reader := fakeChain(t, current)
 	// RPC delivery order is deliberately reversed; ordering is by global log index.
 	reader.logs = append(reader.logs, reader.recipeLog(t, Recipe{}, 2))
@@ -138,7 +138,7 @@ func TestDiscoverPinsAndChoosesLatestEvent(t *testing.T) {
 	if snapshot.BlockNumber != 10 || snapshot.BlockHash != reader.headers[10].Hash() || snapshot.RecipeBlock != 8 || snapshot.Caller != reader.caller || snapshot.Root != reader.root {
 		t.Fatalf("wrong snapshot: %+v", snapshot)
 	}
-	if len(recipe.Steps) != 1 || recipe.Steps[0].Operation != Call || !bytes.Equal(recipe.Steps[0].Data, current.Steps[0].Data) {
+	if len(recipe.Steps) != 1 || !bytes.Equal(recipe.Steps[0], current.Steps[0]) {
 		t.Fatal("wrong committed event body")
 	}
 	if err = ValidateSnapshot(context.Background(), reader, snapshot, reader.caller); err != nil {
@@ -164,7 +164,7 @@ func TestDiscoverRejectsWrongEventEvidence(t *testing.T) {
 			r.logs = append(r.logs, log)
 		},
 		"forged body": func(r *fakeReader) {
-			r.logs[0].Data = pack(t, executorABI.GetABI().Events["SetRecipe"].Inputs.NonIndexed(), [][]byte{{1}}, []Step{})
+			r.logs[0].Data = pack(t, executorABI.GetABI().Events["SetRecipe"].Inputs.NonIndexed(), [][]byte{{1}}, [][]byte{})
 		},
 		"unconfigured":  func(r *fakeReader) { r.recipeHash = common.Hash{} },
 		"future recipe": func(r *fakeReader) { r.recipeBlock = 11 },

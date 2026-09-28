@@ -93,7 +93,7 @@ func TestPrepareConnectorAndRejectLegacyDomain(t *testing.T) {
 				switch method.Name {
 				case "account":
 					values = []any{addr(3)}
-				case "inputAsset":
+				case "outputAsset":
 					values = []any{addr(1)}
 				case "eip712Domain":
 					values = []any{[1]byte{15}, "LiquidLaneConnector", "1", big.NewInt(1), addr(4), [32]byte{}, []*big.Int{}}
@@ -123,7 +123,7 @@ func TestPrepareConnectorAndRejectLegacyDomain(t *testing.T) {
 			}
 			input := uint(0)
 			output := uint(1)
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Format: "connector-v1", Connector: addr(4).Hex(), Token: addr(5).Hex(), InputAsset: addr(1).Hex(), Recipient: addr(8).Hex(), Protocol: protocol.Hex(), DiscountID: dh.Hex(), AmountIn: "100", MaxAmountOut: "1000", Action: "0:0", CalldataBytes: len(payload), AmountInInput: &input, AmountOutInput: &output}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Format: "connector-v1", Connector: addr(4).Hex(), Token: addr(5).Hex(), OutputAsset: addr(1).Hex(), Recipient: addr(8).Hex(), Protocol: protocol.Hex(), DiscountID: dh.Hex(), AmountIn: "100", MaxAmountOut: "1000", Action: "0:0", CalldataBytes: len(payload), AmountInInput: &input, AmountOutInput: &output}
 			p, e := Factory(node(t, cfg), provider.Deps{Chain: chain, HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
@@ -142,6 +142,15 @@ func TestPrepareConnectorAndRejectLegacyDomain(t *testing.T) {
 			if result.Inputs[0] != "100" || result.Inputs[1] != "990" || hexutil.Encode(result.Actions["0:0"]) != hexutil.Encode(payload) || requests != 1 {
 				t.Fatalf("wrong prepared output %+v", result)
 			}
+			cfg.OutputAsset = addr(9).Hex()
+			p, e = Factory(node(t, cfg), provider.Deps{Chain: chain, HTTP: srv.Client()})
+			if e != nil {
+				t.Fatal(e)
+			}
+			if _, e = p.Prepare(context.Background(), s); e == nil || !strings.Contains(e.Error(), "output asset mismatch") {
+				t.Fatalf("wrong connector payment asset accepted: %v", e)
+			}
+			cfg.OutputAsset = addr(1).Hex()
 			cfg.CalldataBytes++
 			p, e = Factory(node(t, cfg), provider.Deps{Chain: chain, HTTP: srv.Client()})
 			if e != nil {

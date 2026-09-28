@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -21,6 +22,8 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/providers/data"
 	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlane"
 	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
+	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
+	"github.com/symbioticfi/merkle-executor/internal/providers/securitize"
 	"github.com/symbioticfi/merkle-executor/internal/signer"
 	"github.com/symbioticfi/merkle-executor/internal/state"
 	"github.com/symbioticfi/merkle-executor/internal/txmanager"
@@ -33,6 +36,10 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 	}
 	if planOnly {
 		cfg.Mode = "simulate"
+	}
+	configDir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return errors.Errorf("resolve configuration directory: %w", err)
 	}
 	log, flush, err := observability.NewLogger(cfg.Observability.Debug)
 	if err != nil {
@@ -49,7 +56,7 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 	defer client.Close()
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	registry := provider.NewRegistry()
-	for _, register := range []func(*provider.Registry) error{data.Register, liquidlane.Register, merkl.Register, cowswap.Register} {
+	for _, register := range []func(*provider.Registry) error{data.Register, liquidlane.Register, merkl.Register, cowswap.Register, redemptions.Register, securitize.Register} {
 		if err := register(registry); err != nil {
 			return err
 		}
@@ -58,7 +65,7 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 	for _, sc := range cfg.Strategies {
 		s := keeper.Strategy{Config: sc}
 		for _, pc := range sc.Providers {
-			p, err := registry.New(pc.Name, pc.Config, provider.Deps{Chain: client, HTTP: httpClient, Log: log.WithValues("strategy", sc.Name, "provider", pc.Name)})
+			p, err := registry.New(pc.Name, pc.Config, provider.Deps{Chain: client, HTTP: httpClient, Log: log.WithValues("strategy", sc.Name, "provider", pc.Name), ConfigDir: configDir})
 			if err != nil {
 				return errors.Errorf("configure provider %s: %w", pc.Name, err)
 			}

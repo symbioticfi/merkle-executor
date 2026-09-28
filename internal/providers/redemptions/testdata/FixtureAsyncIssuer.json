@@ -1,0 +1,185 @@
+{
+  "abi": [
+    {
+      "type": "constructor",
+      "inputs": [
+        {
+          "name": "newAsset",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "newShare",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "asset",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "claimCount",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "finalize",
+      "inputs": [
+        {
+          "name": "controller",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "maxRedeem",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "pendingShares",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "redeem",
+      "inputs": [
+        {
+          "name": "shares",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "receiver",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "controller",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "assets",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "requestCount",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "requestRedeem",
+      "inputs": [
+        {
+          "name": "shares",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "controller",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "share",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "view"
+    }
+  ],
+  "bytecode": "0x60c060405234801561000f575f5ffd5b5060405161060338038061060383398101604081905261002e91610060565b6001600160a01b039182166080521660a052610091565b80516001600160a01b038116811461005b575f5ffd5b919050565b5f5f60408385031215610071575f5ffd5b61007a83610045565b915061008860208401610045565b90509250929050565b60805160a0516105446100bf5f395f8181610144015261025001525f818160cb01526103a801526105445ff3fe608060405234801561000f575f5ffd5b5060043610610090575f3560e01c80637d41c86e116100635780637d41c86e146101235780638da4d3c914610136578063a8d5fd651461013f578063ba08765214610166578063d905777e14610179575f5ffd5b80632d9d53361461009457806338d52e0f146100c65780634ef39b75146101055780635badbe4c1461011a575b5f5ffd5b6100b36100a2366004610450565b5f6020819052908152604090205481565b6040519081526020015b60405180910390f35b6100ed7f000000000000000000000000000000000000000000000000000000000000000081565b6040516001600160a01b0390911681526020016100bd565b610118610113366004610450565b610198565b005b6100b360025481565b6100b3610131366004610470565b6101e7565b6100b360035481565b6100ed7f000000000000000000000000000000000000000000000000000000000000000081565b6100b3610174366004610470565b61030a565b6100b3610187366004610450565b60016020525f908152604090205481565b6001600160a01b0381165f9081526020818152604080832054600190925282208054919290916101c99084906104bd565b90915550506001600160a01b03165f90815260208190526040812055565b5f336001600160a01b0383161480156102115750826001600160a01b0316826001600160a01b0316145b801561021c57505f84115b610224575f5ffd5b6040516323b872dd60e01b81526001600160a01b038381166004830152306024830152604482018690527f000000000000000000000000000000000000000000000000000000000000000016906323b872dd906064016020604051808303815f875af1158015610296573d5f5f3e3d5ffd5b505050506040513d601f19601f820116820180604052508101906102ba91906104d6565b6102c2575f5ffd5b6001600160a01b0383165f90815260208190526040812080548692906102e99084906104bd565b9091555050600280545f906102fd906104f5565b9182905550949350505050565b5f336001600160a01b0383161480156103345750816001600160a01b0316836001600160a01b0316145b801561033f57505f84115b610347575f5ffd5b6001600160a01b0382165f908152600160205260408120805486929061036e90849061050d565b9091555061037f9050846002610520565b60405163a9059cbb60e01b81526001600160a01b038581166004830152602482018390529192507f00000000000000000000000000000000000000000000000000000000000000009091169063a9059cbb906044016020604051808303815f875af11580156103f0573d5f5f3e3d5ffd5b505050506040513d601f19601f8201168201806040525081019061041491906104d6565b61041c575f5ffd5b60035f815461042a906104f5565b909155509392505050565b80356001600160a01b038116811461044b575f5ffd5b919050565b5f60208284031215610460575f5ffd5b61046982610435565b9392505050565b5f5f5f60608486031215610482575f5ffd5b8335925061049260208501610435565b91506104a060408501610435565b90509250925092565b634e487b7160e01b5f52601160045260245ffd5b808201808211156104d0576104d06104a9565b92915050565b5f602082840312156104e6575f5ffd5b81518015158114610469575f5ffd5b5f60018201610506576105066104a9565b5060010190565b818103818111156104d0576104d06104a9565b80820281158282048414176104d0576104d06104a956fea164736f6c6343000825000a",
+  "source": "Fixture.sol",
+  "sourceSha256": "1b7788960a50bec14fb67aaea313c8b9de249bc52f12da39d8bd9565bdb28334",
+  "compiler": "0.8.37+commit.f401782d"
+}

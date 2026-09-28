@@ -1,6 +1,6 @@
 # Generalized Merkle executor
 
-The service executes curator-committed RecipesExecutor programs. Strategy decisions,
+The service executes curator-committed RecipeExecutor programs. Strategy decisions,
 funding priorities, postconditions and asset limits remain in the on-chain recipe.
 The service discovers that program, resolves its runtime inputs, verifies the current
 permission package, simulates the exact transaction and manages its lifecycle.
@@ -18,7 +18,8 @@ another module's internal packages or change the solver or adapters checkouts.
 - `recipes`: ABI codec, SetRecipe discovery, tree/role validation and runtime assembly.
 - `provider`: integration-neutral registry, snapshots, runtime outputs and asynchronous progress.
 - `providers`: protocol-specific adapters; generic static, RPC and HTTP data sources provide
-  extension points for issuer claims, lending markets, 3F and future integrations.
+  extension points for lending markets, 3F and future integrations. `redemptions`
+  owns the documented LL issuer families; `securitize` owns wallet and offramp routes.
 - `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
 - `state`, `signer`, `txmanager`: exclusive process ownership, durable writes and one nonce lane.
 - `config`, `observability`, `cmd`: startup wiring, strict configuration and operational controls.
@@ -48,6 +49,37 @@ submission, timeouts, restarts and unconfirmed receipts retain nonce ownership. 
 canonical confirmed receipts advance workflows. Durable external phases block another
 run of the same strategy until settled. No private keys, API tokens or complete provider
 responses enter logs. Failed/unknown external states never become successful completion.
+
+The transaction journal persists confirmed receipt identity and logs before nonce
+acknowledgement. Provider advancement receives that evidence with a fresh pinned
+snapshot and checks canonical headers before and after reconciliation. Issuer
+providers match exact account `Manage` calls in receipt order; missing or skipped
+actions do not count as executed. A request finishes as `requested`, releasing the
+account lock while issuer-owned state retains the pending withdrawal. Independent
+claim strategies read current claim eligibility. Submission is never labelled paid.
+Existing journals without evidence remain readable; new issuer reconciliation
+requires evidence and does not infer it from a successful transaction alone.
+
+## Recipe encoding
+
+The contract of record is adapters `IRecipes.sol` and `IRecipeExecutor.sol` at
+`bd5e235899de5e175a0001a913d47596f6f4f801`. Both queries and steps are `bytes[]`;
+each step begins with one opcode byte followed by its ABI-encoded payload.
+The commitment is `keccak256(abi.encode(queries, steps))`. Discovery decodes
+`SetRecipe(bytes32,bytes[],bytes[])`; execution calls
+`execute(bytes[],bytes[],uint256[],bytes[])`.
+
+Operands are `uint256` words: `(source << 216) | uint216(value)`. Sources 0, 1
+and 2 mean literal, input and earlier numerical result. Bindings add a `uint32`
+byte offset at bit 224, so query/Call bindings are `uint256[]` and Manage
+bindings are `uint256[][]`. Standalone operand resolution ignores the highest
+four bytes, matching Solidity. The keeper preserves the original queries and
+steps, including trailing ABI bytes, through hashing and transaction assembly.
+It checks binding order, selector protection and bounds without evaluating the
+program or narrowing runtime inputs/results to 216 bits.
+
+The account's active permission root is read through `root()`. Generated
+bindings and local EVM bytecode use these current interfaces.
 
 ## Verification
 

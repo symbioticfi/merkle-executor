@@ -26,7 +26,7 @@ type Config struct {
 	Format             string                `yaml:"format"`
 	Connector          string                `yaml:"connector"`
 	Token              string                `yaml:"token"`
-	InputAsset         string                `yaml:"inputAsset"`
+	OutputAsset        string                `yaml:"outputAsset"`
 	Recipient          string                `yaml:"recipient"`
 	Protocol           string                `yaml:"protocol"`
 	DiscountID         string                `yaml:"discountId"`
@@ -108,14 +108,14 @@ func Factory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
 	for _, x := range []struct {
 		src string
 		dst *common.Address
-	}{{c.Connector, &p.connector}, {c.Token, &p.token}, {c.InputAsset, &p.asset}, {c.Recipient, &p.recipient}, {c.Protocol, &p.protocol}} {
+	}{{c.Connector, &p.connector}, {c.Token, &p.token}, {c.OutputAsset, &p.asset}, {c.Recipient, &p.recipient}, {c.Protocol, &p.protocol}} {
 		*x.dst, e = parse.Address(x.src)
 		if e != nil {
 			return nil, e
 		}
 	}
 	if p.token == p.asset {
-		return nil, errors.New("LL input asset and RWA must differ")
+		return nil, errors.New("LL output asset and RWA must differ")
 	}
 	p.discountID, e = protocolio.Hash(c.DiscountID)
 	if e != nil {
@@ -158,16 +158,16 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if account != s.Account {
 		return provider.Output{}, errors.New("LL connector account mismatch")
 	}
-	raw, e = call(a.PackInputAsset())
+	raw, e = call(a.PackOutputAsset())
 	if e != nil {
 		return provider.Output{}, e
 	}
-	inputAsset, e := a.UnpackInputAsset(raw)
+	outputAsset, e := a.UnpackOutputAsset(raw)
 	if e != nil {
-		return provider.Output{}, errors.New("invalid LL input asset response")
+		return provider.Output{}, errors.New("invalid LL output asset response")
 	}
-	if inputAsset != p.asset {
-		return provider.Output{}, errors.New("LL connector input asset mismatch")
+	if outputAsset != p.asset {
+		return provider.Output{}, errors.New("LL connector output asset mismatch")
 	}
 	raw, e = call(a.PackEip712Domain())
 	if e != nil {

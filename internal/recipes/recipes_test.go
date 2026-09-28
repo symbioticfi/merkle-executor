@@ -46,7 +46,7 @@ func TestAssembleEmpty(t *testing.T) {
 	if len(data) != 260 || len(leaves) != 0 {
 		t.Fatalf("empty execute: %d bytes / %d leaves", len(data), len(leaves))
 	}
-	if !bytes.Equal(data[:4], common.FromHex("0x66036838")) {
+	if !bytes.Equal(data[:4], common.FromHex("0xc08a8760")) {
 		t.Fatalf("execute selector %x", data[:4])
 	}
 	if _, _, err := Assemble(Recipe{}, nil, map[uint]string{0: "1"}, nil, nil); err == nil {

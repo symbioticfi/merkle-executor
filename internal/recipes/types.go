@@ -6,7 +6,6 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
-	executor "github.com/symbioticfi/merkle-executor/api/bindings/recipesexecutor"
 )
 
 const (
@@ -33,11 +32,10 @@ const (
 // MaxInputIndex bounds host memory used by a recipe's sparse input vector.
 const MaxInputIndex = 65535
 
-type Step = executor.IRecipesStep
-
 type Recipe struct {
 	Queries [][]byte
-	Steps   []Step
+	// Each committed step is one opcode byte followed by its ABI payload.
+	Steps [][]byte
 }
 
 type Snapshot struct {
@@ -55,7 +53,7 @@ type Value struct {
 }
 
 type Binding struct {
-	Offset *big.Int
+	Offset uint32
 	Value  Value
 }
 

@@ -324,7 +324,12 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy) error {
 				return err
 			}
 		}
-		snapshot, err := k.Planner.ConfirmedSnapshot(ctx, job.Plan.Snapshot)
+		original := job.Plan.Snapshot
+		original.Execution = job.Result.Execution.Clone()
+		if original.Execution != nil && original.Execution.TxHash != job.Result.Hash {
+			return errors.New("durable execution does not match the recipe transaction")
+		}
+		snapshot, err := k.Planner.ConfirmedSnapshot(ctx, original)
 		if err != nil {
 			return err
 		}

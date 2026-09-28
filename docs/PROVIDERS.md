@@ -1,9 +1,10 @@
 # Protocol providers
 
-Providers are registered explicitly as `liquidlane`, `merkl`, and `cowswap`.
+Providers are registered explicitly as `liquidlane`, `redemptions`, `securitize`,
+`merkl`, and `cowswap`, alongside the generic data providers.
 They prepare runtime inputs and replacement calldata for curator-approved actions.
 Targets, values, masks, permission proofs and instruction order remain committed by
-RecipesExecutor. A provider cannot install a missing approval or authorization leaf.
+RecipeExecutor. A provider cannot install a missing approval or authorization leaf.
 The full recipe is simulated before submission.
 
 The following are provider entries under a strategy's `providers` list. Addresses,
@@ -29,7 +30,7 @@ from request errors. Redirects are never followed. No literal API key belongs in
     format: connector-v1
     connector: "0x0000000000000000000000000000000000000004"
     token: "0x0000000000000000000000000000000000000005"
-    inputAsset: "0x0000000000000000000000000000000000000001"
+    outputAsset: "0x0000000000000000000000000000000000000001"
     recipient: "0x0000000000000000000000000000000000000008"
     protocol: "0x0000000000000000000000000000000000000007"
     discountId: "0x013ccaf5b90414d2b2e3e85792dd1c878dd7df9f0eb51a1ba3ee57c50d8ba08b"
@@ -47,7 +48,7 @@ The provider resolves the configured ID with `POST /api-internal/v1/discounts`.
 A separate typed client exposes unsigned list discovery. `discount.adapter` must name
 this connector proxy. Both EIP712 signatures and the ID are checked against the exact
 connector domain; current owner/additional signer, nonce, minimum discount, account,
-input asset and current spend budget are read at the pinned snapshot. EOA signatures
+output asset and current spend budget are read at the pinned snapshot. EOA signatures
 are checked locally; contract signers use pinned ERC-1271 reads.
 
 `getAmountOut(token, amountIn)` supplies the current undiscounted quote. The provider
@@ -56,11 +57,18 @@ and packs the connector's signed `swap` overload. `maxAmountOut` is a preparatio
 bound: the connector recomputes its quote in the transaction. A hard execution-time
 payment cap must be enforced by the recipe (for example exact allowance and returned
 amount/balance checks) or an on-chain budget. Simulation does not freeze an oracle.
-The recipe must arrange RWA inventory at the connector, input-asset allowance/payment, and any subsequent issuer redemption.
+The recipe must arrange RWA inventory at the connector, output-asset allowance/payment, and any subsequent issuer redemption.
 `amountInInput` and `amountOutInput` are optional numerical recipe slots.
 `calldataBytes` must equal the actual approved layout; 644 bytes is the ordinary case
 with two 65-byte signatures. Contract signatures may require a different approved
 layout. Values are never silently padded to fit a proof or signature shape.
+
+`token` is the RWA received by the account; `outputAsset` is the payment asset sent
+to the configured recipient, matching the connector's getter. There is no token
+allowlist in the provider. Each configured token must be registered on the connector
+with an oracle and sufficient budget, and the recipe must have the necessary
+permissions. Issuer redemption requests and later claims require their own recipes;
+the signed-swap provider does not discover or track those lifecycles.
 
 **Current producer exclusion:** the inspected sibling RFQ backend hardcodes the
 `LiquidLaneAdapter` EIP712 domain and uses adapter-only discovery methods. It does
@@ -72,6 +80,75 @@ The local matching producer fixture validates encoding and checks only.
 The LL consumer RFQ quote/order flow is different: account authorization over a
 Reactor Request, signature `0x00`, nonce cancellation and asynchronous fill tracking.
 That consumer provider is not implemented here. This provider never posts RFQ orders.
+
+## Liquid Lane issuer requests and claims
+
+The `redemptions` provider covers all 15 assets in the official LL factory list
+and the additional Noon sUSN route.
+The [asset catalogue and issuer guide](LIQUID-LANE-ASSETS.md) identify the six
+families, exact targets and each request/claim lifecycle. A Centrifuge request,
+for example, has this shape:
+
+```yaml
+- name: redemptions
+  config:
+    family: centrifuge
+    mode: request
+    chainId: 1
+    token: "0x5a0F93D040De44e78F251b03c43be9CF317Dcf64"
+    outputAsset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    target: "0x4880799eE5200fC58DA299e965df644fBf46780B"
+    amount: "1000000000000000000"
+    action: "1:0"
+    amountInput: 0
+```
+
+The amount is a share amount, not an output-asset quote. The request recipe must
+include the required share allowance. A separate strategy using `mode: claim`
+caps that configured amount at `maxRedeem(account)` and remains idle when no
+shares are claimable. The provider verifies the share's registered output vault
+and the vault's asset at the pinned block. Exact recipient and owner are always
+the MerkleAccount.
+
+Midas and OpenEden each use one request action. Figure uses `action` for PRIME
+unwrap and `secondAction` for the wYLDS request. Pareto uses explicit queue/direct
+modes and its pinned `cdo` and `strategy`; queue claims also require `epoch`.
+Pareto claim modes omit `amount` because the issuer claims the complete request.
+Noon uses `family: noon`, with the configured `target` set to its withdrawal
+handler. A request calls sUSN `redeem(amount, handler, account)`. A separate
+`mode: claim` strategy sets an explicit decimal `requestId` (including `"0"`)
+and omits `amount`; it claims the complete USN entitlement after the handler's
+current withdrawal period. Its `amountInput`, if supplied, is in sUSN share
+units for requests and USN units for claims. Both tokens have 18 decimals.
+The provider checks the asset and handler authorization at the pinned block;
+full recipe simulation checks the vault's configured receiver and caller
+eligibility. It does not automatically discover or advance request IDs.
+
+Confirmed request calls finish with `requested`, releasing the account for later
+claim strategies while the issuer retains pending state. This does not report
+cash settlement. Claim calls finish with `claimed`; recipe balance/output checks
+must enforce the intended proceeds. Midas, OpenEden and Figure pay asynchronously
+through issuer processing and have no user-side claim method on these routes.
+Full simulation checks eligibility and all committed actions before submission.
+
+## Securitize wallet requests and atomic offramps
+
+The `securitize` provider covers the published EVM routes for all ten symbols in
+the official feed. [Configuration and deployment catalogue](SECURITIZE-ASSETS.md)
+document wallet transfers, modern `redeem(amount, minOutput)` and legacy
+`redeem(amount)` offramps. The optional local catalogue verifies operator-pinned
+addresses and decimals; remote discovery never changes a target at runtime.
+
+Wallet completion requires exact token delivery and is labelled `requested`.
+It does not establish cash payout. Atomic offramps validate payment topology,
+liquidity and minimum output, then require receipt payment evidence before
+reporting `redeemed`. Non-EVM entries are outside RecipeExecutor, and VBILL on
+BNB has no publicly advertised redemption route. It is explicitly unavailable.
+
+All issuer routes check canonical receipt identity and matching account `Manage`
+calls. A skipped group cannot complete a request. Except for Figure's verified
+unwrap-result binding, calldata supplied by these providers must remain unchanged
+by runtime bindings: reconciliation checks the exact prepared issuer calls.
 
 ## Merkl cumulative account rewards
 
@@ -193,5 +270,6 @@ wire subsets and contract ABI sources. Regenerate types with
 `sh hack/generate-protocol-bindings.sh`. Local tests use httptest servers, pinned
 reader fixtures, independent viem hash vectors and serialized restart state. They do
 not submit live orders, prove current API acceptance, validate deployment permissions,
-or establish issuer eligibility/payout. Issuer and 3F extensions can use the generic
-RPC/HTTP providers with separate curator-approved recipes and completion evidence.
+or establish issuer eligibility/payout. Additional issuer and 3F extensions can use
+the generic RPC/HTTP providers with separate curator-approved recipes and completion
+evidence.

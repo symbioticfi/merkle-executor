@@ -5,11 +5,12 @@ pragma solidity 0.8.37;
 // access controls; no fixture contract is suitable for deployment outside tests.
 contract FixtureAccount {
     struct Action { address target; uint96 value; bytes data; bytes dataMask; bytes32[] proof; }
-    bytes32 public merkleRoot;
+    event Manage(Action[] actions);
+    bytes32 public root;
     mapping(bytes32 => mapping(address => bool)) public hasRole;
 
-    function configure(bytes32 root, bytes32[] calldata leaves, address executor) external {
-        merkleRoot = root;
+    function configure(bytes32 newRoot, bytes32[] calldata leaves, address executor) external {
+        root = newRoot;
         for (uint256 i; i < leaves.length; ++i) hasRole[leaves[i]][executor] = true;
     }
 
@@ -29,11 +30,12 @@ contract FixtureAccount {
                 bytes32 other = action.proof[j];
                 computed = computed < other ? keccak256(abi.encodePacked(computed, other)) : keccak256(abi.encodePacked(other, computed));
             }
-            require(computed == merkleRoot);
+            require(computed == root);
             (bool success, bytes memory result) = action.target.call(action.data);
             require(success);
             results[i] = result;
         }
+        emit Manage(actions);
     }
 }
 

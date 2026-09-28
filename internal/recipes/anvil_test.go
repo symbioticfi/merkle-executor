@@ -170,7 +170,7 @@ func TestAnvilFullExecute(t *testing.T) {
 	sender, recipient := accounts[0], accounts[1]
 	accountContract := loadAnvilFixture(t, "FixtureAccount")
 	tokenContract := loadAnvilFixture(t, "FixtureToken")
-	executorContract := loadAnvilFixture(t, "RecipesExecutor")
+	executorContract := loadAnvilFixture(t, "RecipeExecutor")
 	accountAddress := localTransaction(t, ctx, client, sender, nil, accountContract.Bytecode).ContractAddress
 	tokenAddress := localTransaction(t, ctx, client, sender, nil, tokenContract.Bytecode).ContractAddress
 	constructor := fixtureCalldata(t, executorContract, "", sender, accountAddress)
@@ -198,17 +198,17 @@ func TestAnvilFullExecute(t *testing.T) {
 	localTransaction(t, ctx, client, sender, &tokenAddress, fixtureCalldata(t, tokenContract, "mint", accountAddress, big.NewInt(1000)))
 	localTransaction(t, ctx, client, sender, &executorAddress, executorABI.PackSetCaller(sender))
 
-	query := pack(t, queryArgs, tokenAddress, fixtureCalldata(t, tokenContract, "balanceOf", accountAddress), []Binding{}, new(big.Int))
-	recipe := Recipe{Queries: [][]byte{query}, Steps: []Step{
-		{Operation: Read, Data: pack(t, readArgs, big.NewInt(0))},
-		{Operation: Min, Data: pack(t, binaryArgs, result(0), input(0))},
-		{Operation: Sub, Data: pack(t, binaryArgs, result(0), result(1))},
-		{Operation: Approve, Data: pack(t, approveArgs, result(1), tokenAddress, recipient, approval.Hash)},
-		manageStep(t, transfer.Hash, result(1), []Binding{{Offset: big.NewInt(36), Value: result(1)}}),
-		manageStep(t, transfer.Hash, input(1), []Binding{{Offset: big.NewInt(36), Value: input(2)}}),
-		{Operation: Call, Data: pack(t, callArgs, tokenAddress, fixtureCalldata(t, tokenContract, "touch", new(big.Int)), []Binding{{Offset: big.NewInt(4), Value: result(1)}})},
-		{Operation: Read, Data: pack(t, readArgs, big.NewInt(0))},
-		{Operation: Equal, Data: pack(t, binaryArgs, result(7), result(2))},
+	query := pack(t, queryArgs, tokenAddress, fixtureCalldata(t, tokenContract, "balanceOf", accountAddress), []*big.Int{}, new(big.Int))
+	recipe := Recipe{Queries: [][]byte{query}, Steps: [][]byte{
+		step(Read, pack(t, readArgs, big.NewInt(0))),
+		step(Min, pack(t, binaryArgs, result(0), input(0))),
+		step(Sub, pack(t, binaryArgs, result(0), result(1))),
+		step(Approve, pack(t, approveArgs, result(1), tokenAddress, recipient, approval.Hash)),
+		manageStep(t, transfer.Hash, result(1), []*big.Int{binding(36, result(1))}),
+		manageStep(t, transfer.Hash, input(1), []*big.Int{binding(36, input(2))}),
+		step(Call, pack(t, callArgs, tokenAddress, fixtureCalldata(t, tokenContract, "touch", new(big.Int)), []*big.Int{binding(4, result(1))})),
+		step(Read, pack(t, readArgs, big.NewInt(0))),
+		step(Equal, pack(t, binaryArgs, result(7), result(2))),
 	}}
 	localTransaction(t, ctx, client, sender, &executorAddress, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
 	transferred := int64(0)
@@ -285,7 +285,7 @@ func TestAnvilFullExecute(t *testing.T) {
 		}
 		tree := &Tree{Root: leaf.Hash, Leaves: []Leaf{leaf}}
 		localTransaction(t, ctx, client, sender, &accountAddress, fixtureCalldata(t, accountContract, "configure", tree.Root, [][32]byte{leaf.Hash}, executorAddress))
-		recipe := Recipe{Steps: []Step{{Operation: Approve, Data: pack(t, approveArgs, input(0), tokenAddress, spender, leaf.Hash)}}}
+		recipe := Recipe{Steps: [][]byte{step(Approve, pack(t, approveArgs, input(0), tokenAddress, spender, leaf.Hash))}}
 		localTransaction(t, ctx, client, sender, &executorAddress, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
 		snapshot, recovered, err := Discover(ctx, client, executorAddress, nil)
 		if err != nil {
@@ -312,5 +312,74 @@ func TestAnvilFullExecute(t *testing.T) {
 		if _, err = client.CallContract(ctx, ethereum.CallMsg{From: sender, To: &executorAddress, Data: encoded}, nil); err == nil {
 			t.Fatal("pinned permission incorrectly accepted allowance reset to zero")
 		}
+	}
+}
+
+func TestAnvilPackedValues(t *testing.T) {
+	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
+		t.Skip("set MERKLE_ANVIL_TEST=1 for the local EVM integration")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	client := startAnvil(t, ctx)
+	var accounts []common.Address
+	if err := client.Client().CallContext(ctx, &accounts, "eth_accounts"); err != nil || len(accounts) == 0 {
+		t.Fatalf("local test accounts: %v", err)
+	}
+	sender := accounts[0]
+	tokenContract := loadAnvilFixture(t, "FixtureToken")
+	executorContract := loadAnvilFixture(t, "RecipeExecutor")
+	token := localTransaction(t, ctx, client, sender, nil, tokenContract.Bytecode).ContractAddress
+	constructor := fixtureCalldata(t, executorContract, "", sender, sender)
+	executor := localTransaction(t, ctx, client, sender, nil, append(bytes.Clone(executorContract.Bytecode), constructor...)).ContractAddress
+	maximum := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	maxLiteral := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 216), big.NewInt(1))
+	localTransaction(t, ctx, client, sender, &token, fixtureCalldata(t, tokenContract, "mint", sender, maximum))
+	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetCaller(sender))
+	recipe := Recipe{
+		Queries: [][]byte{
+			pack(t, queryArgs, token, fixtureCalldata(t, tokenContract, "balanceOf", common.Address{}), []*big.Int{binding(4, new(big.Int).SetBytes(sender.Bytes()))}, literal(0)),
+			pack(t, queryArgs, token, fixtureCalldata(t, tokenContract, "marker"), []*big.Int{}, literal(0)),
+		},
+		Steps: [][]byte{
+			step(Read, pack(t, readArgs, literal(0))),
+			step(Add, append(pack(t, binaryArgs, binding(0xffffffff, input(0)), literal(0)), 1, 2, 3)),
+			step(Sub, pack(t, binaryArgs, result(0), result(1))),
+			step(SaturatingSub, pack(t, binaryArgs, literal(0), literal(1))),
+			step(Min, pack(t, binaryArgs, result(0), input(0))),
+			step(Max, pack(t, binaryArgs, result(2), result(4))),
+			step(MulDiv, pack(t, mulDivArgs, result(5), literal(1), literal(1))),
+			step(Equal, pack(t, binaryArgs, result(6), input(0))),
+			step(LessOrEqual, pack(t, binaryArgs, result(6), result(0))),
+			step(Call, pack(t, callArgs, token, fixtureCalldata(t, tokenContract, "touch", literal(0)), []*big.Int{binding(4, result(6))})),
+			step(Read, pack(t, readArgs, literal(1))),
+			step(Equal, pack(t, binaryArgs, result(10), input(0))),
+			step(Sub, pack(t, binaryArgs, maxLiteral, literal(1))),
+		},
+	}
+	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
+	encoded, _, err := Assemble(recipe, nil, map[uint]string{0: maximum.String()}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := client.CallContract(ctx, ethereum.CallMsg{From: sender, To: &executor, Data: encoded}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := executorABI.UnpackExecute(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, index := range []int{0, 1, 4, 5, 6, 10} {
+		if values[index].Cmp(maximum) != 0 {
+			t.Fatalf("step %d lost full uint256 value", index)
+		}
+	}
+	if values[2].Sign() != 0 || values[3].Sign() != 0 || values[12].Cmp(new(big.Int).Sub(maxLiteral, literal(1))) != 0 {
+		t.Fatal("packed arithmetic or uint216 literal mismatch")
+	}
+	localTransaction(t, ctx, client, sender, &executor, encoded)
+	if marker := fixtureRead(t, ctx, client, tokenContract, token, "marker")[0].(*big.Int); marker.Cmp(maximum) != 0 {
+		t.Fatal("binding truncated full uint256 result")
 	}
 }

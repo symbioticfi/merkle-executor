@@ -1,6 +1,9 @@
 {
-  "src/contracts/merkle-adapter/automations/RecipesExecutor.sol": "2389bcd54aaad824745ad9f2fad99c855797bf81adfda035bbc9f833a5f65867",
-  "src/contracts/merkle-adapter/Recipes.sol": "616fce496060eefbfe7deeb9c72e08adebdcbf588db4d27ef365026a0ea012ea",
-  "src/contracts/merkle-adapter/libraries/MerkleAdapterVerifier.sol": "02d64c6a37097a919d70055832d4eec4ecc75446d1467c49873a3f7e0ac92555",
-  "Fixture.sol": "b7c925b89caff89e2aeaaf2ba729851654d004be869f4e73cfbfff87d4cb3437"
+  "src/contracts/merkle-adapter/Recipes.sol": "a15d0d30c1344e1e9b3a5b2b4951feca8f8c377eb106b1adfb9c9f57c23b9109",
+  "src/contracts/merkle-adapter/automations/RecipeExecutor.sol": "3f7eacac6e0c8794a3d7d0012c12b0c7ca0c6a9d1e70e264ea6ca202455ff639",
+  "src/contracts/merkle-adapter/libraries/MerkleAdapterVerifier.sol": "027fb53263e8fadfa3e2d73230b7b7e093c4438859f6a5ac0d88f0d57e15db99",
+  "src/interfaces/merkle-adapter/IMerkleAccount.sol": "01ec580a54ce07a967488a79bcae54f8be8a9d876079fe51fda66e9e107094d6",
+  "src/interfaces/merkle-adapter/IRecipes.sol": "980246042dad1fc60c7f8feddf263745aaca9c7691e6a79b37f5e8516aba9692",
+  "src/interfaces/merkle-adapter/automations/IRecipeExecutor.sol": "5bb8a2b24f72b7868d87116660d5f2a3f9740647918219acb7d476d0ab3de8e0",
+  "Fixture.sol": "3548b06b391b442b19f156041e115494cd413df0e44b83e2a704dff80812d104"
 }

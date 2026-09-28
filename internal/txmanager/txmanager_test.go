@@ -29,6 +29,7 @@ type fakeChain struct {
 	status               uint64
 	sendErr, simulateErr error
 	beforeBroadcast      func(*types.Transaction)
+	receiptMutation      func(*types.Receipt)
 	estimated, simulated ethereum.CallMsg
 }
 
@@ -89,8 +90,85 @@ func (b *fakeChain) SendTransaction(_ context.Context, tx *types.Transaction) er
 	if b.mine {
 		b.latest = tx.Nonce() + 1
 		b.receipts[tx.Hash()] = &types.Receipt{TxHash: tx.Hash(), BlockNumber: new(big.Int).Set(b.receiptHeader.Number), BlockHash: b.receiptHeader.Hash(), Status: b.status}
+		if b.receiptMutation != nil {
+			b.receiptMutation(b.receipts[tx.Hash()])
+		}
 	}
 	return b.sendErr
+}
+
+func TestConfirmedExecutionEvidenceSurvivesRestartAndDoesNotAlias(t *testing.T) {
+	dir := t.TempDir()
+	store, err := state.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := newChain()
+	chain.receiptMutation = func(r *types.Receipt) {
+		r.Logs = []*types.Log{{Address: common.HexToAddress("0x10"), Topics: []common.Hash{common.HexToHash("0x11")}, Data: []byte{1, 2, 3}, TxHash: r.TxHash, BlockHash: r.BlockHash, BlockNumber: r.BlockNumber.Uint64(), Index: 7}}
+	}
+	s := testSigner(t)
+	m := newManager(t, chain, s, store)
+	got, err := m.Send(context.Background(), request())
+	if err != nil || got.Execution == nil || got.Execution.TxHash != got.Hash || got.Execution.BlockHash != chain.receiptHeader.Hash() || len(got.Execution.Logs) != 1 {
+		t.Fatalf("missing execution evidence: %+v %v", got, err)
+	}
+	got.Execution.BlockNumber.SetInt64(99)
+	got.Execution.Logs[0].Data[0] = 99
+	got.Execution.Logs[0].Topics[0] = common.Hash{}
+	retained := m.retainedResult(request().ID)
+	if retained.Execution.BlockNumber.Int64() != 10 || retained.Execution.Logs[0].Data[0] != 1 || retained.Execution.Logs[0].Topics[0] == (common.Hash{}) {
+		t.Fatal("provider changed retained transaction evidence")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = state.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	m = newManager(t, chain, s, store)
+	replay, err := m.Send(context.Background(), request())
+	if err != nil || replay.Execution == nil || replay.Execution.TxHash != got.Hash || replay.Execution.BlockNumber.Int64() != 10 || !bytes.Equal(replay.Execution.Logs[0].Data, []byte{1, 2, 3}) || len(chain.sent) != 1 {
+		t.Fatalf("restart lost confirmed evidence: %+v %v", replay, err)
+	}
+}
+
+func TestMalformedReceiptLogsNeverBecomeConfirmedEvidence(t *testing.T) {
+	for _, mode := range []string{"nil", "hash", "block", "removed", "duplicate", "transaction-index"} {
+		t.Run(mode, func(t *testing.T) {
+			store, err := state.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			chain := newChain()
+			chain.receiptMutation = func(r *types.Receipt) {
+				log := &types.Log{TxHash: r.TxHash, BlockHash: r.BlockHash, BlockNumber: r.BlockNumber.Uint64()}
+				r.Logs = []*types.Log{log}
+				switch mode {
+				case "nil":
+					r.Logs[0] = nil
+				case "hash":
+					log.TxHash = common.HexToHash("0xbad")
+				case "block":
+					log.BlockNumber++
+				case "removed":
+					log.Removed = true
+				case "duplicate":
+					r.Logs = append(r.Logs, log)
+				case "transaction-index":
+					log.TxIndex = 1
+				}
+			}
+			m := newManager(t, chain, testSigner(t), store)
+			got, err := m.Send(context.Background(), request())
+			if err == nil || !got.Pending || got.Confirmed || got.Execution != nil || m.PendingID() != request().ID {
+				t.Fatalf("invalid logs became evidence: %+v %v", got, err)
+			}
+		})
+	}
 }
 func (b *fakeChain) TransactionReceipt(_ context.Context, hash common.Hash) (*types.Receipt, error) {
 	b.mu.Lock()

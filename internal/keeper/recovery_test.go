@@ -66,6 +66,7 @@ type recoverySender struct {
 	reverted    bool
 	ackFailures int
 	beforeAck   func(string) error
+	execution   *provider.Execution
 }
 
 func (s *recoverySender) PendingID() string { return s.pending }
@@ -78,7 +79,7 @@ func (s *recoverySender) Send(_ context.Context, req txmanager.Request) (txmanag
 		return txmanager.Result{}, errors.New("unexpected competing intent")
 	}
 	s.requests = append(s.requests, req)
-	return txmanager.Result{ID: req.ID, Hash: common.HexToHash("0xfeed"), Confirmed: !s.reverted, Reverted: s.reverted}, nil
+	return txmanager.Result{ID: req.ID, Hash: common.HexToHash("0xfeed"), Confirmed: !s.reverted, Reverted: s.reverted, Execution: s.execution.Clone()}, nil
 }
 func (s *recoverySender) Acknowledge(id string) error {
 	if s.beforeAck != nil {
@@ -98,18 +99,80 @@ func (s *recoverySender) Acknowledge(id string) error {
 }
 
 type recoveryProvider struct {
-	calls   int
-	done    bool
-	outputs [][]byte
+	calls      int
+	done       bool
+	outputs    [][]byte
+	executions []*provider.Execution
 }
 
 func (p *recoveryProvider) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
 	return provider.Output{}, errors.New("planner stub owns preparation")
 }
-func (p *recoveryProvider) Advance(_ context.Context, _ provider.Snapshot, out provider.Output, _ json.RawMessage) (provider.Progress, error) {
+func (p *recoveryProvider) Advance(_ context.Context, snapshot provider.Snapshot, out provider.Output, _ json.RawMessage) (provider.Progress, error) {
 	p.calls++
 	p.outputs = append(p.outputs, bytes.Clone(out.Data))
+	p.executions = append(p.executions, snapshot.Execution.Clone())
 	return provider.Progress{Done: p.done, Reference: "stable-order", State: json.RawMessage(`{"phase":"reconciled"}`)}, nil
+}
+
+func TestRecoveryExecutionEvidencePersistsBeforeAcknowledgement(t *testing.T) {
+	k, store, _, sender, pr := recoveryHarness(t)
+	sender.execution = &provider.Execution{TxHash: common.HexToHash("0xfeed"), BlockNumber: big.NewInt(10), BlockHash: common.HexToHash("0x10"), Logs: []types.Log{{Address: common.HexToAddress("0x20"), TxHash: common.HexToHash("0xfeed"), BlockNumber: 10, BlockHash: common.HexToHash("0x10"), Data: []byte{1, 2, 3}}}}
+	sender.ackFailures = 1
+	sender.beforeAck = func(id string) error {
+		job := loadRecoveryJob(t, store, "cow")
+		if job.ID != id || job.Phase != "authorized" || job.Result.Execution == nil || !bytes.Equal(job.Result.Execution.Logs[0].Data, []byte{1, 2, 3}) {
+			return errors.New("acknowledgement preceded durable execution evidence")
+		}
+		return nil
+	}
+	if err := k.Tick(context.Background()); err == nil {
+		t.Fatal("expected acknowledgement failure")
+	}
+	if pr.calls != 0 {
+		t.Fatal("provider advanced before durable acknowledgement")
+	}
+	sender.execution = nil
+	restarted := *k
+	if err := restarted.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.executions) != 1 || pr.executions[0] == nil || pr.executions[0].TxHash != common.HexToHash("0xfeed") || !bytes.Equal(pr.executions[0].Logs[0].Data, []byte{1, 2, 3}) || len(sender.requests) != 1 {
+		t.Fatal("restart did not reconcile persisted execution evidence")
+	}
+}
+
+func TestConfirmedSnapshotRejectsFutureAndOrphanedExecution(t *testing.T) {
+	for _, mode := range []string{"future", "orphaned", "reorg-after-advance"} {
+		t.Run(mode, func(t *testing.T) {
+			c := newConfirmationChain()
+			p := &Planner{Chain: c, Confirmations: 2}
+			execution := &provider.Execution{TxHash: common.HexToHash("0xfeed"), BlockNumber: big.NewInt(10), BlockHash: c.canonical[10].Hash()}
+			original := provider.Snapshot{ChainID: big.NewInt(1), Account: common.HexToAddress("0x20"), Execution: execution}
+			switch mode {
+			case "future":
+				execution.BlockNumber = big.NewInt(11)
+				execution.BlockHash = c.canonical[11].Hash()
+			case "orphaned":
+				execution.BlockHash = common.HexToHash("0xbad")
+			}
+			snapshot, err := p.ConfirmedSnapshot(context.Background(), original)
+			if mode != "reorg-after-advance" {
+				if err == nil {
+					t.Fatal("invalid receipt allowed into Advance snapshot")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.canonical[10] = types.CopyHeader(c.canonical[10])
+			c.canonical[10].Extra = []byte("reorganized receipt")
+			if err := p.VerifyConfirmedSnapshot(context.Background(), snapshot); err == nil {
+				t.Fatal("orphaned receipt could advance durable provider state")
+			}
+		})
+	}
 }
 
 func recoveryHarness(t *testing.T) (*Keeper, *recoveryStore, *recoveryPlanner, *recoverySender, *recoveryProvider) {

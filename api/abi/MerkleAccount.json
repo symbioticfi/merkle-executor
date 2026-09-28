@@ -103,7 +103,7 @@
     "name": "acceptRoot",
     "inputs": [
       {
-        "name": "root",
+        "name": "newRoot",
         "type": "bytes32",
         "internalType": "bytes32"
       }
@@ -411,19 +411,6 @@
   },
   {
     "type": "function",
-    "name": "merkleRoot",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "migrate",
     "inputs": [
       {
@@ -571,6 +558,19 @@
   },
   {
     "type": "function",
+    "name": "root",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "sign",
     "inputs": [
       {
@@ -678,7 +678,7 @@
     "name": "AcceptRoot",
     "inputs": [
       {
-        "name": "merkleRoot",
+        "name": "newRoot",
         "type": "bytes32",
         "indexed": true,
         "internalType": "bytes32"

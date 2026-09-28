@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 
+	"github.com/symbioticfi/merkle-executor/api/protocolio"
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	"github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/recipes"
@@ -156,6 +157,11 @@ func (p *Planner) ConfirmedSnapshot(ctx context.Context, original provider.Snaps
 	original.BlockNumber = new(big.Int).Set(header.Number)
 	original.BlockHash = header.Hash()
 	original.Timestamp = header.Time
+	if original.Execution != nil {
+		if err := protocolio.Execution(ctx, p.Chain, original); err != nil {
+			return original, err
+		}
+	}
 	return original, nil
 }
 
@@ -179,6 +185,9 @@ func (p *Planner) VerifyConfirmedSnapshot(ctx context.Context, snapshot provider
 	}
 	if header.Hash() != snapshot.BlockHash || header.Time != snapshot.Timestamp {
 		return errors.New("confirmed snapshot was reorganized")
+	}
+	if snapshot.Execution != nil {
+		return protocolio.Execution(ctx, p.Chain, snapshot)
 	}
 	return nil
 }

@@ -23,9 +23,19 @@ func pack(t *testing.T, args abi.Arguments, values ...any) []byte {
 	return data
 }
 
-func literal(n int64) Value { return Value{Source: Literal, Value: big.NewInt(n)} }
-func input(n int64) Value   { return Value{Source: Input, Value: big.NewInt(n)} }
-func result(n int64) Value  { return Value{Source: Result, Value: big.NewInt(n)} }
+func literal(n int64) *big.Int { return big.NewInt(n) }
+func input(n int64) *big.Int {
+	return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(1), 216), big.NewInt(n))
+}
+func result(n int64) *big.Int {
+	return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(n))
+}
+
+func binding(offset uint32, value *big.Int) *big.Int {
+	return new(big.Int).Or(new(big.Int).Lsh(new(big.Int).SetUint64(uint64(offset)), 224), value)
+}
+
+func step(operation uint8, data []byte) []byte { return append([]byte{operation}, data...) }
 
 func singleTree(t *testing.T) *Tree {
 	t.Helper()
@@ -43,8 +53,8 @@ func singleTree(t *testing.T) *Tree {
 	return &Tree{Root: leaf.Hash, Leaves: []Leaf{leaf}}
 }
 
-func manageStep(t *testing.T, leaf common.Hash, gate Value, bindings []Binding) Step {
-	return Step{Operation: Manage, Data: pack(t, manageArgs, gate, [][32]byte{leaf}, [][]Binding{bindings})}
+func manageStep(t *testing.T, leaf common.Hash, gate *big.Int, bindings []*big.Int) []byte {
+	return step(Manage, pack(t, manageArgs, gate, [][32]byte{leaf}, [][]*big.Int{bindings}))
 }
 
 func TestIndependentABIGolden(t *testing.T) {
@@ -67,7 +77,10 @@ func TestIndependentABIGolden(t *testing.T) {
 	if hash.Hex() != golden["recipeHash"] {
 		t.Fatalf("recipe hash %s", hash)
 	}
-	if len(recipe.Steps) != 3 || recipe.Steps[2].Operation != Call {
+	if hexutil.Encode(executorABI.PackSetRecipe(recipe.Queries, recipe.Steps)) != golden["setRecipe"] || executorABI.GetABI().Events["SetRecipe"].ID.Hex() != golden["setRecipeTopic"] {
+		t.Fatal("Solidity setRecipe ABI or event mismatch")
+	}
+	if len(recipe.Steps) != 3 || recipe.Steps[2][0] != Call {
 		t.Fatal("Call=11 lost")
 	}
 	encoded, leaves, err := Assemble(recipe, nil, map[uint]string{0: "17"}, nil, nil)
@@ -82,18 +95,18 @@ func TestIndependentABIGolden(t *testing.T) {
 func TestAllOperationsAndReferenceRules(t *testing.T) {
 	tree := singleTree(t)
 	leaf := tree.Leaves[0]
-	query := pack(t, queryArgs, leaf.Target, []byte{1, 2, 3, 4}, []Binding{}, big.NewInt(0))
-	recipe := Recipe{Queries: [][]byte{query}, Steps: []Step{{Operation: Read, Data: pack(t, readArgs, big.NewInt(0))}}}
+	query := pack(t, queryArgs, leaf.Target, []byte{1, 2, 3, 4}, []*big.Int{}, big.NewInt(0))
+	recipe := Recipe{Queries: [][]byte{query}, Steps: [][]byte{step(Read, pack(t, readArgs, big.NewInt(0)))}}
 	for op := Add; op <= LessOrEqual; op++ {
 		data := pack(t, binaryArgs, result(0), literal(1))
 		if op == MulDiv {
 			data = pack(t, mulDivArgs, result(0), literal(1), literal(1))
 		}
-		recipe.Steps = append(recipe.Steps, Step{Operation: op, Data: data})
+		recipe.Steps = append(recipe.Steps, step(op, data))
 	}
 	recipe.Steps = append(recipe.Steps, manageStep(t, leaf.Hash, literal(1), nil))
-	recipe.Steps = append(recipe.Steps, Step{Operation: Approve, Data: pack(t, approveArgs, literal(2), leaf.Target, common.HexToAddress("0x1234"), leaf.Hash)})
-	recipe.Steps = append(recipe.Steps, Step{Operation: Call, Data: pack(t, callArgs, leaf.Target, []byte{1, 2, 3, 4}, []Binding{})})
+	recipe.Steps = append(recipe.Steps, step(Approve, pack(t, approveArgs, literal(2), leaf.Target, common.HexToAddress("0x1234"), leaf.Hash)))
+	recipe.Steps = append(recipe.Steps, step(Call, pack(t, callArgs, leaf.Target, []byte{1, 2, 3, 4}, []*big.Int{})))
 	inspection, err := Inspect(recipe)
 	if err != nil {
 		t.Fatal(err)
@@ -104,17 +117,17 @@ func TestAllOperationsAndReferenceRules(t *testing.T) {
 	if _, _, err = Assemble(recipe, tree, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []Value{result(1), input(65536), {Source: 3, Value: big.NewInt(0)}} {
-		invalid := Recipe{Steps: []Step{{Operation: Add, Data: pack(t, binaryArgs, bad, literal(0))}}}
+	for _, bad := range []*big.Int{result(1), input(65536), new(big.Int).Lsh(big.NewInt(3), 216)} {
+		invalid := Recipe{Steps: [][]byte{step(Add, pack(t, binaryArgs, bad, literal(0)))}}
 		if _, err = Inspect(invalid); err == nil {
 			t.Fatalf("bad reference accepted: %+v", bad)
 		}
 	}
-	invalid := Recipe{Steps: []Step{{Operation: Equal, Data: pack(t, binaryArgs, literal(1), literal(1))}, {Operation: Add, Data: pack(t, binaryArgs, result(0), literal(1))}}}
+	invalid := Recipe{Steps: [][]byte{step(Equal, pack(t, binaryArgs, literal(1), literal(1))), step(Add, pack(t, binaryArgs, result(0), literal(1)))}}
 	if _, err = Inspect(invalid); err == nil {
 		t.Fatal("assertion result accepted")
 	}
-	if _, err = Inspect(Recipe{Steps: []Step{{Operation: 12}}}); err == nil {
+	if _, err = Inspect(Recipe{Steps: [][]byte{{12}}}); err == nil {
 		t.Fatal("unknown opcode accepted")
 	}
 }
@@ -122,7 +135,7 @@ func TestAllOperationsAndReferenceRules(t *testing.T) {
 func TestMaskedReplacementAndSkippedGroup(t *testing.T) {
 	tree := singleTree(t)
 	leaf := tree.Leaves[0]
-	recipe := Recipe{Steps: []Step{manageStep(t, leaf.Hash, literal(1), []Binding{{Offset: big.NewInt(36), Value: literal(19)}})}}
+	recipe := Recipe{Steps: [][]byte{manageStep(t, leaf.Hash, literal(1), []*big.Int{binding(36, literal(19))})}}
 	replacement := bytes.Clone(leaf.Data)
 	replacement[len(replacement)-1] = 17
 	data, used, err := Assemble(recipe, tree, nil, map[string]hexutil.Bytes{"0:0": replacement}, nil)
@@ -176,7 +189,7 @@ func TestMaskedReplacementAndSkippedGroup(t *testing.T) {
 func TestApprovalPinsSpenderAndUsesPermissionPayload(t *testing.T) {
 	tree := singleTree(t)
 	leaf := tree.Leaves[0]
-	recipe := Recipe{Steps: []Step{{Operation: Approve, Data: pack(t, approveArgs, input(2), leaf.Target, common.HexToAddress("0x1234"), leaf.Hash)}}}
+	recipe := Recipe{Steps: [][]byte{step(Approve, pack(t, approveArgs, input(2), leaf.Target, common.HexToAddress("0x1234"), leaf.Hash))}}
 	data, _, err := Assemble(recipe, tree, map[uint]string{2: "123"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -196,7 +209,7 @@ func TestApprovalPinsSpenderAndUsesPermissionPayload(t *testing.T) {
 	if !bytes.Equal(permission[0].([]byte), leaf.DataMask) {
 		t.Fatal("approval mask mismatch")
 	}
-	recipe.Steps[0].Data = pack(t, approveArgs, literal(1), leaf.Target, common.HexToAddress("0xdead"), leaf.Hash)
+	recipe.Steps[0] = step(Approve, pack(t, approveArgs, literal(1), leaf.Target, common.HexToAddress("0xdead"), leaf.Hash))
 	if _, _, err = Assemble(recipe, tree, nil, nil, nil); err == nil {
 		t.Fatal("foreign spender accepted")
 	}
@@ -216,7 +229,7 @@ func TestApprovalSupportsPinnedAndPartialAmountMasks(t *testing.T) {
 			t.Fatal(err)
 		}
 		tree.Root = leaf.Hash
-		recipe := Recipe{Steps: []Step{{Operation: Approve, Data: pack(t, approveArgs, literal(17), leaf.Target, common.HexToAddress("0x1234"), leaf.Hash)}}}
+		recipe := Recipe{Steps: [][]byte{step(Approve, pack(t, approveArgs, literal(17), leaf.Target, common.HexToAddress("0x1234"), leaf.Hash))}}
 		if _, _, err = Assemble(recipe, tree, nil, nil, nil); err != nil {
 			t.Fatalf("mask %x: %v", maskByte, err)
 		}
@@ -225,7 +238,7 @@ func TestApprovalSupportsPinnedAndPartialAmountMasks(t *testing.T) {
 
 func TestSkippedBindingInputsAreOptional(t *testing.T) {
 	tree := singleTree(t)
-	recipe := Recipe{Steps: []Step{manageStep(t, tree.Leaves[0].Hash, input(0), []Binding{{Offset: big.NewInt(36), Value: input(2)}})}}
+	recipe := Recipe{Steps: [][]byte{manageStep(t, tree.Leaves[0].Hash, input(0), []*big.Int{binding(36, input(2))})}}
 	for _, values := range []map[uint]string{{0: "0"}, {0: "0", 2: "42"}} {
 		encoded, _, err := Assemble(recipe, nil, values, nil, []uint{0})
 		if err != nil {
@@ -249,16 +262,22 @@ func TestSkippedBindingInputsAreOptional(t *testing.T) {
 	if _, _, err := Assemble(recipe, tree, map[uint]string{0: "0"}, nil, nil); err == nil {
 		t.Fatal("keeper must not infer a skip from the numerical gate")
 	}
-	recipe.Steps = append(recipe.Steps, Step{Operation: Add, Data: pack(t, binaryArgs, input(2), literal(0))})
+	recipe.Steps = append(recipe.Steps, step(Add, pack(t, binaryArgs, input(2), literal(0))))
 	if _, _, err := Assemble(recipe, nil, map[uint]string{0: "0"}, nil, []uint{0}); err == nil {
 		t.Fatal("input referenced outside skipped group became optional")
 	}
 }
 
 func TestMalformedPayloadsReturnErrors(t *testing.T) {
+	if _, err := Inspect(Recipe{Steps: [][]byte{nil}}); err == nil {
+		t.Fatal("empty step accepted")
+	}
+	if _, _, err := Assemble(Recipe{Steps: [][]byte{nil}}, nil, nil, nil, []uint{0}); err == nil {
+		t.Fatal("empty step accepted as skipped Manage")
+	}
 	for op := Read; op <= Call; op++ {
 		for _, length := range []int{0, 1, 31} {
-			if _, err := Inspect(Recipe{Steps: []Step{{Operation: op, Data: make([]byte, length)}}}); err == nil {
+			if _, err := Inspect(Recipe{Steps: [][]byte{step(op, make([]byte, length))}}); err == nil {
 				t.Fatalf("operation %d accepted truncated payload %d", op, length)
 			}
 		}
@@ -270,25 +289,80 @@ func TestMalformedPayloadsReturnErrors(t *testing.T) {
 	}
 }
 
-func TestBindingsAndPayloadFailures(t *testing.T) {
-	for _, bindings := range [][]Binding{
-		{{Offset: big.NewInt(3), Value: literal(0)}},
-		{{Offset: big.NewInt(4), Value: literal(0)}, {Offset: big.NewInt(35), Value: literal(0)}},
-		{{Offset: big.NewInt(36), Value: literal(0)}},
+func TestPackedOperandAndBindingWidths(t *testing.T) {
+	maxLiteral := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 216), big.NewInt(1))
+	for _, test := range []struct {
+		name   string
+		word   *big.Int
+		source uint8
+		value  *big.Int
+	}{
+		{"max literal", maxLiteral, Literal, maxLiteral},
+		{"max input index", input(MaxInputIndex), Input, big.NewInt(MaxInputIndex)},
+		{"result with high bytes", binding(0xffffffff, result(1)), Result, big.NewInt(1)},
+		{"literal with high bytes", binding(0xffffffff, maxLiteral), Literal, maxLiteral},
 	} {
-		recipe := Recipe{Steps: []Step{{Operation: Call, Data: pack(t, callArgs, common.Address{}, make([]byte, 36), bindings)}}}
+		t.Run(test.name, func(t *testing.T) {
+			original := new(big.Int).Set(test.word)
+			decoded := decodeValue(test.word)
+			if decoded.Source != test.source || decoded.Value.Cmp(test.value) != 0 || test.word.Cmp(original) != 0 {
+				t.Fatal("packed operand decoded incorrectly or mutated")
+			}
+		})
+	}
+	bindings := decodeBindings([]*big.Int{binding(0xffffffff, input(2))})
+	if bindings[0].Offset != 0xffffffff || bindings[0].Value.Source != Input || bindings[0].Value.Value.Uint64() != 2 {
+		t.Fatal("packed binding lost offset or operand")
+	}
+	if err := validateBindings(bindings, 68, func(Value) error { return nil }); err == nil {
+		t.Fatal("binding end overflowed uint32")
+	}
+	for _, source := range []uint8{Input, Result} {
+		word := new(big.Int).Or(new(big.Int).Lsh(new(big.Int).SetUint64(uint64(source)), 216), maxLiteral)
+		if _, err := Inspect(Recipe{Steps: [][]byte{step(Add, pack(t, binaryArgs, word, literal(0)))}}); err == nil {
+			t.Fatal("uint216 index truncated to host width")
+		}
+	}
+}
+
+func TestFullWidthInputAndCommittedBytes(t *testing.T) {
+	// Solidity ignores the high four operand bytes and trailing ABI data, but
+	// both remain part of the recipe commitment and must be submitted unchanged.
+	data := append(pack(t, binaryArgs, binding(0xffffffff, input(0)), literal(0)), 1, 2, 3)
+	recipe := Recipe{Steps: [][]byte{step(Add, data)}}
+	maximum := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	encoded, _, err := Assemble(recipe, nil, map[uint]string{0: maximum.String()}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := executorABI.GetABI().Methods["execute"].Inputs.Unpack(encoded[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decoded[1].([][]byte)[0], recipe.Steps[0]) || decoded[2].([]*big.Int)[0].Cmp(maximum) != 0 {
+		t.Fatal("committed instruction or uint256 input changed")
+	}
+}
+
+func TestBindingsAndPayloadFailures(t *testing.T) {
+	for _, bindings := range [][]*big.Int{
+		{binding(3, literal(0))},
+		{binding(4, literal(0)), binding(35, literal(0))},
+		{binding(36, literal(0))},
+	} {
+		recipe := Recipe{Steps: [][]byte{step(Call, pack(t, callArgs, common.Address{}, make([]byte, 36), bindings))}}
 		if _, err := Inspect(recipe); err == nil {
 			t.Fatal("bad binding accepted")
 		}
 	}
 	data := pack(t, binaryArgs, literal(1), literal(2))
-	if _, err := Inspect(Recipe{Steps: []Step{{Operation: Add, Data: data[:127]}}}); err == nil {
+	if _, err := Inspect(Recipe{Steps: [][]byte{step(Add, data[:63])}}); err == nil {
 		t.Fatal("truncated payload accepted")
 	}
-	if _, err := Inspect(Recipe{Steps: []Step{{Operation: Add, Data: append(data, 1, 2, 3)}}}); err != nil {
+	if _, err := Inspect(Recipe{Steps: [][]byte{step(Add, append(data, 1, 2, 3))}}); err != nil {
 		t.Fatalf("Solidity-valid trailing bytes rejected: %v", err)
 	}
-	if _, err := Inspect(Recipe{Steps: []Step{{Operation: Read, Data: pack(t, readArgs, big.NewInt(0))}}}); err == nil {
+	if _, err := Inspect(Recipe{Steps: [][]byte{step(Read, pack(t, readArgs, big.NewInt(0)))}}); err == nil {
 		t.Fatal("missing query accepted")
 	}
 }

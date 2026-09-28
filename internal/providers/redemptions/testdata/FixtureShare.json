@@ -1,0 +1,159 @@
+{
+  "abi": [
+    {
+      "type": "function",
+      "name": "allowance",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "approve",
+      "inputs": [
+        {
+          "name": "spender",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "balanceOf",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "mint",
+      "inputs": [
+        {
+          "name": "account",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "setVault",
+      "inputs": [
+        {
+          "name": "asset",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "newVault",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "transferFrom",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "to",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "vault",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "view"
+    }
+  ],
+  "bytecode": "0x6080604052348015600e575f5ffd5b506103e48061001c5f395ff3fe608060405234801561000f575f5ffd5b506004361061007a575f3560e01c806370a082311161005857806370a08231146100ce578063714ccf7b146100fb578063dd62ed3e14610136578063f815c03d14610160575f5ffd5b8063095ea7b31461007e57806323b872dd146100a657806340c10f19146100b9575b5f5ffd5b61009161008c3660046102ea565b6101a0565b60405190151581526020015b60405180910390f35b6100916100b4366004610312565b610204565b6100cc6100c73660046102ea565b61029f565b005b6100ed6100dc36600461034c565b5f6020819052908152604090205481565b60405190815260200161009d565b6100cc61010936600461036c565b6001600160a01b039182165f90815260026020526040902080546001600160a01b03191691909216179055565b6100ed61014436600461036c565b600160209081525f928352604080842090915290825290205481565b61018861016e36600461034c565b60026020525f90815260409020546001600160a01b031681565b6040516001600160a01b03909116815260200161009d565b5f8115806101ce5750335f9081526001602090815260408083206001600160a01b0387168452909152902054155b6101d6575f5ffd5b50335f9081526001602081815260408084206001600160a01b03871685529091529091208290555b92915050565b6001600160a01b0383165f9081526001602090815260408083203384529091528120805483919083906102389084906103b1565b90915550506001600160a01b0384165f90815260208190526040812080548492906102649084906103b1565b90915550506001600160a01b0383165f90815260208190526040812080548492906102909084906103c4565b90915550600195945050505050565b6001600160a01b0382165f90815260208190526040812080548392906102c69084906103c4565b90915550505050565b80356001600160a01b03811681146102e5575f5ffd5b919050565b5f5f604083850312156102fb575f5ffd5b610304836102cf565b946020939093013593505050565b5f5f5f60608486031215610324575f5ffd5b61032d846102cf565b925061033b602085016102cf565b929592945050506040919091013590565b5f6020828403121561035c575f5ffd5b610365826102cf565b9392505050565b5f5f6040838503121561037d575f5ffd5b610386836102cf565b9150610394602084016102cf565b90509250929050565b634e487b7160e01b5f52601160045260245ffd5b818103818111156101fe576101fe61039d565b808201808211156101fe576101fe61039d56fea164736f6c6343000825000a",
+  "source": "Fixture.sol",
+  "sourceSha256": "1b7788960a50bec14fb67aaea313c8b9de249bc52f12da39d8bd9565bdb28334",
+  "compiler": "0.8.37+commit.f401782d"
+}

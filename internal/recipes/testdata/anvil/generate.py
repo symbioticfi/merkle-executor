@@ -25,18 +25,19 @@ with tempfile.TemporaryDirectory(prefix="merkle-keeper-fixtures-") as temporary:
     for contract in ("FixtureAccount", "FixtureToken"):
         artifact("Fixture.sol", project / f"out/Fixture.sol/{contract}.json", f"{contract}.json")
 
-source = "src/contracts/merkle-adapter/automations/RecipesExecutor.sol"
-executor_artifact = json.loads((ADAPTERS / "out/RecipesExecutor.sol/RecipesExecutor.json").read_text())
+source = "src/contracts/merkle-adapter/automations/RecipeExecutor.sol"
+executor_artifact = json.loads((ADAPTERS / "out/RecipeExecutor.sol/RecipeExecutor.json").read_text())
 for name, metadata in executor_artifact["metadata"]["sources"].items():
     if not name.startswith("src/"):
         continue
     current = subprocess.run(["cast", "keccak", "0x" + (ADAPTERS / name).read_bytes().hex()],
                              check=True, capture_output=True, text=True).stdout.strip()
     if current != metadata["keccak256"]:
-        raise SystemExit(f"Stale RecipesExecutor artifact: rebuild adapters ({name})")
-artifact(source, ADAPTERS / "out/RecipesExecutor.sol/RecipesExecutor.json", "RecipesExecutor.json")
+        raise SystemExit(f"Stale RecipeExecutor artifact: rebuild adapters ({name})")
+artifact(source, ADAPTERS / "out/RecipeExecutor.sol/RecipeExecutor.json", "RecipeExecutor.json")
 manifest = {}
-for source in (source, "src/contracts/merkle-adapter/Recipes.sol", "src/contracts/merkle-adapter/libraries/MerkleAdapterVerifier.sol"):
-    manifest[source] = hashlib.sha256((ADAPTERS / source).read_bytes()).hexdigest()
+for source in executor_artifact["metadata"]["sources"]:
+    if source.startswith("src/"):
+        manifest[source] = hashlib.sha256((ADAPTERS / source).read_bytes()).hexdigest()
 manifest["Fixture.sol"] = hashlib.sha256((HERE / "Fixture.sol").read_bytes()).hexdigest()
 (HERE / "sources-sha256.json").write_text(json.dumps(manifest, indent=2) + "\n")

@@ -211,19 +211,6 @@
   },
   {
     "type": "function",
-    "name": "inputAsset",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "invalidateNonce",
     "inputs": [
       {
@@ -314,6 +301,19 @@
     "outputs": [
       {
         "name": "oracle",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "outputAsset",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
         "type": "address",
         "internalType": "address"
       }
@@ -712,7 +712,7 @@
     "name": "SetMaxAssetsPerDuration",
     "inputs": [
       {
-        "name": "asset",
+        "name": "tokenToRedeem",
         "type": "address",
         "indexed": true,
         "internalType": "address"
@@ -875,22 +875,6 @@
     "type": "error",
     "name": "ReentrancyGuardReentrantCall",
     "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "SafeCastOverflowedUintDowncast",
-    "inputs": [
-      {
-        "name": "bits",
-        "type": "uint8",
-        "internalType": "uint8"
-      },
-      {
-        "name": "value",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
   },
   {
     "type": "error",

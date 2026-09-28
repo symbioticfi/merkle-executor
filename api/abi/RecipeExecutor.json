@@ -52,20 +52,8 @@
       },
       {
         "name": "steps",
-        "type": "tuple[]",
-        "internalType": "struct IRecipes.Step[]",
-        "components": [
-          {
-            "name": "operation",
-            "type": "uint8",
-            "internalType": "enum IRecipes.Operation"
-          },
-          {
-            "name": "data",
-            "type": "bytes",
-            "internalType": "bytes"
-          }
-        ]
+        "type": "bytes[]",
+        "internalType": "bytes[]"
       },
       {
         "name": "inputs",
@@ -164,26 +152,14 @@
     "name": "setRecipe",
     "inputs": [
       {
-        "name": "queries",
+        "name": "newQueries",
         "type": "bytes[]",
         "internalType": "bytes[]"
       },
       {
-        "name": "steps",
-        "type": "tuple[]",
-        "internalType": "struct IRecipes.Step[]",
-        "components": [
-          {
-            "name": "operation",
-            "type": "uint8",
-            "internalType": "enum IRecipes.Operation"
-          },
-          {
-            "name": "data",
-            "type": "bytes",
-            "internalType": "bytes"
-          }
-        ]
+        "name": "newSteps",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
       }
     ],
     "outputs": [],
@@ -252,21 +228,9 @@
       },
       {
         "name": "steps",
-        "type": "tuple[]",
+        "type": "bytes[]",
         "indexed": false,
-        "internalType": "struct IRecipes.Step[]",
-        "components": [
-          {
-            "name": "operation",
-            "type": "uint8",
-            "internalType": "enum IRecipes.Operation"
-          },
-          {
-            "name": "data",
-            "type": "bytes",
-            "internalType": "bytes"
-          }
-        ]
+        "internalType": "bytes[]"
       }
     ],
     "anonymous": false
@@ -384,21 +348,5 @@
     "type": "error",
     "name": "ReentrancyGuardReentrantCall",
     "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "SafeCastOverflowedUintDowncast",
-    "inputs": [
-      {
-        "name": "bits",
-        "type": "uint8",
-        "internalType": "uint8"
-      },
-      {
-        "name": "value",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
   }
 ]

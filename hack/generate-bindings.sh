@@ -6,7 +6,7 @@ case "$("$ABIGEN" --version)" in
     "abigen version 1.17.5"*) ;;
     *) echo "abigen 1.17.5 is required" >&2; exit 1 ;;
 esac
-for spec in RecipesExecutor:recipesexecutor MerkleAccount:merkleaccount ERC20:erc20; do
+for spec in RecipeExecutor:recipeexecutor MerkleAccount:merkleaccount ERC20:erc20; do
     contract=${spec%:*}
     package=${spec#*:}
     mkdir -p "api/bindings/$package"

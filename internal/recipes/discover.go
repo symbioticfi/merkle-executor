@@ -140,11 +140,11 @@ func readSnapshot(ctx context.Context, reader Reader, executor common.Address, h
 		return Snapshot{}, errors.New("recipe block does not fit uint48")
 	}
 	snapshot.RecipeBlock = recipeBlock.Uint64()
-	raw, err = reader.CallContract(ctx, ethereum.CallMsg{To: &snapshot.Account, Data: accountABI.PackMerkleRoot()}, block)
+	raw, err = reader.CallContract(ctx, ethereum.CallMsg{To: &snapshot.Account, Data: accountABI.PackRoot()}, block)
 	if err != nil {
 		return Snapshot{}, errors.Errorf("read account root: %w", err)
 	}
-	root, err := accountABI.UnpackMerkleRoot(raw)
+	root, err := accountABI.UnpackRoot(raw)
 	if err != nil {
 		return Snapshot{}, errors.Errorf("decode account root: %w", err)
 	}

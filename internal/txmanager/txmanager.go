@@ -16,6 +16,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/signer"
 	"github.com/symbioticfi/merkle-executor/internal/state"
 )
@@ -47,6 +48,7 @@ type Result struct {
 	ID                           string
 	Hash                         common.Hash
 	Confirmed, Reverted, Pending bool
+	Execution                    *provider.Execution `json:"execution,omitempty"`
 }
 
 var (
@@ -57,13 +59,14 @@ var (
 const journalKey = "txmanager.active.v1"
 
 type record struct {
-	Version       uint           `json:"version"`
-	ID            string         `json:"id"`
-	ChainID       string         `json:"chainId"`
-	Sender        common.Address `json:"sender"`
-	Raw           hexutil.Bytes  `json:"raw"`
-	Confirmations uint64         `json:"confirmations"`
-	Terminal      string         `json:"terminal,omitempty"`
+	Version       uint                `json:"version"`
+	ID            string              `json:"id"`
+	ChainID       string              `json:"chainId"`
+	Sender        common.Address      `json:"sender"`
+	Raw           hexutil.Bytes       `json:"raw"`
+	Confirmations uint64              `json:"confirmations"`
+	Terminal      string              `json:"terminal,omitempty"`
+	Execution     *provider.Execution `json:"execution,omitempty"`
 }
 
 // Manager admits one Send/Acknowledge at a time. The immutable active snapshot
@@ -131,11 +134,19 @@ func (m *Manager) decode(r *record) (*types.Transaction, error) {
 	if err != nil || from != r.Sender || tx.ChainId().Cmp(m.chainID) != 0 || tx.To() == nil || tx.Value().Sign() != 0 || tx.Type() != types.DynamicFeeTxType {
 		return nil, errors.New("transaction journal signed payload mismatch")
 	}
+	if r.Execution != nil {
+		if err := r.Execution.Validate(); err != nil {
+			return nil, err
+		}
+		if r.Terminal == "" || r.Execution.TxHash != tx.Hash() {
+			return nil, errors.New("transaction journal execution mismatch")
+		}
+	}
 	return &tx, nil
 }
 
 func result(r *record, tx *types.Transaction) Result {
-	return Result{ID: r.ID, Hash: tx.Hash(), Confirmed: r.Terminal == "confirmed", Reverted: r.Terminal == "reverted", Pending: r.Terminal == ""}
+	return Result{ID: r.ID, Hash: tx.Hash(), Confirmed: r.Terminal == "confirmed", Reverted: r.Terminal == "reverted", Pending: r.Terminal == "", Execution: r.Execution.Clone()}
 }
 
 // Send reconciles retained work first. It only re-broadcasts its exact signed
@@ -310,8 +321,18 @@ func (m *Manager) receipt(ctx context.Context, r *record, tx *types.Transaction)
 	if err != nil {
 		return pending, false, errors.Errorf("read receipt: %w", err)
 	}
-	if receipt == nil || receipt.TxHash != tx.Hash() || receipt.BlockNumber == nil || receipt.BlockNumber.Sign() < 0 || receipt.BlockHash == (common.Hash{}) || receipt.Status > 1 {
+	if receipt == nil || receipt.TxHash != tx.Hash() || receipt.BlockNumber == nil || !receipt.BlockNumber.IsUint64() || receipt.BlockHash == (common.Hash{}) || receipt.Status > 1 {
 		return pending, false, errors.New("invalid transaction receipt")
+	}
+	execution := &provider.Execution{TxHash: receipt.TxHash, BlockNumber: new(big.Int).Set(receipt.BlockNumber), BlockHash: receipt.BlockHash, Logs: make([]types.Log, len(receipt.Logs))}
+	for i, log := range receipt.Logs {
+		if log == nil || log.TxIndex != receipt.TransactionIndex {
+			return pending, false, errors.New("invalid receipt log")
+		}
+		execution.Logs[i] = *log
+	}
+	if err := execution.Validate(); err != nil {
+		return pending, false, err
 	}
 	witnessNumber := new(big.Int).Add(receipt.BlockNumber, new(big.Int).SetUint64(r.Confirmations))
 	witness, err := m.backend.HeaderByNumber(ctx, witnessNumber)
@@ -347,6 +368,7 @@ func (m *Manager) receipt(ctx context.Context, r *record, tx *types.Transaction)
 	}
 	final := *r
 	final.Terminal = "confirmed"
+	final.Execution = execution.Clone()
 	if receipt.Status == types.ReceiptStatusFailed {
 		final.Terminal = "reverted"
 	}

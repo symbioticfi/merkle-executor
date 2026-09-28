@@ -19,7 +19,7 @@ import (
 func Assemble(recipe Recipe, tree *Tree, inputs map[uint]string, actions map[string]hexutil.Bytes, skipSteps []uint) ([]byte, []common.Hash, error) {
 	skipped := make(map[uint]bool, len(skipSteps))
 	for _, step := range skipSteps {
-		if step >= uint(len(recipe.Steps)) || recipe.Steps[step].Operation != Manage {
+		if step >= uint(len(recipe.Steps)) || len(recipe.Steps[step]) == 0 || recipe.Steps[step][0] != Manage {
 			return nil, nil, errors.Errorf("skip step %d is not Manage", step)
 		}
 		if skipped[step] {

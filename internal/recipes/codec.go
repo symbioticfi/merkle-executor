@@ -9,18 +9,16 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	account "github.com/symbioticfi/merkle-executor/api/bindings/merkleaccount"
-	executor "github.com/symbioticfi/merkle-executor/api/bindings/recipesexecutor"
+	executor "github.com/symbioticfi/merkle-executor/api/bindings/recipeexecutor"
 )
 
-var executorABI = executor.NewRecipesExecutor()
+var executorABI = executor.NewRecipeExecutor()
 var accountABI = account.NewMerkleAccount()
 
 // These are internal ABI payloads specified by IRecipes, not contract methods.
-var valueFields = []abi.ArgumentMarshaling{{Name: "source", Type: "uint8"}, {Name: "value", Type: "uint256"}}
-var bindingFields = []abi.ArgumentMarshaling{{Name: "offset", Type: "uint256"}, {Name: "value", Type: "tuple", Components: valueFields}}
-var valueType = mustType("tuple", valueFields)
-var bindingsType = mustType("tuple[]", bindingFields)
-var manageArgs = abi.Arguments{{Type: valueType}, {Type: mustType("bytes32[]", nil)}, {Type: mustType("tuple[][]", bindingFields)}}
+var valueType = mustType("uint256", nil)
+var bindingsType = mustType("uint256[]", nil)
+var manageArgs = abi.Arguments{{Type: valueType}, {Type: mustType("bytes32[]", nil)}, {Type: mustType("uint256[][]", nil)}}
 var approveArgs = abi.Arguments{{Type: valueType}, {Type: mustType("address", nil)}, {Type: mustType("address", nil)}, {Type: mustType("bytes32", nil)}}
 var callArgs = abi.Arguments{{Type: mustType("address", nil)}, {Type: mustType("bytes", nil)}, {Type: bindingsType}}
 var queryArgs = append(append(abi.Arguments{}, callArgs...), abi.Argument{Type: mustType("uint256", nil)})
@@ -51,7 +49,7 @@ func DecodeRecipe(encoded []byte) (Recipe, error) {
 	if err != nil {
 		return Recipe{}, errors.Errorf("decode recipe: %w", err)
 	}
-	return Recipe{Queries: values[0].([][]byte), Steps: *abi.ConvertType(values[1], new([]Step)).(*[]Step)}, nil
+	return Recipe{Queries: values[0].([][]byte), Steps: values[1].([][]byte)}, nil
 }
 
 func HashLeaf(leaf Leaf) (common.Hash, error) {
@@ -103,7 +101,11 @@ func inspect(recipe Recipe, skipped map[uint]bool) (Inspection, []uint, error) {
 	inputs := make(map[uint]struct{})
 	requiredInputs := make(map[uint]struct{})
 	for index, step := range recipe.Steps {
-		slot := RuntimeSlot{Index: uint(len(result.Slots)), StepIndex: uint(index), Operation: step.Operation}
+		if len(step) == 0 {
+			return Inspection{}, nil, errors.Errorf("step %d: empty instruction", index)
+		}
+		operation, data := step[0], step[1:]
+		slot := RuntimeSlot{Index: uint(len(result.Slots)), StepIndex: uint(index), Operation: operation}
 		var err error
 		validate := func(v Value) error {
 			if err := validateValue(v, index, recipe.Steps, inputs); err != nil {
@@ -114,10 +116,10 @@ func inspect(recipe Recipe, skipped map[uint]bool) (Inspection, []uint, error) {
 			}
 			return nil
 		}
-		switch step.Operation {
+		switch operation {
 		case Read:
 			var decoded []any
-			decoded, err = readArgs.Unpack(step.Data)
+			decoded, err = readArgs.Unpack(data)
 			if err != nil {
 				break
 			}
@@ -130,32 +132,34 @@ func inspect(recipe Recipe, skipped map[uint]bool) (Inspection, []uint, error) {
 			if err != nil {
 				break
 			}
-			bindings := *abi.ConvertType(decoded[2], new([]Binding)).(*[]Binding)
+			bindings := decodeBindings(decoded[2].([]*big.Int))
 			err = validateBindings(bindings, len(decoded[1].([]byte)), validate)
 		case Add, Sub, SaturatingSub, Min, Max, MulDiv, Equal, LessOrEqual:
 			args := binaryArgs
-			if step.Operation == MulDiv {
+			if operation == MulDiv {
 				args = mulDivArgs
 			}
 			var decoded []any
-			decoded, err = args.Unpack(step.Data)
+			decoded, err = args.Unpack(data)
 			if err != nil {
 				break
 			}
 			for _, raw := range decoded {
-				if err = validate(*abi.ConvertType(raw, new(Value)).(*Value)); err != nil {
+				if err = validate(decodeValue(raw.(*big.Int))); err != nil {
 					break
 				}
 			}
 		case Manage:
 			var decoded []any
-			decoded, err = manageArgs.Unpack(step.Data)
+			decoded, err = manageArgs.Unpack(data)
 			if err != nil {
 				break
 			}
-			slot.Gate = *abi.ConvertType(decoded[0], new(Value)).(*Value)
+			slot.Gate = decodeValue(decoded[0].(*big.Int))
 			slot.Leaves = hashes(decoded[1].([][32]byte))
-			slot.Bindings = *abi.ConvertType(decoded[2], new([][]Binding)).(*[][]Binding)
+			for _, bindings := range decoded[2].([][]*big.Int) {
+				slot.Bindings = append(slot.Bindings, decodeBindings(bindings))
+			}
 			if len(slot.Leaves) != len(slot.Bindings) {
 				err = errors.New("managed leaf/binding counts differ")
 				break
@@ -177,11 +181,11 @@ func inspect(recipe Recipe, skipped map[uint]bool) (Inspection, []uint, error) {
 			result.Slots = append(result.Slots, slot)
 		case Approve:
 			var decoded []any
-			decoded, err = approveArgs.Unpack(step.Data)
+			decoded, err = approveArgs.Unpack(data)
 			if err != nil {
 				break
 			}
-			slot.Amount = *abi.ConvertType(decoded[0], new(Value)).(*Value)
+			slot.Amount = decodeValue(decoded[0].(*big.Int))
 			slot.Token = decoded[1].(common.Address)
 			slot.Spender = decoded[2].(common.Address)
 			slot.Leaves = []common.Hash{decoded[3].([32]byte)}
@@ -189,14 +193,14 @@ func inspect(recipe Recipe, skipped map[uint]bool) (Inspection, []uint, error) {
 			result.Slots = append(result.Slots, slot)
 		case Call:
 			var decoded []any
-			decoded, err = callArgs.Unpack(step.Data)
+			decoded, err = callArgs.Unpack(data)
 			if err != nil {
 				break
 			}
-			bindings := *abi.ConvertType(decoded[2], new([]Binding)).(*[]Binding)
+			bindings := decodeBindings(decoded[2].([]*big.Int))
 			err = validateBindings(bindings, len(decoded[1].([]byte)), validate)
 		default:
-			err = errors.Errorf("unknown operation %d", step.Operation)
+			err = errors.Errorf("unknown operation %d", operation)
 		}
 		if err != nil {
 			return Inspection{}, nil, errors.Errorf("step %d: %w", index, err)
@@ -215,10 +219,23 @@ func sortedInputs(inputs map[uint]struct{}) []uint {
 	return result
 }
 
-func validateValue(value Value, index int, steps []Step, inputs map[uint]struct{}) error {
-	if value.Value == nil || value.Value.Sign() < 0 || value.Value.BitLen() > 256 {
-		return errors.New("invalid uint256 value")
+// decodeValue matches Solidity's uint8(word >> 216) and uint216(word).
+// The upper four bytes are ignored, including in standalone operands.
+func decodeValue(word *big.Int) Value {
+	var encoded [32]byte
+	word.FillBytes(encoded[:])
+	return Value{Source: encoded[4], Value: new(big.Int).SetBytes(encoded[5:])}
+}
+
+func decodeBindings(words []*big.Int) []Binding {
+	bindings := make([]Binding, len(words))
+	for i, word := range words {
+		bindings[i] = Binding{Offset: uint32(new(big.Int).Rsh(word, 224).Uint64()), Value: decodeValue(word)}
 	}
+	return bindings
+}
+
+func validateValue(value Value, index int, steps [][]byte, inputs map[uint]struct{}) error {
 	switch value.Source {
 	case Literal:
 	case Input:
@@ -228,7 +245,7 @@ func validateValue(value Value, index int, steps []Step, inputs map[uint]struct{
 		}
 		inputs[uint(value.Value.Uint64())] = struct{}{}
 	case Result:
-		if !value.Value.IsUint64() || value.Value.Uint64() >= uint64(index) || steps[value.Value.Uint64()].Operation > MulDiv {
+		if !value.Value.IsUint64() || value.Value.Uint64() >= uint64(index) || steps[value.Value.Uint64()][0] > MulDiv {
 			return errors.New("result must reference an earlier numerical instruction")
 		}
 	default:
@@ -240,10 +257,10 @@ func validateValue(value Value, index int, steps []Step, inputs map[uint]struct{
 func validateBindings(bindings []Binding, dataLength int, validate func(Value) error) error {
 	end := uint64(4)
 	for _, binding := range bindings {
-		if binding.Offset == nil || !binding.Offset.IsUint64() || binding.Offset.Uint64() < end || binding.Offset.Uint64() > ^uint64(0)-32 {
+		if uint64(binding.Offset) < end {
 			return errors.New("binding overlaps, changes selector or exceeds bounds")
 		}
-		end = binding.Offset.Uint64() + 32
+		end = uint64(binding.Offset) + 32
 		if dataLength >= 0 && end > uint64(dataLength) {
 			return errors.New("binding outside calldata")
 		}
