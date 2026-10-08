@@ -8,3 +8,7 @@
 *.key
 *.pem
 *.log
+
+/go.work
+/go.work.sum
+/.superpowers/

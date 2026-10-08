@@ -19,13 +19,14 @@ build:
 test:
 	go test -race -cover ./...
 integration:
-	MERKLE_ANVIL_TEST=1 go test -tags=integration ./internal/recipes ./cmd/merkle-executor ./internal/txengine -run TestAnvil -count=1 -v
+	$(MAKE) -C sdk integration
+	MERKLE_ANVIL_TEST=1 go test -tags=integration ./cmd/merkle-executor ./internal/txengine -run TestAnvil -count=1 -v
 vet:
 	go vet ./...
 lint:
 	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
 format:
-	gofmt -s -w cmd internal api/protocolio
+	gofmt -s -w cmd internal sdk
 tools: $(ABIGEN)
 $(ABIGEN):
 	GOTOOLCHAIN=$(ABIGEN_TOOLCHAIN) GOBIN='$(CURDIR)/.tools' go install github.com/ethereum/go-ethereum/cmd/abigen@$(ABIGEN_VERSION)
@@ -36,3 +37,4 @@ generate: tools
 tidy:
 	go mod tidy
 check: build test vet lint
+	$(MAKE) -C sdk check

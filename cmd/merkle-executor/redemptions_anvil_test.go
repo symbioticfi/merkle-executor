@@ -18,13 +18,13 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 
 	async "github.com/symbioticfi/merkle-executor/api/bindings/asyncredeemvault"
-	erc20 "github.com/symbioticfi/merkle-executor/api/bindings/erc20"
-	executor "github.com/symbioticfi/merkle-executor/api/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/internal/config"
-	"github.com/symbioticfi/merkle-executor/internal/keeper"
 	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
-	"github.com/symbioticfi/merkle-executor/internal/recipes"
-	"github.com/symbioticfi/merkle-executor/internal/state"
+	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
+	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func loadIssuerArtifact(t *testing.T, name string) serviceArtifact {

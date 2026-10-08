@@ -17,10 +17,11 @@ import (
 	"gopkg.in/yaml.v3"
 
 	binding "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	"github.com/symbioticfi/merkle-executor/internal/parse"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 type Config struct {
@@ -64,7 +65,7 @@ func (c *Client) Rewards(ctx context.Context, account common.Address, chainID *b
 
 type Provider struct {
 	cfg         Config
-	deps        provider.Deps
+	deps        providerRegistry.Deps
 	client      *Client
 	distributor common.Address
 	tokens      []common.Address
@@ -72,8 +73,8 @@ type Provider struct {
 	claimStep   uint
 }
 
-func Register(r *provider.Registry) error { return r.Register("merkl", Factory) }
-func Factory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func Register(r *providerRegistry.Registry) error { return r.Register("merkl", Factory) }
+func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var c Config
 	if e := parse.DecodeStrict(raw, &c); e != nil {
 		return nil, e

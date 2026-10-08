@@ -12,7 +12,8 @@ import (
 	"github.com/go-logr/logr"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 func node(t *testing.T, text string) yaml.Node {
@@ -33,7 +34,7 @@ func TestHTTPExactIntegerAndPointer(t *testing.T) {
 		_, _ = w.Write([]byte(`{"rows":[{"amount":9007199254740993,"call":"0x12345678"}]}`))
 	}))
 	defer server.Close()
-	p, err := httpFactory(node(t, "url: "+server.URL+"/{{account}}\ninputs: {0: /rows/0/amount}\nactions: {'9:0': /rows/0/call}"), provider.Deps{HTTP: server.Client(), Log: logr.Discard()})
+	p, err := httpFactory(node(t, "url: "+server.URL+"/{{account}}\ninputs: {0: /rows/0/amount}\nactions: {'9:0': /rows/0/call}"), providerRegistry.Deps{HTTP: server.Client(), Log: logr.Discard()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +53,7 @@ func TestHTTPRejectsBadResponses(t *testing.T) {
 		t.Run(body, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
 			defer server.Close()
-			p, err := httpFactory(node(t, "url: "+server.URL+"\ninputs: {0: /amount}"), provider.Deps{HTTP: server.Client()})
+			p, err := httpFactory(node(t, "url: "+server.URL+"\ninputs: {0: /amount}"), providerRegistry.Deps{HTTP: server.Client()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -73,7 +74,7 @@ func (r *reader) CallContract(_ context.Context, msg ethereum.CallMsg, block *bi
 func TestRPCPinsReadsAndBindsWords(t *testing.T) {
 	t.Parallel()
 	r := &reader{}
-	p, err := rpcFactory(node(t, "reads:\n  - {target: '{{account}}', data: '0x12345678', offset: 0, input: 0}\nactions:\n  '9:0':\n    data: '0x123456780000000000000000000000000000000000000000000000000000000000000000'\n    words: [{offset: 4, input: 0}]"), provider.Deps{Chain: r})
+	p, err := rpcFactory(node(t, "reads:\n  - {target: '{{account}}', data: '0x12345678', offset: 0, input: 0}\nactions:\n  '9:0':\n    data: '0x123456780000000000000000000000000000000000000000000000000000000000000000'\n    words: [{offset: 4, input: 0}]"), providerRegistry.Deps{Chain: r})
 	if err != nil {
 		t.Fatal(err)
 	}

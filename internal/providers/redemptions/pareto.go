@@ -9,7 +9,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretocdo"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretoqueue"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretostrategy"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 func (p *Provider) pareto(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {

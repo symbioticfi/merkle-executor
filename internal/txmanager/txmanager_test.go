@@ -11,12 +11,14 @@ import (
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 
 	"github.com/symbioticfi/merkle-executor/internal/signer"
-	"github.com/symbioticfi/merkle-executor/internal/state"
+	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 type fakeChain struct {
@@ -66,6 +68,9 @@ func (b *fakeChain) HeaderByNumber(_ context.Context, number *big.Int) (*types.H
 	defer b.mu.Unlock()
 	if number != nil && number.Cmp(b.receiptHeader.Number) == 0 {
 		return types.CopyHeader(b.receiptHeader), nil
+	}
+	if number != nil && number.Int64() == 11 {
+		return &types.Header{Number: big.NewInt(11), GasLimit: 30_000_000, BaseFee: big.NewInt(1), ParentHash: b.receiptHeader.Hash()}, nil
 	}
 	return types.CopyHeader(b.head), nil
 }
@@ -117,7 +122,10 @@ func TestConfirmedExecutionEvidenceSurvivesRestartAndDoesNotAlias(t *testing.T) 
 	got.Execution.BlockNumber.SetInt64(99)
 	got.Execution.Logs[0].Data[0] = 99
 	got.Execution.Logs[0].Topics[0] = common.Hash{}
-	retained := m.retainedResult(request().ID)
+	retained, err := m.Send(t.Context(), request())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if retained.Execution.BlockNumber.Int64() != 10 || retained.Execution.Logs[0].Data[0] != 1 || retained.Execution.Logs[0].Topics[0] == (common.Hash{}) {
 		t.Fatal("provider changed retained transaction evidence")
 	}
@@ -252,7 +260,7 @@ func TestSignedBytesPersistBeforeBroadcastAndConfirmedReplayNeverResigns(t *test
 	if _, err := m.Send(context.Background(), other); err == nil {
 		t.Fatal("new ID admitted before terminal acknowledgement")
 	}
-	if err := m.Acknowledge(request().ID); err != nil {
+	if err := m.Acknowledge(t.Context(), request().ID); err != nil {
 		t.Fatal(err)
 	}
 	if m.PendingID() != "" {
@@ -277,7 +285,7 @@ func TestAmbiguousBroadcastRecoversExactHashAfterRestart(t *testing.T) {
 	if err == nil || !got.Pending || got.Hash == (common.Hash{}) {
 		t.Fatalf("ambiguous result: %+v %v", got, err)
 	}
-	if err := m.Acknowledge(request().ID); err == nil {
+	if err := m.Acknowledge(t.Context(), request().ID); err == nil {
 		t.Fatal("pending record acknowledged")
 	}
 	if err := store.Close(); err != nil {
@@ -467,7 +475,7 @@ func TestConcurrentSendAndAcknowledgeCannotRaceActiveBroadcast(t *testing.T) {
 	if _, err := m.Send(context.Background(), request()); !errors.Is(err, ErrLaneBusy) {
 		t.Errorf("concurrent send entered lane: %v", err)
 	}
-	if err := m.Acknowledge(request().ID); !errors.Is(err, ErrLaneBusy) {
+	if err := m.Acknowledge(t.Context(), request().ID); !errors.Is(err, ErrLaneBusy) {
 		t.Errorf("acknowledge raced active send: %v", err)
 	}
 	close(release)
@@ -532,4 +540,18 @@ func (b *fakeChain) FeeHistory(context.Context, uint64, *big.Int, []float64) (*e
 		return nil, b.feeErr
 	}
 	return &ethereum.FeeHistory{OldestBlock: big.NewInt(10), BaseFee: []*big.Int{big.NewInt(1), big.NewInt(1), big.NewInt(1), big.NewInt(1)}, GasUsedRatio: []float64{0.5, 0.5, 0.5}, Reward: [][]*big.Int{{big.NewInt(1)}, {big.NewInt(1)}, {big.NewInt(1)}}}, nil
+}
+
+// These fixtures seed the SDK journal on disk to exercise the real host engine.
+const journalKey = "txmanager.active.v1"
+
+type record struct {
+	Version       int `json:"version"`
+	ID, ChainID   string
+	Sender        common.Address
+	Raw           hexutil.Bytes
+	Attempts      []hexutil.Bytes
+	Confirmations uint64
+	Terminal      string
+	Execution     *provider.Execution
 }

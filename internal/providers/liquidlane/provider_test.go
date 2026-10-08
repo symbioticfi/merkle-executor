@@ -14,10 +14,11 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	binding "github.com/symbioticfi/merkle-executor/api/bindings/liquidconnector"
-	accountbinding "github.com/symbioticfi/merkle-executor/api/bindings/merkleaccount"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"gopkg.in/yaml.v3"
 )
 
@@ -124,7 +125,7 @@ func TestPrepareConnectorAndRejectLegacyDomain(t *testing.T) {
 			input := uint(0)
 			output := uint(1)
 			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Format: "connector-v1", Connector: addr(4).Hex(), Token: addr(5).Hex(), OutputAsset: addr(1).Hex(), Recipient: addr(8).Hex(), Protocol: protocol.Hex(), DiscountID: dh.Hex(), AmountIn: "100", MaxAmountOut: "1000", Action: "0:0", CalldataBytes: len(payload), AmountInInput: &input, AmountOutInput: &output}
-			p, e := Factory(node(t, cfg), provider.Deps{Chain: chain, HTTP: srv.Client()})
+			p, e := Factory(node(t, cfg), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -143,7 +144,7 @@ func TestPrepareConnectorAndRejectLegacyDomain(t *testing.T) {
 				t.Fatalf("wrong prepared output %+v", result)
 			}
 			cfg.OutputAsset = addr(9).Hex()
-			p, e = Factory(node(t, cfg), provider.Deps{Chain: chain, HTTP: srv.Client()})
+			p, e = Factory(node(t, cfg), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -152,7 +153,7 @@ func TestPrepareConnectorAndRejectLegacyDomain(t *testing.T) {
 			}
 			cfg.OutputAsset = addr(1).Hex()
 			cfg.CalldataBytes++
-			p, e = Factory(node(t, cfg), provider.Deps{Chain: chain, HTTP: srv.Client()})
+			p, e = Factory(node(t, cfg), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
 			}

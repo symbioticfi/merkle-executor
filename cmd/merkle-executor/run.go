@@ -14,9 +14,8 @@ import (
 
 	"github.com/symbioticfi/merkle-executor/internal/chain"
 	"github.com/symbioticfi/merkle-executor/internal/config"
-	"github.com/symbioticfi/merkle-executor/internal/keeper"
 	"github.com/symbioticfi/merkle-executor/internal/observability"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/internal/providers/data"
 	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlane"
@@ -24,8 +23,9 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
 	"github.com/symbioticfi/merkle-executor/internal/providers/securitize"
 	"github.com/symbioticfi/merkle-executor/internal/signer"
-	"github.com/symbioticfi/merkle-executor/internal/state"
 	"github.com/symbioticfi/merkle-executor/internal/txmanager"
+	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer) error {
@@ -54,17 +54,17 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 	}
 	defer client.Close()
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	registry := provider.NewRegistry()
-	for _, register := range []func(*provider.Registry) error{data.Register, liquidlane.Register, merkl.Register, cowswap.Register, redemptions.Register, securitize.Register} {
+	registry := providerRegistry.NewRegistry()
+	for _, register := range []func(*providerRegistry.Registry) error{data.Register, liquidlane.Register, merkl.Register, cowswap.Register, redemptions.Register, securitize.Register} {
 		if err := register(registry); err != nil {
 			return err
 		}
 	}
 	strategies := make([]keeper.Strategy, 0, len(cfg.Strategies))
 	for _, sc := range cfg.Strategies {
-		s := keeper.Strategy{Config: sc}
+		s := keeper.Strategy{Config: keeper.Config{Name: sc.Name, Executor: sc.Executor, Account: sc.Account, RecipeHash: sc.RecipeHash, Tree: sc.Tree, Interval: sc.Interval, Revision: sc.Fingerprint()}}
 		for _, pc := range sc.Providers {
-			p, err := registry.New(pc.Name, pc.Config, provider.Deps{Chain: client, HTTP: httpClient, Log: log.WithValues("strategy", sc.Name, "provider", pc.Name), ConfigDir: configDir})
+			p, err := registry.New(pc.Name, pc.Config, providerRegistry.Deps{Chain: client, HTTP: httpClient, Log: log.WithValues("strategy", sc.Name, "provider", pc.Name), ConfigDir: configDir})
 			if err != nil {
 				return errors.Errorf("configure provider %s: %w", pc.Name, err)
 			}

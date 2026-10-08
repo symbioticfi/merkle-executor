@@ -7,7 +7,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
 	"github.com/symbioticfi/merkle-executor/api/bindings/noonwithdrawalhandler"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 func (p *Provider) noon(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {

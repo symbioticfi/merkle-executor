@@ -12,7 +12,7 @@ import (
 	figure "github.com/symbioticfi/merkle-executor/api/bindings/figureyieldvault"
 	midas "github.com/symbioticfi/merkle-executor/api/bindings/midasredemption"
 	openeden "github.com/symbioticfi/merkle-executor/api/bindings/openedenexpress"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 func (p *Provider) midas(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {

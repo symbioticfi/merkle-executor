@@ -8,8 +8,8 @@ import (
 
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
 	figure "github.com/symbioticfi/merkle-executor/api/bindings/figureyieldvault"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 // A committed binding may request the actual PRIME redemption output instead of

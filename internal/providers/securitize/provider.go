@@ -13,14 +13,15 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/merkle-executor/api/bindings/erc20"
 	legacy "github.com/symbioticfi/merkle-executor/api/bindings/securitizelegacyofframp"
 	modern "github.com/symbioticfi/merkle-executor/api/bindings/securitizeofframp"
 	"github.com/symbioticfi/merkle-executor/api/bindings/securitizetoken"
 	"github.com/symbioticfi/merkle-executor/api/bindings/securitizetopology"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
-	"github.com/symbioticfi/merkle-executor/internal/parse"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 type Config struct {
@@ -40,7 +41,7 @@ type Config struct {
 
 type Provider struct {
 	cfg                    Config
-	deps                   provider.Deps
+	deps                   providerRegistry.Deps
 	token, target, payment common.Address
 	amount, minimum        *big.Int
 	decimals               *uint8
@@ -58,9 +59,9 @@ type prepared struct {
 	Expected string         `json:"expected"`
 }
 
-func Register(r *provider.Registry) error { return r.Register("securitize", Factory) }
+func Register(r *providerRegistry.Registry) error { return r.Register("securitize", Factory) }
 
-func Factory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var c Config
 	if err := parse.DecodeStrict(raw, &c); err != nil {
 		return nil, err

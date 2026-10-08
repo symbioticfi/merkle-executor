@@ -18,14 +18,15 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/merkle-executor/api/bindings/erc20"
-	account "github.com/symbioticfi/merkle-executor/api/bindings/merkleaccount"
 	legacy "github.com/symbioticfi/merkle-executor/api/bindings/securitizelegacyofframp"
 	modern "github.com/symbioticfi/merkle-executor/api/bindings/securitizeofframp"
 	"github.com/symbioticfi/merkle-executor/api/bindings/securitizetoken"
 	"github.com/symbioticfi/merkle-executor/api/bindings/securitizetopology"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 type chainReader struct {
@@ -180,7 +181,7 @@ func newProvider(t *testing.T, c Config, r provider.Reader) *Provider {
 	if chain, ok := r.(*chainReader); ok {
 		chain.configure(c)
 	}
-	p, err := Factory(configNode(t, c), provider.Deps{Chain: r})
+	p, err := Factory(configNode(t, c), providerRegistry.Deps{Chain: r})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -486,7 +487,7 @@ func TestFactoryRejectsUnsafeConfiguration(t *testing.T) {
 			if variant == "unknown-field" {
 				n = configNode(t, map[string]any{"unknown": true})
 			}
-			if _, err := Factory(n, provider.Deps{Chain: chain}); err == nil {
+			if _, err := Factory(n, providerRegistry.Deps{Chain: chain}); err == nil {
 				t.Fatal("invalid configuration accepted")
 			}
 		})
@@ -511,7 +512,7 @@ func TestCatalogCoversPublishedEVMDeployments(t *testing.T) {
 				t.Fatal("unexpected unavailable issuer route")
 			}
 			c.Target = address(99).Hex()
-			if _, err = Factory(configNode(t, c), provider.Deps{Chain: r}); err == nil {
+			if _, err = Factory(configNode(t, c), providerRegistry.Deps{Chain: r}); err == nil {
 				t.Fatal("missing issuer route accepted")
 			}
 			continue
@@ -631,7 +632,7 @@ func TestCatalogRejectsMismatchAndMalformedSource(t *testing.T) {
 				}
 			}
 			r.configure(c)
-			p, err := Factory(configNode(t, c), provider.Deps{Chain: r})
+			p, err := Factory(configNode(t, c), providerRegistry.Deps{Chain: r})
 			if variant == "decimals" && err == nil {
 				_, err = p.Prepare(context.Background(), s)
 			}
@@ -658,7 +659,7 @@ func TestCatalogRelativeToConfiguration(t *testing.T) {
 	c.Catalog, c.Symbol, c.ChainID = "assets.yaml", "HINC", 1
 	c.Token = "0x015C477A4E2881C4B3bB8999f59ee4A04e812344"
 	c.Target = "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
-	if _, err = Factory(configNode(t, c), provider.Deps{Chain: r, ConfigDir: root}); err != nil {
+	if _, err = Factory(configNode(t, c), providerRegistry.Deps{Chain: r, ConfigDir: root}); err != nil {
 		t.Fatalf("config-relative catalog failed: %v", err)
 	}
 }

@@ -12,9 +12,10 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
-	"github.com/symbioticfi/merkle-executor/internal/parse"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 type Config struct {
@@ -37,14 +38,16 @@ type Config struct {
 
 type Provider struct {
 	cfg                                 Config
-	deps                                provider.Deps
+	deps                                providerRegistry.Deps
 	token, asset, target, cdo, strategy common.Address
 	amount, epoch, requestID            *big.Int
 }
 
-func Register(registry *provider.Registry) error { return registry.Register("redemptions", Factory) }
+func Register(registry *providerRegistry.Registry) error {
+	return registry.Register("redemptions", Factory)
+}
 
-func Factory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var cfg Config
 	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err

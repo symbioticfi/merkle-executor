@@ -14,9 +14,10 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	binding "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"gopkg.in/yaml.v3"
 )
 
@@ -108,7 +109,7 @@ func TestPrepareCumulativeSelfClaim(t *testing.T) {
 			if test == "proof-layout" {
 				cfg.ProofLengths[0] = 2
 			}
-			p, e := Factory(node(t, cfg), provider.Deps{Chain: chain, HTTP: srv.Client()})
+			p, e := Factory(node(t, cfg), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -183,7 +184,7 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 				cfg.SkipIfEmpty = false
 				cfg.DedicatedClaimGroup = false
 			}
-			p, e := Factory(node(t, cfg), provider.Deps{Chain: chain, HTTP: srv.Client()})
+			p, e := Factory(node(t, cfg), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -236,7 +237,7 @@ func TestOptionalClaimRequiresDedicatedSingleActionLayout(t *testing.T) {
 			case "step-overflow":
 				cfg.Action = "999999999999999999999999999999:0"
 			}
-			_, e := Factory(node(t, cfg), provider.Deps{Chain: reader(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+			_, e := Factory(node(t, cfg), providerRegistry.Deps{Chain: reader(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 				t.Fatal("factory made RPC call")
 				return nil, nil
 			})})

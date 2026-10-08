@@ -9,6 +9,6 @@ esac
 for spec in RecipeExecutor:recipeexecutor MerkleAccount:merkleaccount ERC20:erc20; do
     contract=${spec%:*}
     package=${spec#*:}
-    mkdir -p "api/bindings/$package"
-    "$ABIGEN" --v2 --abi "api/abi/$contract.json" --pkg "$package" --type "$contract" --out "api/bindings/$package/$contract.go"
+    mkdir -p "sdk/bindings/$package"
+    "$ABIGEN" --v2 --abi "sdk/abi/$contract.json" --pkg "$package" --type "$contract" --out "sdk/bindings/$package/$contract.go"
 done

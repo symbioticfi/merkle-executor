@@ -17,11 +17,12 @@ import (
 	"gopkg.in/yaml.v3"
 
 	settlementbinding "github.com/symbioticfi/merkle-executor/api/bindings/cowsettlement"
-	accountbinding "github.com/symbioticfi/merkle-executor/api/bindings/merkleaccount"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	"github.com/symbioticfi/merkle-executor/internal/parse"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 type Config struct {
@@ -65,7 +66,7 @@ func (c *Client) Post(ctx context.Context, order wire.CowOrder) (string, int, er
 
 type Provider struct {
 	cfg                             Config
-	deps                            provider.Deps
+	deps                            providerRegistry.Deps
 	client                          *Client
 	settlement, sellToken, buyToken common.Address
 	sellAmount, minBuy              *big.Int
@@ -92,8 +93,8 @@ func progress(d prepared, name string, done bool) provider.Progress {
 	}
 	return provider.Progress{Done: done, Outcome: outcome, State: state, Reference: d.UID}
 }
-func Register(r *provider.Registry) error { return r.Register("cowswap", Factory) }
-func Factory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func Register(r *providerRegistry.Registry) error { return r.Register("cowswap", Factory) }
+func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var c Config
 	if e := parse.DecodeStrict(raw, &c); e != nil {
 		return nil, e

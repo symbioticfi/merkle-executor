@@ -28,13 +28,13 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	erc20 "github.com/symbioticfi/merkle-executor/api/bindings/erc20"
-	executor "github.com/symbioticfi/merkle-executor/api/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/internal/config"
-	"github.com/symbioticfi/merkle-executor/internal/keeper"
 	"github.com/symbioticfi/merkle-executor/internal/providers/data"
-	"github.com/symbioticfi/merkle-executor/internal/recipes"
-	"github.com/symbioticfi/merkle-executor/internal/state"
+	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
+	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 type serviceArtifact struct {
@@ -44,7 +44,7 @@ type serviceArtifact struct {
 
 func loadServiceArtifact(t *testing.T, name string) serviceArtifact {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "recipes", "testdata", "anvil", name+".json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "sdk", "recipes", "testdata", "anvil", name+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}

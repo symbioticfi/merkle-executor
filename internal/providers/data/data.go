@@ -18,8 +18,9 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/merkle-executor/internal/parse"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 type StaticConfig struct {
@@ -67,11 +68,11 @@ type source struct {
 	static *StaticConfig
 	rpc    *RPCConfig
 	http   *HTTPConfig
-	deps   provider.Deps
+	deps   providerRegistry.Deps
 }
 
-func Register(r *provider.Registry) error {
-	for name, f := range map[string]provider.Factory{"static": staticFactory, "rpc": rpcFactory, "http": httpFactory} {
+func Register(r *providerRegistry.Registry) error {
+	for name, f := range map[string]providerRegistry.Factory{"static": staticFactory, "rpc": rpcFactory, "http": httpFactory} {
 		if err := r.Register(name, f); err != nil {
 			return err
 		}
@@ -79,7 +80,7 @@ func Register(r *provider.Registry) error {
 	return nil
 }
 
-func staticFactory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func staticFactory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var cfg StaticConfig
 	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
@@ -92,7 +93,7 @@ func staticFactory(raw yaml.Node, deps provider.Deps) (provider.Provider, error)
 	return &source{static: &cfg, deps: deps}, nil
 }
 
-func rpcFactory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func rpcFactory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var cfg RPCConfig
 	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
@@ -110,7 +111,7 @@ func rpcFactory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
 	return &source{rpc: &cfg, deps: deps}, nil
 }
 
-func httpFactory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func httpFactory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var cfg HTTPConfig
 	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err

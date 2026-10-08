@@ -14,10 +14,11 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	sb "github.com/symbioticfi/merkle-executor/api/bindings/cowsettlement"
-	ab "github.com/symbioticfi/merkle-executor/api/bindings/merkleaccount"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	ab "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"gopkg.in/yaml.v3"
 )
 
@@ -157,7 +158,7 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	})
 	sellInput, buyInput := uint(0), uint(1)
 	cfg := Config{SellAmountInput: &sellInput, BuyAmountInput: &buyInput, HTTP: protocolio.HTTPConfig{URL: srv.URL}, Settlement: addr(4).Hex(), SellToken: addr(1).Hex(), BuyToken: addr(2).Hex(), SellAmount: "1000", MinBuyAmount: "1800", SlippageBPS: 100, ValiditySeconds: 600, AppData: (common.Hash{}).Hex(), Action: "1:0"}
-	deps := provider.Deps{Chain: chain, HTTP: srv.Client()}
+	deps := providerRegistry.Deps{Chain: chain, HTTP: srv.Client()}
 	p, e := Factory(node(t, cfg), deps)
 	if e != nil {
 		t.Fatal(e)

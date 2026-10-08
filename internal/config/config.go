@@ -16,7 +16,7 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/merkle-executor/internal/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
 )
 
 type Config struct {

@@ -166,3 +166,5 @@ terms, while this connector needs `LiquidLaneConnector` terms. A compatible term
 producer is required; old-domain signatures are rejected. The public LL RFQ
 consumer/orderbook flow and authenticated 3F offer discovery need dedicated
 providers; generic data reads do not implement those side effects.
+
+The shared execution implementation is an independently versioned [Go SDK](sdk/README.md). See [host integration and ownership](docs/MERKLE-SDK.md).

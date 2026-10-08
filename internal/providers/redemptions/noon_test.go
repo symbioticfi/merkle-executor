@@ -11,8 +11,9 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
 	"github.com/symbioticfi/merkle-executor/api/bindings/noonwithdrawalhandler"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 func TestNoonRequestUsesHandlerReceiverAndTokenTarget(t *testing.T) {
@@ -182,7 +183,7 @@ func TestNoonClaimConfigurationRequiresExplicitRequestID(t *testing.T) {
 			cfg.Mode, cfg.Amount, cfg.RequestID = "claim", "", "0"
 			tt.edit(&cfg)
 			_, r := issuerFixture(t, cfg)
-			if _, err := Factory(issuerNode(t, cfg), provider.Deps{Chain: r}); err == nil {
+			if _, err := Factory(issuerNode(t, cfg), providerRegistry.Deps{Chain: r}); err == nil {
 				t.Fatal("invalid Noon configuration accepted")
 			}
 		})

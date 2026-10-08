@@ -1,6 +1,6 @@
 module github.com/symbioticfi/merkle-executor
 
-go 1.27
+go 1.27.0
 
 toolchain go1.27.1
 
@@ -12,6 +12,7 @@ require (
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
 	github.com/spf13/cobra v1.10.2
+	github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261008142416-2445e66ca49f
 	go.opentelemetry.io/otel v1.41.0
 	go.opentelemetry.io/otel/sdk v1.41.0
 	go.opentelemetry.io/otel/trace v1.41.0

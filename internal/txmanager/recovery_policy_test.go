@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/symbioticfi/merkle-executor/internal/state"
+	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func TestRecoveryNeverRebroadcastsStoredRecipe(t *testing.T) {
@@ -78,10 +78,10 @@ func TestJournalResolvesLateReceiptAfterEngineStopsTracking(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 			pending, err := m.Send(ctx, request())
 			cancel()
-			if !errors.Is(err, context.DeadlineExceeded) || !pending.Pending || m.flight != nil || !m.engine.LaneReady() {
+			if !errors.Is(err, context.DeadlineExceeded) || !pending.Pending || !m.engine.LaneReady() {
 				t.Fatalf("journal did not retain work after active tracking ended: %+v %v", pending, err)
 			}
-			if err = m.Acknowledge(request().ID); err == nil {
+			if err = m.Acknowledge(t.Context(), request().ID); err == nil {
 				t.Fatal("uncertain job acknowledged")
 			}
 			competing := request()
@@ -164,7 +164,7 @@ func TestCancelledUnsignedAdmissionKeepsIdentityUntilCompletion(t *testing.T) {
 	if _, err = m.Send(t.Context(), other); !errors.Is(err, ErrLaneBusy) {
 		t.Fatalf("competing job entered unsigned lane: %v", err)
 	}
-	if err = m.Acknowledge(request().ID); err == nil {
+	if err = m.Acknowledge(t.Context(), request().ID); err == nil {
 		t.Fatal("unsigned admitted job acknowledged")
 	}
 	close(b.release)

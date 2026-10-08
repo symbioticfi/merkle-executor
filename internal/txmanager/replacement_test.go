@@ -9,8 +9,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
-	"github.com/symbioticfi/merkle-executor/internal/state"
 	engine "github.com/symbioticfi/merkle-executor/internal/txengine"
+	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func TestReplacementPersistsBeforeBroadcastAndOriginalReceiptWins(t *testing.T) {
@@ -79,7 +79,7 @@ func TestReplacementPersistsBeforeBroadcastAndOriginalReceiptWins(t *testing.T) 
 	case <-ctx.Done():
 		t.Fatal("original receipt not resolved")
 	}
-	if err = m.Acknowledge(request().ID); err != nil {
+	if err = m.Acknowledge(t.Context(), request().ID); err != nil {
 		t.Fatal(err)
 	}
 }
