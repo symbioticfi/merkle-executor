@@ -78,3 +78,33 @@ func TestFingerprintIgnoresCommentsAndPosition(t *testing.T) {
 		t.Fatal("account did not change identity")
 	}
 }
+
+func TestTransactionHorizonDefaultsAndInvalidLimits(t *testing.T) {
+	t.Parallel()
+	defaults, err := Load(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.TxManager.Horizon.MaxBlocks != 6 || defaults.TxManager.Horizon.BlockTimeMs != 12000 || defaults.TxManager.PendingTimeoutMs != 300000 {
+		t.Fatal("defaults differ from vault-solver")
+	}
+	for name, block := range map[string]string{
+		"legacy static fee":         "maxFeePerGas: '30000000000'",
+		"negative fee":              "maxFeeGwei: -1",
+		"nan fee":                   "maxFeeGwei: .nan",
+		"infinite fee":              "maxFeeGwei: .inf",
+		"negative broadcast":        "broadcastTimeoutMs: -1",
+		"overflow broadcast":        "broadcastTimeoutMs: 9223372036854775807",
+		"pending shorter than bump": "pendingTimeoutMs: 1000",
+		"horizon too long":          "horizon: {maxBlocks: 13}",
+		"nan percentile":            "horizon: {congestedRewardPercentile: .nan}",
+		"tip ordering":              "horizon: {tipFloorGwei: 16}",
+		"gas headroom":              "horizon: {gasHeadroomBps: 2000, fallbackGasHeadroomBps: 1000}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, validConfig+"txManager:\n  "+block+"\n")); err == nil {
+				t.Fatal("accepted invalid transaction policy")
+			}
+		})
+	}
+}

@@ -32,7 +32,7 @@ func testCLIConfig(directory string) config.Config {
 		OperationTimeout: 10 * time.Second,
 		HTTPTimeout:      time.Second,
 		PollInterval:     time.Second,
-		TxManager:        config.TxManager{Confirmations: 1, PollInterval: 10 * time.Millisecond, MaxFeePerGas: "10000000000", MaxPriorityFeePerGas: "1000000000", GasLimit: 1_000_000},
+		TxManager:        config.TxManager{Confirmations: 1, PollInterval: 10 * time.Millisecond, MaxFeeGwei: 30},
 		Strategies:       []config.Strategy{{Name: "funding", Executor: common.HexToAddress("0x1111").Hex(), Account: common.HexToAddress("0x2222").Hex(), Tree: filepath.Join(directory, "permissions.json"), Interval: time.Hour}},
 	}
 }

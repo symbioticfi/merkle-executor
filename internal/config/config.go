@@ -41,13 +41,6 @@ type Signer struct {
 	Address string `yaml:"address"`
 	KeyEnv  string `yaml:"keyEnv"`
 }
-type TxManager struct {
-	Confirmations        uint64        `yaml:"confirmations"`
-	PollInterval         time.Duration `yaml:"pollInterval"`
-	MaxFeePerGas         string        `yaml:"maxFeePerGas"`
-	MaxPriorityFeePerGas string        `yaml:"maxPriorityFeePerGas"`
-	GasLimit             uint64        `yaml:"gasLimit"`
-}
 type Observability struct {
 	Addr  string `yaml:"addr"`
 	Debug bool   `yaml:"debug"`
@@ -104,6 +97,7 @@ func Load(path string) (*Config, error) {
 	if cfg.TxManager.Confirmations == 0 {
 		cfg.TxManager.Confirmations = 2
 	}
+	cfg.TxManager.applyDefaults()
 	base, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
 		return nil, err
@@ -163,14 +157,10 @@ func (c *Config) Validate() error {
 		if c.Signer.KeyEnv == "" {
 			return errors.New("send mode requires signer.keyEnv")
 		}
-		fee, err := parse.Uint256(c.TxManager.MaxFeePerGas)
-		if err != nil || fee.Sign() == 0 {
-			return errors.New("positive maxFeePerGas required in wei")
-		}
-		tip, err := parse.Uint256(c.TxManager.MaxPriorityFeePerGas)
-		if err != nil || tip.Cmp(fee) > 0 {
-			return errors.New("invalid maxPriorityFeePerGas")
-		}
+
+	}
+	if err := c.TxManager.validate(c.Mode == "send"); err != nil {
+		return err
 	}
 	names := make(map[string]bool)
 	for _, s := range c.Strategies {

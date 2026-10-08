@@ -33,6 +33,11 @@ func FromEnv(name string) (Signer, error) {
 	if value == "" {
 		return nil, errors.New("signer env variable is empty")
 	}
+	return NewFromHexKey(value)
+}
+
+// NewFromHexKey constructs a local signer; operational keys still enter via FromEnv.
+func NewFromHexKey(value string) (Signer, error) {
 	key, err := crypto.HexToECDSA(strings.TrimPrefix(value, "0x"))
 	if err != nil {
 		return nil, errors.New("signer contains an invalid private key")

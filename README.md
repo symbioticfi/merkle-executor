@@ -47,10 +47,13 @@ Treat plan files and the state directory as operational data: they contain
 calldata, signatures and prepared orders. Logs omit those payloads.
 
 For sending, configure `mode: send`, caller address, the name of a key environment
-variable and explicit EIP-1559 fee/gas bounds. Grant leaf roles to the **executor
+variable and a finite positive `txManager.maxFeeGwei` ceiling. Gas is estimated
+for the next block with headroom, and priority fees follow recent block fullness. Grant leaf roles to the **executor
 contract**, set its caller to the sending EOA, publish the recipe and accept the
 permission root through the existing curator workflow. The service manages no
-governance permissions. One EOA must be exclusive to one sender across services.
+governance permissions. Use a dedicated sending EOA for repeatable Merkle recipes. The generic engine can
+reconcile same-key nonce races, but independent recipe services have no shared
+business-state reservation and can each execute the same recipe.
 
 All relative paths resolve against the configuration file. Addresses, endpoints,
 limits and polling cadence are configured; no production addresses are embedded.
@@ -80,10 +83,30 @@ proofs, request IDs or signatures.
 ## Lifecycle and recovery
 
 Prepared jobs and signed bytes are atomically persisted and fsynced before
-broadcast. An ambiguous send or timeout retains the same signed transaction and
-nonce. Restart resumes it; it never assumes a missing receipt permits a new nonce.
-Receipts require canonical ancestry and the configured number of descendant
-blocks. There is no automatic fee bump or cancellation in this version.
+broadcast, including every replacement. Transaction processing uses the engine
+from [vault-solver](https://github.com/symbioticfi/vault-solver/tree/cc75494298aa3c9b4a17021564d569b811a8fd42):
+mined-nonce admission, adaptive EIP-1559 horizon fees, next-block gas estimation,
+same-nonce fee replacements, exact rebroadcast of uncertain attempts, canonical
+receipt confirmation, bounded tracking and graceful shutdown. Caller cancellation
+does not stop admitted work; subsequent ticks rejoin it. A receipt from any owned
+variant can complete the job. No cancellation self-transfers are sent.
+
+Restart reads saved hashes without rebroadcasting the recipe. Engine abandonment,
+nonce consumption without an owned receipt, or a missing receipt retains Merkle's
+durable job and blocks new recipe admission. Generic recipes can execute more than
+once, so timeout alone cannot authorize a retry or provider settlement. Recovery
+requires canonical receipt evidence; keeper progress is durable before the journal
+is acknowledged.
+
+The `txManager` settings follow vault-solver: `maxFeeGwei` is required for sending;
+`broadcastTimeoutMs` defaults to 5000, `replacementIntervalMs` to 30000,
+`pendingTimeoutMs` to 300000 and `shutdownTimeoutMs` to 60000. The replacement
+interval controls fallback bumps when fee history is unavailable; ordinary repricing
+uses block evidence. `horizon` exposes the same fee, fullness, tip and gas-headroom
+settings (see [transaction design](docs/TRANSACTIONS.md)). The former static
+`maxFeePerGas`, `maxPriorityFeePerGas` and `gasLimit` fields are rejected.
+The metrics endpoint includes the engine's bounded `solver_bot_txmanager_*`
+lifecycle, fee, replacement and sender-account metrics.
 
 Issuer providers require the account's confirmed `Manage` logs to match their
 prepared calls, so a skipped recipe group cannot count as a request. Request jobs

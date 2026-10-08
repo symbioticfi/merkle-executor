@@ -1,0 +1,139 @@
+{
+  "repository": "https://github.com/symbioticfi/vault-solver",
+  "ref": "stage",
+  "commit": "cc75494298aa3c9b4a17021564d569b811a8fd42",
+  "files": {
+    "internal/txmanager/abandonment_test.go": {
+      "sha256": "98710a08e93250f5013ed7ffbc707d1a1c1690341fcc6992eea10cafa562a036",
+      "local": "internal/vaultsolver/txmanager/abandonment_test.go"
+    },
+    "internal/txmanager/account_metrics.go": {
+      "sha256": "38501f015bad09792a5da742224e4fdb56db6ef5dbbf2d37f012919bd9ba381d",
+      "local": "internal/vaultsolver/txmanager/account_metrics.go"
+    },
+    "internal/txmanager/account_metrics_test.go": {
+      "sha256": "bbcdabd46a5e953aba6142e5958c1c4c4d5e0114fdd29dbbe9feced210521acb",
+      "local": "internal/vaultsolver/txmanager/account_metrics_test.go"
+    },
+    "internal/txmanager/attempts_result_test.go": {
+      "sha256": "f4a1f8a3d30423d50e4c3be3f1ef7c3e6ec37d48f7cddb74becfd487cabb4862",
+      "local": "internal/vaultsolver/txmanager/attempts_result_test.go"
+    },
+    "internal/txmanager/consumed_nonce_test.go": {
+      "sha256": "112bdfa07e66df01954af14544ef06f9949f271d8174005a4c5cf09c0e5b4a2e",
+      "local": "internal/vaultsolver/txmanager/consumed_nonce_test.go"
+    },
+    "internal/txmanager/execution_revert.go": {
+      "sha256": "8234969d0fc6aa8e3d4d61e8454468843b8433afb65a6b2c9fa3ce5093c91815",
+      "local": "internal/vaultsolver/txmanager/execution_revert.go"
+    },
+    "internal/txmanager/execution_revert_test.go": {
+      "sha256": "f4c851d8807c7d71645d9dcab314a6e8564814bdb0e23ef3bfe25a3d546f0bf9",
+      "local": "internal/vaultsolver/txmanager/execution_revert_test.go"
+    },
+    "internal/txmanager/fee_hint_test.go": {
+      "sha256": "e5d4df47630b84976e7f9a275b54b9448fec584732600696381ff66961faa425",
+      "local": "internal/vaultsolver/txmanager/fee_hint_test.go"
+    },
+    "internal/txmanager/fee_limit_metrics_test.go": {
+      "sha256": "4ab981ee10210d1895621629be0b195ca494bdbfb7e492371e50cce2b371f3bd",
+      "local": "internal/vaultsolver/txmanager/fee_limit_metrics_test.go"
+    },
+    "internal/txmanager/horizon.go": {
+      "sha256": "e2a8d4d55593aba9225aa969bc2439cd316299d5e5c37156882692b756c7385f",
+      "local": "internal/vaultsolver/txmanager/horizon.go"
+    },
+    "internal/txmanager/horizon_test.go": {
+      "sha256": "f6aefda0950a83c5d29b6398d4a093dd368b4ac06141b6a86a2ce3f87860f021",
+      "local": "internal/vaultsolver/txmanager/horizon_test.go"
+    },
+    "internal/txmanager/late_receipt_ownership_test.go": {
+      "sha256": "46f9f2ec9288256086aa0ae3f660d0e6e3768a1c8926c85672b7c1f7e231dee8",
+      "local": "internal/vaultsolver/txmanager/late_receipt_ownership_test.go"
+    },
+    "internal/txmanager/late_receipts.go": {
+      "sha256": "1795de72d72b4b6b5ed01fa642f994e295060848d34763c6c8ce60791cb77854",
+      "local": "internal/vaultsolver/txmanager/late_receipts.go"
+    },
+    "internal/txmanager/late_receipts_test.go": {
+      "sha256": "b95e3ef2861749dd8e3726bf1719e491bab63392c806d5677eb589444fbc874a",
+      "local": "internal/vaultsolver/txmanager/late_receipts_test.go"
+    },
+    "internal/txmanager/metrics.go": {
+      "sha256": "74cf23af53eff6288ea8dc2fd105b7230fb42beee54f58a0ecd1d96057e3ca39",
+      "local": "internal/vaultsolver/txmanager/metrics.go"
+    },
+    "internal/txmanager/metrics_test.go": {
+      "sha256": "ac8bd27fe8b6247f83db86ff4974e74f2321c036102b70f8caeafe35752851dd",
+      "local": "internal/vaultsolver/txmanager/metrics_test.go"
+    },
+    "internal/txmanager/nonce_cooldown_test.go": {
+      "sha256": "0aca599f12c14db318d1a6884dcc6db09357ea0e2afae1d7f4ede1d81a2390df",
+      "local": "internal/vaultsolver/txmanager/nonce_cooldown_test.go"
+    },
+    "internal/txmanager/nonce_reconciliation.go": {
+      "sha256": "51f28458155a46b064cb85580a6557ca507cf6f67e38a5d72ff2bf879e00b9f3",
+      "local": "internal/vaultsolver/txmanager/nonce_reconciliation.go"
+    },
+    "internal/txmanager/nonce_selection_order_test.go": {
+      "sha256": "555113fef87aa37e4b9fb718281da50b92938c9fc540eadd9ade5687a12cd845",
+      "local": "internal/vaultsolver/txmanager/nonce_selection_order_test.go"
+    },
+    "internal/txmanager/owned_nonce_floor_test.go": {
+      "sha256": "d8fe37eca41cf29b7e4077e3223e819b09094a1bdc8cc3d6a2c7464c3cdfe993",
+      "local": "internal/vaultsolver/txmanager/owned_nonce_floor_test.go"
+    },
+    "internal/txmanager/readstreak.go": {
+      "sha256": "71f4407a45189c82db8d6e4a1a7283d7f0cc9b0d2e311ccf910976ed5d541301",
+      "local": "internal/vaultsolver/txmanager/readstreak.go"
+    },
+    "internal/txmanager/receipt_diagnostics.go": {
+      "sha256": "f5f62a12ca0870a89909c333924f386b5553580b98524f2667a2675875155f1f",
+      "local": "internal/vaultsolver/txmanager/receipt_diagnostics.go"
+    },
+    "internal/txmanager/receipt_diagnostics_test.go": {
+      "sha256": "e1d96ba564a236c6b7f7ab29378a00c8473d97c22c16fa2c506814215c0da74a",
+      "local": "internal/vaultsolver/txmanager/receipt_diagnostics_test.go"
+    },
+    "internal/txmanager/receipt_failure_log_test.go": {
+      "sha256": "e984bcbcd4b926e9cae3df671fffb8a2f1ffdefff6678bf497fad57a0ae589c1",
+      "local": "internal/vaultsolver/txmanager/receipt_failure_log_test.go"
+    },
+    "internal/txmanager/receipt_reader.go": {
+      "sha256": "ae69d7eada7db47fdf4be4de3285c7959f6794201173b0126ef670eae86bd0a4",
+      "local": "internal/vaultsolver/txmanager/receipt_reader.go"
+    },
+    "internal/txmanager/receipt_reader_test.go": {
+      "sha256": "b0c44dd074e379f141d68804bbc7bbf56990b0023dc339de610e09f7cd4d34a2",
+      "local": "internal/vaultsolver/txmanager/receipt_reader_test.go"
+    },
+    "internal/txmanager/receipt_timeout_test.go": {
+      "sha256": "23348767019496b624197ad092607fe710562bf470f9b6922aac69a880d88800",
+      "local": "internal/vaultsolver/txmanager/receipt_timeout_test.go"
+    },
+    "internal/txmanager/revert_severity_test.go": {
+      "sha256": "112b2c5201e460a1ff6f270772ce9ff8e37fbbeb20d3a52e0783330b7d335a35",
+      "local": "internal/vaultsolver/txmanager/revert_severity_test.go"
+    },
+    "internal/txmanager/shared_nonce.go": {
+      "sha256": "1df5fc050f1d41912f4348d0c220609b19707f6f9662c4f0ba42b7473f7f9087",
+      "local": "internal/vaultsolver/txmanager/shared_nonce.go"
+    },
+    "internal/txmanager/shared_nonce_test.go": {
+      "sha256": "da54a57fe6f7cf1bb0180e2553ec339bb547b8dededcf5e73f53e60379e9d6e8",
+      "local": "internal/vaultsolver/txmanager/shared_nonce_test.go"
+    },
+    "internal/txmanager/trace.go": {
+      "sha256": "02f70e88b884a71f3a5fd36fa420ef6b13ef6aa5d3e0d0d65209561a1b12fdf5",
+      "local": "internal/vaultsolver/txmanager/trace.go"
+    },
+    "internal/txmanager/txmanager.go": {
+      "sha256": "a27b6fa2e7c98794982d49dfae1aa0bf39f22d7fd6abcb8b052143f93924cf03",
+      "local": "internal/vaultsolver/txmanager/txmanager.go"
+    },
+    "internal/txmanager/txmanager_test.go": {
+      "sha256": "cca06b39895c459000a75976df755b27cbc4ced708ff0b613bb7d4bd569075d3",
+      "local": "internal/vaultsolver/txmanager/txmanager_test.go"
+    }
+  }
+}

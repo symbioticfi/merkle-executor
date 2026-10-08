@@ -1,11 +1,15 @@
-// Package txmanager owns one durable signed transaction lifecycle per sending EOA.
-// An uncertain broadcast or cancelled context never authorizes a new nonce.
+// Package txmanager adapts the vault-solver engine to durable Merkle job ownership.
+// The engine owns fees, gas, nonce selection, replacement and shutdown. The adapter
+// journals every signed variant before broadcast and releases a recipe only after
+// canonical execution evidence and durable keeper acknowledgement.
 package txmanager
 
 import (
 	"bytes"
 	"context"
+	"math"
 	"math/big"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,29 +19,16 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/signer"
 	"github.com/symbioticfi/merkle-executor/internal/state"
+	engine "github.com/symbioticfi/merkle-executor/internal/vaultsolver/txmanager"
 )
 
-type Backend interface {
-	NonceAt(context.Context, common.Address, *big.Int) (uint64, error)
-	PendingNonceAt(context.Context, common.Address) (uint64, error)
-	CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
-	EstimateGas(context.Context, ethereum.CallMsg) (uint64, error)
-	SendTransaction(context.Context, *types.Transaction) error
-	TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)
-	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
-	HeaderByHash(context.Context, common.Hash) (*types.Header, error)
-}
-
-type Config struct {
-	Confirmations                      uint64
-	PollInterval                       time.Duration
-	MaxFeePerGas, MaxPriorityFeePerGas *big.Int
-	GasLimit                           uint64
-}
+type Backend interface{ engine.Backend }
+type Config = engine.Config
 
 type Request struct {
 	ID   string
@@ -47,62 +38,71 @@ type Request struct {
 type Result struct {
 	ID                           string
 	Hash                         common.Hash
+	Attempts                     []common.Hash
 	Confirmed, Reverted, Pending bool
-	Execution                    *provider.Execution `json:"execution,omitempty"`
+	Execution                    *provider.Execution
 }
 
-var (
-	ErrLaneBusy      = errors.New("transaction lane occupied")
-	ErrNonceConflict = errors.New("external or unresolved nonce conflict")
-)
+var ErrLaneBusy = errors.New("transaction lane occupied")
+var ErrNonceConflict = engine.ErrNonceConflict
 
 const journalKey = "txmanager.active.v1"
 
 type record struct {
-	Version       uint                `json:"version"`
+	Version       int                 `json:"version"`
 	ID            string              `json:"id"`
 	ChainID       string              `json:"chainId"`
 	Sender        common.Address      `json:"sender"`
 	Raw           hexutil.Bytes       `json:"raw"`
+	Attempts      []hexutil.Bytes     `json:"attempts,omitempty"`
 	Confirmations uint64              `json:"confirmations"`
 	Terminal      string              `json:"terminal,omitempty"`
 	Execution     *provider.Execution `json:"execution,omitempty"`
 }
+type storageError struct{ err error }
+type flight struct {
+	done   chan struct{}
+	result engine.Result
+}
 
-// Manager admits one Send/Acknowledge at a time. The immutable active snapshot
-// makes PendingID safe while Send is waiting on RPC or confirmations.
+// gate serializes callers; recordMu protects journal mutations from the engine's
+// signing goroutine. Published records are immutable. Close drains the engine
+// before the caller can close its state store or RPC clients.
 type Manager struct {
-	backend        Backend
-	signer         signer.Signer
-	chainID        *big.Int
-	store          *state.Store
-	cfg            Config
-	log            logr.Logger
-	gate           chan struct{}
-	active         atomic.Pointer[record]
-	storageFailure error // guarded by gate; uncertain persistence blocks this process
+	backend   Backend
+	signer    signer.Signer
+	chainID   *big.Int
+	store     *state.Store
+	cfg       Config
+	log       logr.Logger
+	engine    *engine.Manager
+	gate      chan struct{}
+	active    atomic.Pointer[record]
+	admitted  atomic.Pointer[Request]
+	fault     atomic.Pointer[storageError]
+	recordMu  sync.Mutex
+	intent    Request // set before admission; immutable while the engine owns work
+	flight    *flight // gate protected
+	startOnce sync.Once
+	stop      context.CancelFunc
+	done      chan struct{}
 }
 
 func New(backend Backend, s signer.Signer, chainID *big.Int, store *state.Store, cfg Config, log logr.Logger) (*Manager, error) {
 	if backend == nil || s == nil || store == nil || chainID == nil || chainID.Sign() <= 0 {
-		return nil, errors.New("transaction manager requires backend, signer, store and positive chain ID")
+		return nil, errors.New("backend, signer, positive chain ID and durable store required")
 	}
-	if cfg.MaxFeePerGas == nil || cfg.MaxFeePerGas.Sign() <= 0 || cfg.MaxPriorityFeePerGas == nil || cfg.MaxPriorityFeePerGas.Sign() < 0 || cfg.MaxPriorityFeePerGas.Cmp(cfg.MaxFeePerGas) > 0 {
-		return nil, errors.New("positive max fee and nonnegative priority fee within max fee required")
+	if cfg.MaxFeeGwei <= 0 || math.IsNaN(cfg.MaxFeeGwei) || math.IsInf(cfg.MaxFeeGwei, 0) {
+		return nil, errors.New("finite positive maxFeeGwei required")
 	}
-	if cfg.PollInterval < 0 {
-		return nil, errors.New("negative poll interval")
-	}
-	if cfg.PollInterval == 0 {
+	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 2 * time.Second
 	}
-	cfg.MaxFeePerGas = new(big.Int).Set(cfg.MaxFeePerGas)
-	cfg.MaxPriorityFeePerGas = new(big.Int).Set(cfg.MaxPriorityFeePerGas)
-	m := &Manager{backend: backend, signer: s, chainID: new(big.Int).Set(chainID), store: store, cfg: cfg, log: log.WithName("txmanager"), gate: make(chan struct{}, 1)}
+	m := &Manager{backend: backend, signer: s, chainID: new(big.Int).Set(chainID), store: store, cfg: cfg, log: log.WithName("txjournal"), gate: make(chan struct{}, 1), done: make(chan struct{})}
 	var saved record
 	found, err := store.Load(journalKey, &saved)
 	if err != nil {
-		return nil, errors.Errorf("load transaction journal: %w", err)
+		return nil, err
 	}
 	if found {
 		if _, err := m.decode(&saved); err != nil {
@@ -110,210 +110,297 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, store *state.Store,
 		}
 		m.active.Store(&saved)
 	}
+	m.engine = engine.New(backend, &journalSigner{m}, m.chainID, cfg, log)
+	m.restoreFloor()
+	if err := m.engine.ValidateFeeHeadroom(); err != nil {
+		return nil, err
+	}
 	return m, nil
 }
 
-// PendingID also returns terminal-but-unacknowledged work. The keeper must persist
-// its terminal progress before Acknowledge, including after a process restart.
+func (m *Manager) restoreFloor() {
+	if r := m.active.Load(); r != nil && r.Terminal != "" {
+		if txs, err := m.decode(r); err == nil {
+			m.engine.RestoreConfirmedNonce(txs[0].Nonce())
+		}
+	}
+}
+
+// NewWithMetrics exposes the same bounded transaction telemetry as vault-solver.
+func NewWithMetrics(backend Backend, s signer.Signer, chainID *big.Int, store *state.Store, cfg Config, log logr.Logger, registry prometheus.Registerer) (*Manager, error) {
+	m, err := New(backend, s, chainID, store, cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	metrics, err := engine.NewMetrics(registry)
+	if err != nil {
+		return nil, err
+	}
+	m.engine = engine.NewWithMetrics(backend, &journalSigner{m}, m.chainID, cfg, metrics, log)
+	m.restoreFloor()
+	return m, nil
+}
+
+// Start initializes RPC readiness before launching the worker. Call Close before
+// closing the durable store. The CLI supplies its process context, not a tick.
+func (m *Manager) Start(ctx context.Context) error {
+	if err := m.engine.Initialize(ctx); err != nil {
+		return err
+	}
+	m.startOnce.Do(func() {
+		var worker context.Context
+		worker, m.stop = context.WithCancel(ctx)
+		go func() { defer close(m.done); m.engine.Start(worker) }()
+	})
+	return nil
+}
+func (m *Manager) Close() {
+	if m.stop != nil {
+		m.stop()
+		<-m.done
+	}
+}
 func (m *Manager) PendingID() string {
 	if r := m.active.Load(); r != nil {
 		return r.ID
 	}
+	if req := m.admitted.Load(); req != nil {
+		return req.ID
+	}
 	return ""
 }
+func (m *Manager) storageFailure() error {
+	if f := m.fault.Load(); f != nil {
+		return f.err
+	}
+	return nil
+}
+func (m *Manager) failStorage(operation string, err error) error {
+	wrapped := errors.Errorf("%s; broadcasting blocked: %w", operation, err)
+	m.fault.Store(&storageError{wrapped})
+	return wrapped
+}
 
-func (m *Manager) decode(r *record) (*types.Transaction, error) {
-	if r.Version != 1 || r.ID == "" || r.ChainID != m.chainID.String() || r.Sender != m.signer.Address() || (r.Terminal != "" && r.Terminal != "confirmed" && r.Terminal != "reverted") {
-		return nil, errors.New("transaction journal identity or version mismatch")
+func (m *Manager) decode(r *record) ([]*types.Transaction, error) {
+	if r.Confirmations > 1024 || r.Version != 1 || r.ID == "" || r.ChainID != m.chainID.String() || r.Sender != m.signer.Address() || (r.Terminal != "" && r.Terminal != "confirmed" && r.Terminal != "reverted") {
+		return nil, errors.New("transaction journal identity mismatch")
 	}
-	var tx types.Transaction
-	if err := tx.UnmarshalBinary(r.Raw); err != nil {
-		return nil, errors.Errorf("decode journal transaction: %w", err)
-	}
-	from, err := types.Sender(types.LatestSignerForChainID(m.chainID), &tx)
-	if err != nil || from != r.Sender || tx.ChainId().Cmp(m.chainID) != 0 || tx.To() == nil || tx.Value().Sign() != 0 || tx.Type() != types.DynamicFeeTxType {
-		return nil, errors.New("transaction journal signed payload mismatch")
+	raws := append([]hexutil.Bytes{r.Raw}, r.Attempts...)
+	txs := make([]*types.Transaction, 0, len(raws))
+	seen := map[common.Hash]bool{}
+	for _, raw := range raws {
+		var tx types.Transaction
+		if err := tx.UnmarshalBinary(raw); err != nil {
+			return nil, errors.Errorf("decode signed journal: %w", err)
+		}
+		sender, err := types.Sender(types.LatestSignerForChainID(m.chainID), &tx)
+		if err != nil || sender != m.signer.Address() || tx.ChainId().Cmp(m.chainID) != 0 || tx.To() == nil || tx.Value().Sign() != 0 || tx.Type() != types.DynamicFeeTxType {
+			return nil, errors.New("signed journal transaction mismatch")
+		}
+		if len(txs) > 0 {
+			first := txs[0]
+			if tx.Nonce() != first.Nonce() || *tx.To() != *first.To() || !bytes.Equal(tx.Data(), first.Data()) {
+				return nil, errors.New("replacement changed recipe identity")
+			}
+		}
+		if seen[tx.Hash()] {
+			return nil, errors.New("duplicate signed journal attempt")
+		}
+		seen[tx.Hash()] = true
+		txs = append(txs, &tx)
 	}
 	if r.Execution != nil {
 		if err := r.Execution.Validate(); err != nil {
 			return nil, err
 		}
-		if r.Terminal == "" || r.Execution.TxHash != tx.Hash() {
-			return nil, errors.New("transaction journal execution mismatch")
+		if r.Terminal == "" || !seen[r.Execution.TxHash] {
+			return nil, errors.New("journal execution does not match terminal transaction")
 		}
 	}
-	return &tx, nil
+	if r.Terminal != "" && r.Execution == nil {
+		return nil, errors.New("terminal journal has no execution evidence")
+	}
+	return txs, nil
 }
-
-func result(r *record, tx *types.Transaction) Result {
-	return Result{ID: r.ID, Hash: tx.Hash(), Confirmed: r.Terminal == "confirmed", Reverted: r.Terminal == "reverted", Pending: r.Terminal == "", Execution: r.Execution.Clone()}
+func result(r *record) Result {
+	res := Result{ID: r.ID, Pending: r.Terminal == "", Confirmed: r.Terminal == "confirmed", Reverted: r.Terminal == "reverted", Execution: r.Execution.Clone()}
+	for _, raw := range append([]hexutil.Bytes{r.Raw}, r.Attempts...) {
+		var tx types.Transaction
+		if tx.UnmarshalBinary(raw) == nil {
+			res.Attempts = append(res.Attempts, tx.Hash())
+			res.Hash = tx.Hash()
+		}
+	}
+	if res.Execution != nil {
+		res.Hash = res.Execution.TxHash
+	}
+	return res
 }
-
-// Send reconciles retained work first. It only re-broadcasts its exact signed
-// bytes and never replaces calldata at another nonce, including after timeout.
+func (m *Manager) retainedResult(id string) Result {
+	if r := m.active.Load(); r != nil {
+		return result(r)
+	}
+	if req := m.admitted.Load(); req != nil {
+		return Result{ID: req.ID, Pending: true}
+	}
+	return Result{ID: id}
+}
 func (m *Manager) Send(ctx context.Context, req Request) (Result, error) {
 	select {
 	case m.gate <- struct{}{}:
 		defer func() { <-m.gate }()
 	default:
-		return Result{ID: req.ID, Pending: m.PendingID() != ""}, ErrLaneBusy
+		return m.retainedResult(req.ID), ErrLaneBusy
 	}
-	if m.storageFailure != nil {
-		return Result{ID: req.ID, Pending: m.PendingID() != ""}, m.storageFailure
+	if err := m.storageFailure(); err != nil {
+		return m.retainedResult(req.ID), err
 	}
 	if err := ctx.Err(); err != nil {
 		return m.retainedResult(req.ID), err
 	}
 	if req.ID == "" || req.To == (common.Address{}) {
-		return Result{ID: req.ID}, errors.New("request ID and destination required")
+		return Result{}, errors.New("transaction request ID and destination required")
 	}
-	r := m.active.Load()
-	var tx *types.Transaction
-	var err error
-	if r != nil {
-		tx, err = m.decode(r)
+	if m.flight != nil && (req.ID != m.intent.ID || req.To != m.intent.To || !bytes.Equal(req.Data, m.intent.Data)) {
+		return m.retainedResult(req.ID), ErrLaneBusy
+	}
+	if r := m.active.Load(); r != nil {
+		txs, err := m.decode(r)
 		if err != nil {
-			return Result{ID: req.ID, Pending: true}, err
+			return result(r), err
 		}
-		if r.ID != req.ID {
-			return result(r, tx), ErrLaneBusy
-		}
-		if *tx.To() != req.To || !bytes.Equal(tx.Data(), req.Data) {
-			return result(r, tx), errors.New("transaction ID reused with different payload")
+		if req.ID != r.ID || *txs[0].To() != req.To || !bytes.Equal(txs[0].Data(), req.Data) {
+			return result(r), ErrLaneBusy
 		}
 		if r.Terminal != "" {
-			return result(r, tx), nil
+			return result(r), nil
 		}
-		if terminal, seen, err := m.receipt(ctx, r, tx); err != nil || terminal.Confirmed || terminal.Reverted {
-			return terminal, err
-		} else if seen {
-			return m.wait(ctx, r, tx)
+	} else if m.flight == nil {
+		if m.stop == nil {
+			return Result{ID: req.ID}, errors.New("transaction manager not started")
 		}
-	} else {
-		r, tx, err = m.prepare(ctx, req)
-		if err != nil {
+		m.intent = Request{ID: req.ID, To: req.To, Data: bytes.Clone(req.Data)}
+		channel, accepted := m.engine.SendAsync(ctx, engine.Request{To: req.To, Data: req.Data, Label: "execute_recipe", Solver: "merkle"})
+		if !accepted {
+			return Result{ID: req.ID}, ErrLaneBusy
+		}
+		intent := m.intent
+		m.admitted.Store(&intent)
+		current := &flight{done: make(chan struct{})}
+		m.flight = current
+		go func() { current.result = <-channel; close(current.done) }()
+	}
+	// An admitted engine lifecycle continues beyond caller cancellation. A later
+	// keeper tick joins it. Recovered journals have no flight and only read receipts.
+	if m.flight != nil {
+		select {
+		case <-ctx.Done():
+			return m.retainedResult(req.ID), ctx.Err()
+		case <-m.flight.done:
+		}
+		outcome := m.flight.result
+		m.flight = nil
+		if err := m.storageFailure(); err != nil {
 			return m.retainedResult(req.ID), err
 		}
-	}
-	if err := m.checkOwnedNonce(ctx, tx.Nonce()); err != nil {
-		return result(r, tx), err
-	}
-	// Persistence in prepare precedes this only transaction-producing side effect.
-	err = m.backend.SendTransaction(ctx, tx)
-	if err != nil {
-		if terminal, _, checkErr := m.receipt(ctx, r, tx); checkErr == nil && (terminal.Confirmed || terminal.Reverted) {
-			return terminal, nil
+		if m.active.Load() == nil {
+			m.admitted.Store(nil)
+			return Result{ID: req.ID}, outcome.Err
 		}
-		return result(r, tx), errors.Errorf("broadcast uncertain; signed transaction retained: %w", err)
-	}
-	m.log.Info("transaction submitted", "id", r.ID, "hash", tx.Hash().Hex(), "nonce", tx.Nonce())
-	return m.wait(ctx, r, tx)
-}
-
-func (m *Manager) retainedResult(id string) Result {
-	if r := m.active.Load(); r != nil {
-		if tx, err := m.decode(r); err == nil {
-			return result(r, tx)
-		}
-		return Result{ID: r.ID, Pending: true}
-	}
-	return Result{ID: id}
-}
-
-func (m *Manager) prepare(ctx context.Context, req Request) (*record, *types.Transaction, error) {
-	latest, err := m.backend.NonceAt(ctx, m.signer.Address(), nil)
-	if err != nil {
-		return nil, nil, errors.Errorf("read mined nonce: %w", err)
-	}
-	pending, err := m.backend.PendingNonceAt(ctx, m.signer.Address())
-	if err != nil {
-		return nil, nil, errors.Errorf("read pending nonce: %w", err)
-	}
-	if latest != pending {
-		return nil, nil, ErrNonceConflict
-	}
-	call := ethereum.CallMsg{From: m.signer.Address(), To: &req.To, Data: bytes.Clone(req.Data), Value: new(big.Int), Gas: m.cfg.GasLimit, GasFeeCap: new(big.Int).Set(m.cfg.MaxFeePerGas), GasTipCap: new(big.Int).Set(m.cfg.MaxPriorityFeePerGas)}
-	if call.Gas == 0 {
-		call.Gas, err = m.backend.EstimateGas(ctx, call)
-		if err != nil {
-			return nil, nil, errors.Errorf("estimate exact call: %w", err)
-		}
-		if call.Gas == 0 {
-			return nil, nil, errors.New("gas estimate was zero")
+		// A definite initial rejection returned no tracked hash; no bytes were
+		// accepted. Ambiguous errors and nonce races always retain their evidence.
+		if outcome.Outcome == engine.OutcomeSubmissionError && len(outcome.Attempts) == 0 && outcome.Hash == (common.Hash{}) && definiteRejection(outcome.Err) {
+			if err := m.store.Delete(journalKey); err != nil {
+				return m.retainedResult(req.ID), m.failStorage("clear rejected transaction", err)
+			}
+			m.active.Store(nil)
+			m.admitted.Store(nil)
+			return Result{ID: req.ID}, outcome.Err
 		}
 	}
-	if _, err := m.backend.CallContract(ctx, call, nil); err != nil {
-		return nil, nil, errors.Errorf("simulate exact call: %w", err)
-	}
-	unsigned := types.NewTx(&types.DynamicFeeTx{ChainID: m.chainID, Nonce: latest, To: &req.To, Data: bytes.Clone(req.Data), Value: new(big.Int), Gas: call.Gas, GasFeeCap: call.GasFeeCap, GasTipCap: call.GasTipCap})
-	signed, err := m.signer.SignTx(ctx, unsigned, m.chainID)
-	if err != nil {
-		return nil, nil, errors.Errorf("sign transaction: %w", err)
-	}
-	if signed == nil {
-		return nil, nil, errors.New("signer returned no transaction")
-	}
-	raw, err := signed.MarshalBinary()
-	if err != nil {
-		return nil, nil, errors.Errorf("encode signed transaction: %w", err)
-	}
-	r := &record{Version: 1, ID: req.ID, ChainID: m.chainID.String(), Sender: m.signer.Address(), Raw: raw, Confirmations: m.cfg.Confirmations}
-	verified, err := m.decode(r)
-	if err != nil {
-		return nil, nil, err
-	}
-	txSigner := types.LatestSignerForChainID(m.chainID)
-	if txSigner.Hash(verified) != txSigner.Hash(unsigned) {
-		return nil, nil, errors.New("signer changed transaction payload")
-	}
-	m.active.Store(r)
-	if err := m.store.Save(journalKey, r); err != nil {
-		m.storageFailure = errors.Errorf("persist signed transaction; broadcasting blocked: %w", err)
-		return nil, nil, m.storageFailure
-	}
-	return r, verified, nil
+	return m.wait(ctx)
 }
-
-func (m *Manager) checkOwnedNonce(ctx context.Context, nonce uint64) error {
-	latest, err := m.backend.NonceAt(ctx, m.signer.Address(), nil)
-	if err != nil {
-		return errors.Errorf("reconcile mined nonce: %w", err)
-	}
-	pending, err := m.backend.PendingNonceAt(ctx, m.signer.Address())
-	if err != nil {
-		return errors.Errorf("reconcile pending nonce: %w", err)
-	}
-	if latest != nonce || pending < nonce || (pending > nonce && pending-nonce > 1) {
-		return ErrNonceConflict
-	}
-	return nil
-}
-
-func (m *Manager) wait(ctx context.Context, r *record, tx *types.Transaction) (Result, error) {
+func (m *Manager) wait(ctx context.Context) (Result, error) {
 	ticker := time.NewTicker(m.cfg.PollInterval)
 	defer ticker.Stop()
 	for {
-		terminal, seen, err := m.receipt(ctx, r, tx)
-		if err != nil || terminal.Confirmed || terminal.Reverted {
-			return terminal, err
+		r := m.active.Load()
+		txs, err := m.decode(r)
+		if err != nil {
+			return result(r), err
 		}
-		if !seen {
-			if err := m.checkOwnedNonce(ctx, tx.Nonce()); err != nil {
-				return result(r, tx), err
+		var sweepErr error
+		for _, tx := range txs {
+			res, _, err := m.receipt(ctx, r, tx)
+			if res.Confirmed || res.Reverted {
+				return res, nil
 			}
+			if err != nil && sweepErr == nil {
+				sweepErr = err
+			}
+		}
+		if sweepErr != nil {
+			return m.retainedResult(r.ID), sweepErr
 		}
 		select {
 		case <-ctx.Done():
-			return result(r, tx), ctx.Err()
+			return m.retainedResult(r.ID), ctx.Err()
 		case <-ticker.C:
 		}
 	}
 }
 
+// journalSigner runs on the engine's lifecycle goroutine. Persistence must
+// succeed before signed bytes are returned to the engine's broadcaster.
+type journalSigner struct{ m *Manager }
+
+func (s *journalSigner) Address() common.Address { return s.m.signer.Address() }
+func (s *journalSigner) SignTx(ctx context.Context, unsigned *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+	m := s.m
+	signed, err := m.signer.SignTx(ctx, unsigned, chainID)
+	if err != nil {
+		return nil, err
+	}
+	if signed == nil {
+		return nil, errors.New("signer returned no transaction")
+	}
+	txSigner := types.LatestSignerForChainID(m.chainID)
+	sender, err := types.Sender(txSigner, signed)
+	if err != nil || sender != m.signer.Address() || txSigner.Hash(signed) != txSigner.Hash(unsigned) || signed.ChainId().Cmp(m.chainID) != 0 || unsigned.To() == nil || *unsigned.To() != m.intent.To || !bytes.Equal(unsigned.Data(), m.intent.Data) {
+		return nil, errors.New("signer changed transaction payload")
+	}
+	raw, err := signed.MarshalBinary()
+	if err != nil {
+		return nil, errors.Errorf("encode signed transaction: %w", err)
+	}
+	m.recordMu.Lock()
+	defer m.recordMu.Unlock()
+	if err := m.storageFailure(); err != nil {
+		return nil, err
+	}
+	next := &record{Version: 1, ID: m.intent.ID, ChainID: m.chainID.String(), Sender: m.signer.Address(), Raw: raw, Confirmations: m.cfg.Confirmations}
+	if old := m.active.Load(); old != nil {
+		copy := *old
+		next = &copy
+		if old.Terminal != "" {
+			return nil, errors.New("recipe already has terminal evidence")
+		}
+		next.Attempts = append(append([]hexutil.Bytes(nil), old.Attempts...), raw)
+	}
+	if _, err := m.decode(next); err != nil {
+		return nil, err
+	}
+	m.active.Store(next)
+	if err := m.store.Save(journalKey, next); err != nil {
+		return nil, m.failStorage("persist signed transaction", err)
+	}
+	return signed, nil
+}
+
 // receipt requires the exact signed hash, its canonical block and the configured
 // number of blocks after inclusion. Terminal progress is durable before return.
 func (m *Manager) receipt(ctx context.Context, r *record, tx *types.Transaction) (Result, bool, error) {
-	pending := result(r, tx)
+	pending := result(r)
 	receipt, err := m.backend.TransactionReceipt(ctx, tx.Hash())
 	if errors.Is(err, ethereum.NotFound) {
 		return pending, false, nil
@@ -323,6 +410,16 @@ func (m *Manager) receipt(ctx context.Context, r *record, tx *types.Transaction)
 	}
 	if receipt == nil || receipt.TxHash != tx.Hash() || receipt.BlockNumber == nil || !receipt.BlockNumber.IsUint64() || receipt.BlockHash == (common.Hash{}) || receipt.Status > 1 {
 		return pending, false, errors.New("invalid transaction receipt")
+	}
+	receipt, err = m.engine.ConfirmRecoveredReceipt(ctx, receipt, r.Confirmations)
+	if err != nil {
+		return pending, true, err
+	}
+	if receipt == nil {
+		return pending, false, nil
+	}
+	if receipt.TxHash != tx.Hash() || receipt.BlockNumber == nil || !receipt.BlockNumber.IsUint64() || receipt.Status > 1 {
+		return pending, false, errors.New("invalid confirmed transaction receipt")
 	}
 	execution := &provider.Execution{TxHash: receipt.TxHash, BlockNumber: new(big.Int).Set(receipt.BlockNumber), BlockHash: receipt.BlockHash, Logs: make([]types.Log, len(receipt.Logs))}
 	for i, log := range receipt.Logs {
@@ -334,55 +431,24 @@ func (m *Manager) receipt(ctx context.Context, r *record, tx *types.Transaction)
 	if err := execution.Validate(); err != nil {
 		return pending, false, err
 	}
-	witnessNumber := new(big.Int).Add(receipt.BlockNumber, new(big.Int).SetUint64(r.Confirmations))
-	witness, err := m.backend.HeaderByNumber(ctx, witnessNumber)
-	if errors.Is(err, ethereum.NotFound) {
-		return pending, true, nil
-	}
-	if err != nil {
-		return pending, true, errors.Errorf("read confirmation block: %w", err)
-	}
-	if witness == nil || witness.Number == nil || witness.Number.Cmp(witnessNumber) != 0 {
-		return pending, true, nil
-	}
-	ancestor := witness
-	for ancestor.Number.Cmp(receipt.BlockNumber) > 0 {
-		parent, readErr := m.backend.HeaderByHash(ctx, ancestor.ParentHash)
-		if readErr != nil {
-			return pending, true, errors.Errorf("read confirmation ancestor: %w", readErr)
-		}
-		if parent == nil || parent.Number == nil || parent.Hash() != ancestor.ParentHash || new(big.Int).Sub(ancestor.Number, parent.Number).Cmp(big.NewInt(1)) != 0 {
-			return pending, true, errors.New("inconsistent confirmation ancestry")
-		}
-		ancestor = parent
-	}
-	if ancestor.Hash() != receipt.BlockHash {
-		return pending, false, nil
-	}
-	stable, err := m.backend.HeaderByNumber(ctx, witnessNumber)
-	if err != nil {
-		return pending, true, errors.Errorf("recheck confirmation head: %w", err)
-	}
-	if stable == nil || stable.Hash() != witness.Hash() {
-		return pending, true, nil
-	}
-	final := *r
+	m.recordMu.Lock()
+	defer m.recordMu.Unlock()
+	final := *m.active.Load()
 	final.Terminal = "confirmed"
 	final.Execution = execution.Clone()
 	if receipt.Status == types.ReceiptStatusFailed {
 		final.Terminal = "reverted"
 	}
 	if err := m.store.Save(journalKey, &final); err != nil {
-		m.storageFailure = errors.Errorf("persist terminal receipt: %w", err)
-		return pending, true, m.storageFailure
+		return pending, true, m.failStorage("persist terminal receipt", err)
 	}
 	m.active.Store(&final)
+	m.engine.RestoreConfirmedNonce(tx.Nonce())
 	m.log.Info("transaction terminal", "id", r.ID, "hash", tx.Hash().Hex(), "outcome", final.Terminal)
-	return result(&final, tx), true, nil
+	return result(&final), true, nil
 }
 
-// Acknowledge must only follow durable keeper progress. It is idempotent after
-// success, but cannot release an unresolved or different transaction's record.
+// Acknowledge follows durable keeper progress, never uncertain execution.
 func (m *Manager) Acknowledge(id string) error {
 	select {
 	case m.gate <- struct{}{}:
@@ -390,20 +456,25 @@ func (m *Manager) Acknowledge(id string) error {
 	default:
 		return ErrLaneBusy
 	}
-	if m.storageFailure != nil {
-		return m.storageFailure
+	if err := m.storageFailure(); err != nil {
+		return err
 	}
+	m.recordMu.Lock()
+	defer m.recordMu.Unlock()
 	r := m.active.Load()
 	if r == nil {
+		if m.admitted.Load() != nil {
+			return ErrLaneBusy
+		}
 		return nil
 	}
 	if id != r.ID || r.Terminal == "" {
 		return errors.New("only matching terminal transaction can be acknowledged")
 	}
 	if err := m.store.Delete(journalKey); err != nil {
-		m.storageFailure = errors.Errorf("acknowledge transaction: %w", err)
-		return m.storageFailure
+		return m.failStorage("acknowledge transaction", err)
 	}
 	m.active.Store(nil)
+	m.admitted.Store(nil)
 	return nil
 }

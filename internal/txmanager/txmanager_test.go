@@ -28,15 +28,16 @@ type fakeChain struct {
 	mine                 bool
 	status               uint64
 	sendErr, simulateErr error
+	feeErr               error
 	beforeBroadcast      func(*types.Transaction)
 	receiptMutation      func(*types.Receipt)
 	estimated, simulated ethereum.CallMsg
 }
 
 func newChain() *fakeChain {
-	receiptHeader := &types.Header{Number: big.NewInt(10), BaseFee: big.NewInt(1)}
-	middle := &types.Header{Number: big.NewInt(11), BaseFee: big.NewInt(1), ParentHash: receiptHeader.Hash()}
-	return &fakeChain{head: &types.Header{Number: big.NewInt(12), BaseFee: big.NewInt(1), ParentHash: middle.Hash()}, receiptHeader: receiptHeader, receipts: make(map[common.Hash]*types.Receipt), mine: true, status: types.ReceiptStatusSuccessful}
+	receiptHeader := &types.Header{Number: big.NewInt(10), GasLimit: 30_000_000, BaseFee: big.NewInt(1)}
+	middle := &types.Header{Number: big.NewInt(11), GasLimit: 30_000_000, BaseFee: big.NewInt(1), ParentHash: receiptHeader.Hash()}
+	return &fakeChain{head: &types.Header{Number: big.NewInt(12), GasLimit: 30_000_000, BaseFee: big.NewInt(1), ParentHash: middle.Hash()}, receiptHeader: receiptHeader, receipts: make(map[common.Hash]*types.Receipt), mine: true, status: types.ReceiptStatusSuccessful}
 }
 func (b *fakeChain) NonceAt(context.Context, common.Address, *big.Int) (uint64, error) {
 	b.mu.Lock()
@@ -52,7 +53,7 @@ func (b *fakeChain) EstimateGas(_ context.Context, msg ethereum.CallMsg) (uint64
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.estimated = msg
-	return 90000, nil
+	return 90000, b.simulateErr
 }
 func (b *fakeChain) CallContract(_ context.Context, msg ethereum.CallMsg, _ *big.Int) ([]byte, error) {
 	b.mu.Lock()
@@ -71,7 +72,7 @@ func (b *fakeChain) HeaderByNumber(_ context.Context, number *big.Int) (*types.H
 func (b *fakeChain) HeaderByHash(_ context.Context, hash common.Hash) (*types.Header, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	middle := &types.Header{Number: big.NewInt(11), BaseFee: big.NewInt(1), ParentHash: b.receiptHeader.Hash()}
+	middle := &types.Header{Number: big.NewInt(11), GasLimit: 30_000_000, BaseFee: big.NewInt(1), ParentHash: b.receiptHeader.Hash()}
 	for _, h := range []*types.Header{b.receiptHeader, middle, b.head} {
 		if h.Hash() == hash {
 			return types.CopyHeader(h), nil
@@ -192,9 +193,15 @@ func testSigner(t *testing.T) signer.Signer {
 }
 func newManager(t *testing.T, b *fakeChain, s signer.Signer, store *state.Store) *Manager {
 	t.Helper()
-	m, err := New(b, s, big.NewInt(1), store, Config{Confirmations: 2, PollInterval: time.Millisecond, MaxFeePerGas: big.NewInt(30), MaxPriorityFeePerGas: big.NewInt(2)}, logr.Discard())
+	m, err := New(b, s, big.NewInt(1), store, Config{Confirmations: 2, PollInterval: time.Millisecond, MaxFeeGwei: 30, PendingTimeout: time.Second, ShutdownTimeout: 5 * time.Millisecond}, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if m.PendingID() == "" {
+		if err := m.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(m.Close)
 	}
 	return m
 }
@@ -202,7 +209,7 @@ func request() Request {
 	return Request{ID: "strategy:round1", To: common.HexToAddress("0x1001"), Data: []byte{1, 2, 3, 4}}
 }
 func timeout() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.Background(), 15*time.Millisecond)
+	return context.WithTimeout(context.Background(), 100*time.Millisecond)
 }
 
 func TestSignedBytesPersistBeforeBroadcastAndConfirmedReplayNeverResigns(t *testing.T) {
@@ -224,7 +231,7 @@ func TestSignedBytesPersistBeforeBroadcastAndConfirmedReplayNeverResigns(t *test
 	if err != nil || !got.Confirmed || got.Pending || got.Reverted {
 		t.Fatalf("result: %+v %v", got, err)
 	}
-	if chain.simulated.Gas != 90000 || !bytes.Equal(chain.simulated.Data, request().Data) || chain.simulated.From != s.Address() || chain.simulated.To == nil || *chain.simulated.To != request().To {
+	if chain.sent[0].Gas() < 90000 || !bytes.Equal(chain.estimated.Data, request().Data) || chain.estimated.From != s.Address() || chain.estimated.To == nil || *chain.estimated.To != request().To {
 		t.Fatal("exact signed call was not simulated")
 	}
 	if err := store.Close(); err != nil {
@@ -281,14 +288,17 @@ func TestAmbiguousBroadcastRecoversExactHashAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	chain.mine = true
-	chain.sendErr = nil
+	m.Close()
+	chain.mu.Lock()
+	tx := chain.sent[0]
+	chain.receipts[tx.Hash()] = &types.Receipt{TxHash: tx.Hash(), BlockNumber: new(big.Int).Set(chain.receiptHeader.Number), BlockHash: chain.receiptHeader.Hash(), Status: 1}
+	chain.mu.Unlock()
 	m = newManager(t, chain, s, store)
 	recovered, err := m.Send(context.Background(), request())
 	if err != nil || !recovered.Confirmed || recovered.Hash != got.Hash {
 		t.Fatalf("recovery: %+v %v", recovered, err)
 	}
-	if len(chain.sent) != 2 || chain.sent[0].Hash() != chain.sent[1].Hash() || chain.sent[0].Nonce() != chain.sent[1].Nonce() {
+	if len(chain.sent) != 1 {
 		t.Fatal("recovery replaced original signed operation")
 	}
 }
@@ -301,6 +311,8 @@ func TestCancellationKeepsPendingOwnershipAndRequestIdentity(t *testing.T) {
 	defer store.Close()
 	chain := newChain()
 	chain.mine = false
+	broadcast := make(chan struct{})
+	chain.beforeBroadcast = func(*types.Transaction) { close(broadcast) }
 	m := newManager(t, chain, testSigner(t), store)
 	ctx, cancel := timeout()
 	got, err := m.Send(ctx, request())
@@ -318,6 +330,13 @@ func TestCancellationKeepsPendingOwnershipAndRequestIdentity(t *testing.T) {
 	if _, err := m.Send(context.Background(), other); err == nil {
 		t.Fatal("unresolved nonce did not block other intent")
 	}
+	select {
+	case <-broadcast:
+	case <-time.After(time.Second):
+		t.Fatal("admitted work stopped on caller cancellation")
+	}
+	chain.mu.Lock()
+	defer chain.mu.Unlock()
 	if len(chain.sent) != 1 {
 		t.Fatal("rejected intent broadcast")
 	}
@@ -335,22 +354,28 @@ func TestReorgedReceiptCannotCompleteUntilCanonicalAndDeepEnough(t *testing.T) {
 	ctx, cancel := timeout()
 	first, _ := m.Send(ctx, request())
 	cancel()
+	chain.mu.Lock()
 	chain.receipts[first.Hash] = &types.Receipt{TxHash: first.Hash, BlockNumber: big.NewInt(10), BlockHash: common.HexToHash("0xbad"), Status: 1}
+	chain.mu.Unlock()
 	ctx, cancel = timeout()
 	got, err := m.Send(ctx, request())
 	cancel()
 	if err == nil || !got.Pending || got.Confirmed {
 		t.Fatalf("fork receipt accepted: %+v %v", got, err)
 	}
+	chain.mu.Lock()
 	chain.receipts[first.Hash].BlockHash = chain.receiptHeader.Hash()
 	chain.head.Number = big.NewInt(11)
+	chain.mu.Unlock()
 	ctx, cancel = timeout()
 	got, err = m.Send(ctx, request())
 	cancel()
 	if err == nil || !got.Pending || got.Confirmed {
 		t.Fatalf("insufficient depth accepted: %+v %v", got, err)
 	}
+	chain.mu.Lock()
 	chain.head.Number = big.NewInt(12)
+	chain.mu.Unlock()
 	got, err = m.Send(context.Background(), request())
 	if err != nil || !got.Confirmed {
 		t.Fatalf("canonical receipt not confirmed: %+v %v", got, err)
@@ -393,7 +418,7 @@ func TestConflictingConfirmationAncestryCannotComplete(t *testing.T) {
 }
 
 func TestSimulationAndUnknownNonceConflictFailBeforeSigning(t *testing.T) {
-	for _, mode := range []string{"simulation", "nonce"} {
+	for _, mode := range []string{"simulation", "fees"} {
 		t.Run(mode, func(t *testing.T) {
 			store, err := state.Open(t.TempDir())
 			if err != nil {
@@ -404,7 +429,7 @@ func TestSimulationAndUnknownNonceConflictFailBeforeSigning(t *testing.T) {
 			if mode == "simulation" {
 				chain.simulateErr = errors.New("execution reverted")
 			} else {
-				chain.pending = 1
+				chain.feeErr = errors.New("fee history unavailable")
 			}
 			m := newManager(t, chain, testSigner(t), store)
 			if _, err := m.Send(context.Background(), request()); err == nil {
@@ -482,13 +507,29 @@ func TestExternalNonceConsumptionCannotReplaceRetainedOperation(t *testing.T) {
 	chain.mine = false
 	chain.sendErr = errors.New("unknown outcome")
 	m := newManager(t, chain, testSigner(t), store)
-	first, err := m.Send(context.Background(), request())
+	ctx, cancel := timeout()
+	first, err := m.Send(ctx, request())
+	cancel()
 	if err == nil || !first.Pending {
 		t.Fatalf("expected retained broadcast: %+v %v", first, err)
 	}
+	m.Close()
+	chain.mu.Lock()
 	chain.latest = 1
-	got, err := m.Send(context.Background(), request())
-	if !errors.Is(err, ErrNonceConflict) || !got.Pending || got.Hash != first.Hash || len(chain.sent) != 1 {
+	chain.mu.Unlock()
+	ctx, cancel = timeout()
+	got, err := m.Send(ctx, request())
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || !got.Pending || got.Hash != first.Hash || len(chain.sent) != 1 {
 		t.Fatalf("foreign nonce consumption replaced intent: %+v %v", got, err)
 	}
+}
+
+func (b *fakeChain) FeeHistory(context.Context, uint64, *big.Int, []float64) (*ethereum.FeeHistory, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.feeErr != nil {
+		return nil, b.feeErr
+	}
+	return &ethereum.FeeHistory{OldestBlock: big.NewInt(10), BaseFee: []*big.Int{big.NewInt(1), big.NewInt(1), big.NewInt(1), big.NewInt(1)}, GasUsedRatio: []float64{0.5, 0.5, 0.5}, Reward: [][]*big.Int{{big.NewInt(1)}, {big.NewInt(1)}, {big.NewInt(1)}}}, nil
 }

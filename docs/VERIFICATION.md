@@ -53,3 +53,14 @@ No live transactions or orders were submitted. Hosted CI and the Docker image
 were not run. This evidence does not verify production API availability, operator
 configuration, deployed permissions or issuer-specific settlement workflows.
 See [provider boundaries](PROVIDERS.md) before configuring an integration.
+
+
+## Vault-solver transaction engine — 2026-10-08
+
+`make check` passed after the transaction-engine integration: build, complete race/coverage suite, vet and lint (zero issues). The vendored engine has 92.9% statement coverage. The offline provenance test matches all 33 source/unit-test files to vault-solver stage `cc75494298aa3c9b4a17021564d569b811a8fd42`, permitting import substitutions and canonical gofmt ordering.
+
+`make integration` passed with the real RecipeExecutor application fixtures and the adapted upstream Anvil suite. This includes same-nonce fee replacements, silent relay acceptance, foreign nonce consumption, three same-key replicas, dropped pending calls after restart and late inclusion of an abandoned original. The application flow also covers issuer request/claim, confirmed execution evidence and no duplicate completed work after restart. The upstream engine permits fresh business calls after abandonment; Merkle's durable adapter intentionally retains uncertain repeatable recipes until it has canonical evidence.
+
+New adapter regressions cover persistence before original/replacement broadcasts, an older signed variant winning, caller cancellation before signing, restart without recipe replay, canonical receipt re-inclusion with refreshed block/log/status evidence, and recovery checking a newer hash when an older receipt read fails. Configuration and RPC fixtures cover invalid/NaN fee policy, duration overflow, next-block overrides, typed invalid-params causes, classification and credential redaction for every new RPC method. An independent review found no remaining concrete blocker after these fixes.
+
+These checks use ephemeral local chains and local HTTP/RPC fixtures. No production transactions or orders were submitted; production deployment and operator configuration were not verified.

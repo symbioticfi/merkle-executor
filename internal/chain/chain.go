@@ -3,7 +3,10 @@ package chain
 
 import (
 	"context"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"math/big"
+	"strings"
+	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -110,7 +113,17 @@ type rpcError struct {
 	cause     error
 }
 
-func (e *rpcError) Error() string { return e.operation + " failed" }
+func (e *rpcError) Error() string {
+	// The engine needs these bounded classifications to handle nonce races,
+	// rejected broadcasts and exact-byte retries. Never echo a provider message.
+	message := strings.ToLower(e.cause.Error())
+	for _, kind := range []string{"nonce too low", "nonce is too low", "nonce has already been used", "replacement transaction underpriced", "already known", "insufficient funds", "intrinsic gas too low", "invalid sender", "transaction type not supported", "execution reverted"} {
+		if strings.Contains(message, kind) {
+			return e.operation + " failed: " + kind
+		}
+	}
+	return e.operation + " failed"
+}
 func (e *rpcError) Unwrap() error { return e.cause }
 
 func rpcFailure(operation string, err error) error {
@@ -118,4 +131,51 @@ func rpcFailure(operation string, err error) error {
 		return nil
 	}
 	return &rpcError{operation: operation, cause: err}
+}
+
+// FeeHistory uses the read endpoint; sender nonce admission remains on write.
+func (c *Client) FeeHistory(ctx context.Context, count uint64, last *big.Int, percentiles []float64) (*ethereum.FeeHistory, error) {
+	history, err := c.Client.FeeHistory(ctx, count, last, percentiles)
+	return history, rpcFailure("read fee history", err)
+}
+
+// EstimateGasNextBlock mirrors vault-solver's next-block simulation, including
+// the fourth-parameter block override. Invalid-params causes stay discoverable
+// through errors.As so the engine applies its latest-state fallback headroom.
+func (c *Client) EstimateGasNextBlock(ctx context.Context, msg ethereum.CallMsg, parent *types.Header, blockTime time.Duration) (uint64, error) {
+	if parent == nil || parent.Number == nil {
+		return 0, errors.New("next-block gas estimate needs a parent header")
+	}
+	overrides := map[string]any{"number": (*hexutil.Big)(new(big.Int).Add(parent.Number, big.NewInt(1))), "time": hexutil.Uint64(parent.Time + uint64(max(blockTime, time.Second)/time.Second))}
+	arg := map[string]any{"from": msg.From, "to": msg.To}
+	if len(msg.Data) > 0 {
+		arg["input"] = hexutil.Bytes(msg.Data)
+	}
+	if msg.Value != nil {
+		arg["value"] = (*hexutil.Big)(msg.Value)
+	}
+	if msg.Gas != 0 {
+		arg["gas"] = hexutil.Uint64(msg.Gas)
+	}
+	var gas hexutil.Uint64
+	err := c.Client.Client().CallContext(ctx, &gas, "eth_estimateGas", arg, "latest", nil, overrides)
+	return uint64(gas), rpcFailure("estimate next-block transaction gas", err)
+}
+
+// Account telemetry stays on the read endpoint and behind the same redaction
+// boundary as submission and receipt I/O.
+func (c *Client) BalanceAt(ctx context.Context, account common.Address, block *big.Int) (*big.Int, error) {
+	balance, err := c.Client.BalanceAt(ctx, account, block)
+	return balance, rpcFailure("read account balance", err)
+}
+func (c *Client) ReadBalanceAt(ctx context.Context, account common.Address) (*big.Int, error) {
+	return c.BalanceAt(ctx, account, nil)
+}
+func (c *Client) ReadNonces(ctx context.Context, account common.Address) (uint64, uint64, error) {
+	mined, err := c.Client.NonceAt(ctx, account, nil)
+	if err != nil {
+		return 0, 0, rpcFailure("read telemetry mined nonce", err)
+	}
+	pending, err := c.Client.PendingNonceAt(ctx, account)
+	return mined, pending, rpcFailure("read telemetry pending nonce", err)
 }

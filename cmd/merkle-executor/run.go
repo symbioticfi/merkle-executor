@@ -16,7 +16,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	"github.com/symbioticfi/merkle-executor/internal/keeper"
 	"github.com/symbioticfi/merkle-executor/internal/observability"
-	"github.com/symbioticfi/merkle-executor/internal/parse"
 	"github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/internal/providers/data"
@@ -97,6 +96,7 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 	if err := bindState(store, cfg.Chain.ChainID, cfg.Signer.Address); err != nil {
 		return err
 	}
+	metrics := observability.NewMetrics()
 	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: strategies, Mode: cfg.Mode, OperationTimeout: cfg.OperationTimeout, Log: log}
 	if cfg.Mode == "send" {
 		s, err := signer.FromEnv(cfg.Signer.KeyEnv)
@@ -106,18 +106,19 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 		if s.Address() != planner.Caller {
 			return errors.New("signer key does not match configured address")
 		}
-		fee, _ := parse.Uint256(cfg.TxManager.MaxFeePerGas)
-		tip, _ := parse.Uint256(cfg.TxManager.MaxPriorityFeePerGas)
-		txm, err := txmanager.New(client, s, chainID, store, txmanager.Config{Confirmations: cfg.TxManager.Confirmations, PollInterval: cfg.TxManager.PollInterval, MaxFeePerGas: fee, MaxPriorityFeePerGas: tip, GasLimit: cfg.TxManager.GasLimit}, log)
+		txm, err := txmanager.NewWithMetrics(client, s, chainID, store, cfg.TxManager.EngineConfig(), log, metrics.Registerer())
 		if err != nil {
 			return err
 		}
+		if err := txm.Start(ctx); err != nil {
+			return err
+		}
+		defer txm.Close()
 		k.Sender = txm
 	}
 	if err := k.CheckRecovery(); err != nil {
 		return err
 	}
-	metrics := observability.NewMetrics()
 	k.Observe = metrics.Observe
 	metrics.Ready(true)
 	defer metrics.Ready(false)

@@ -19,7 +19,7 @@ build:
 test:
 	go test -race -cover ./...
 integration:
-	MERKLE_ANVIL_TEST=1 go test ./internal/recipes ./cmd/merkle-executor -run TestAnvil -count=1 -v
+	MERKLE_ANVIL_TEST=1 go test -tags=integration ./internal/recipes ./cmd/merkle-executor ./internal/vaultsolver/txmanager -run TestAnvil -count=1 -v
 vet:
 	go vet ./...
 lint:
