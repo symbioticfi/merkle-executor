@@ -1,0 +1,155 @@
+{
+  "abi": [
+    {
+      "type": "function",
+      "name": "allowance",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "approve",
+      "inputs": [
+        {
+          "name": "spender",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "balanceOf",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "lastCaller",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "marker",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "mint",
+      "inputs": [
+        {
+          "name": "account",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "touch",
+      "inputs": [
+        {
+          "name": "value",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "transfer",
+      "inputs": [
+        {
+          "name": "to",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    }
+  ],
+  "bytecode": "0x6080604052348015600e575f5ffd5b506103698061001c5f395ff3fe608060405234801561000f575f5ffd5b5060043610610085575f3560e01c806370a082311161005857806370a0823114610108578063a9059cbb14610127578063dd62ed3e1461013a578063edaa0c1d14610164575f5ffd5b8063095ea7b3146100895780632113522a146100b15780633acddfc1146100dc57806340c10f19146100f3575b5f5ffd5b61009c610097366004610292565b610189565b60405190151581526020015b60405180910390f35b6002546100c4906001600160a01b031681565b6040516001600160a01b0390911681526020016100a8565b6100e560035481565b6040519081526020016100a8565b610106610101366004610292565b6101ed565b005b6100e56101163660046102ba565b5f6020819052908152604090205481565b61009c610135366004610292565b61021d565b6100e56101483660046102da565b600160209081525f928352604080842090915290825290205481565b61010661017236600461030b565b600280546001600160a01b03191633179055600355565b5f8115806101b75750335f9081526001602090815260408083206001600160a01b0387168452909152902054155b6101bf575f5ffd5b50335f9081526001602081815260408084206001600160a01b03871685529091529091208290555b92915050565b6001600160a01b0382165f9081526020819052604081208054839290610214908490610336565b90915550505050565b335f9081526020819052604081208054839190839061023d908490610349565b90915550506001600160a01b0383165f9081526020819052604081208054849290610269908490610336565b909155506001949350505050565b80356001600160a01b038116811461028d575f5ffd5b919050565b5f5f604083850312156102a3575f5ffd5b6102ac83610277565b946020939093013593505050565b5f602082840312156102ca575f5ffd5b6102d382610277565b9392505050565b5f5f604083850312156102eb575f5ffd5b6102f483610277565b915061030260208401610277565b90509250929050565b5f6020828403121561031b575f5ffd5b5035919050565b634e487b7160e01b5f52601160045260245ffd5b808201808211156101e7576101e7610322565b818103818111156101e7576101e761032256fea164736f6c6343000825000a",
+  "source": "Fixture.sol",
+  "compiler": "0.8.37+commit.f401782d"
+}
