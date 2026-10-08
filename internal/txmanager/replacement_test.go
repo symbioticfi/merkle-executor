@@ -10,7 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/merkle-executor/internal/state"
-	engine "github.com/symbioticfi/merkle-executor/internal/vaultsolver/txmanager"
+	engine "github.com/symbioticfi/merkle-executor/internal/txengine"
 )
 
 func TestReplacementPersistsBeforeBroadcastAndOriginalReceiptWins(t *testing.T) {

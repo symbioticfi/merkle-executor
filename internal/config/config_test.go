@@ -86,10 +86,12 @@ func TestTransactionHorizonDefaultsAndInvalidLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	if defaults.TxManager.Horizon.MaxBlocks != 6 || defaults.TxManager.Horizon.BlockTimeMs != 12000 || defaults.TxManager.PendingTimeoutMs != 300000 {
-		t.Fatal("defaults differ from vault-solver")
+		t.Fatal("unexpected transaction defaults")
 	}
 	for name, block := range map[string]string{
 		"legacy static fee":         "maxFeePerGas: '30000000000'",
+		"removed passive timeout":   "lateReceiptTimeoutMs: 600000",
+		"removed passive hash cap":  "lateReceiptMaxHashes: 1024",
 		"negative fee":              "maxFeeGwei: -1",
 		"nan fee":                   "maxFeeGwei: .nan",
 		"infinite fee":              "maxFeeGwei: .inf",

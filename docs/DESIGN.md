@@ -21,7 +21,8 @@ another module's internal packages or change the solver or adapters checkouts.
   extension points for lending markets, 3F and future integrations. `redemptions`
   owns the documented LL issuer families; `securitize` owns wallet and offramp routes.
 - `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
-- `state`, `signer`, `txmanager`: exclusive process ownership and a durable recipe journal around the vendored vault-solver transaction engine. See [transaction design](TRANSACTIONS.md).
+- `txengine`: local nonce admission, adaptive fees, gas estimation, replacements, canonical receipts and graceful drain.
+- `state`, `signer`, `txmanager`: exclusive process ownership and a durable recipe journal around the engine. See [transaction design](TRANSACTIONS.md).
 - `config`, `observability`, `cmd`: startup wiring, strict configuration and operational controls.
 
 Provider output may fill numerical inputs or masked calldata fields only. It cannot

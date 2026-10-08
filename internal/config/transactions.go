@@ -2,13 +2,12 @@ package config
 
 import (
 	"github.com/go-errors/errors"
-	engine "github.com/symbioticfi/merkle-executor/internal/vaultsolver/txmanager"
+	engine "github.com/symbioticfi/merkle-executor/internal/txengine"
 	"math"
 	"slices"
 	"time"
 )
 
-// Configuration and defaults follow vault-solver stage cc754942.
 // TxManager tunes the shared transaction sender.
 type TxManager struct {
 	// Confirmations to wait for before treating a transaction as final.
@@ -23,12 +22,8 @@ type TxManager struct {
 	// ReplacementIntervalMs paces the fallback fee bump of a pending transaction while fee history is
 	// unreadable; with readable fee history, pending transactions are repriced on block evidence.
 	ReplacementIntervalMs int `yaml:"replacementIntervalMs"`
-	// PendingTimeoutMs bounds tracking before a fresh business call can reuse the unresolved nonce.
+	// PendingTimeoutMs bounds active tracking; unresolved recipes remain owned by the durable journal.
 	PendingTimeoutMs int `yaml:"pendingTimeoutMs"`
-	// LateReceiptTimeoutMs bounds passive receipt observation after uncertain execution releases the lane.
-	LateReceiptTimeoutMs int `yaml:"lateReceiptTimeoutMs"`
-	// LateReceiptMaxHashes separately bounds late hashes, local receipt deduplication, and ancestry headers.
-	LateReceiptMaxHashes int `yaml:"lateReceiptMaxHashes"`
 	// ShutdownTimeoutMs bounds how long shutdown drains an accepted transaction lifecycle.
 	ShutdownTimeoutMs int `yaml:"shutdownTimeoutMs"`
 	// Horizon tunes fee pricing and block-evidence repricing.
@@ -94,8 +89,6 @@ const (
 	DefaultAccountPollIntervalMs = 30_000
 	DefaultReplacementIntervalMs = 30_000
 	DefaultPendingTimeoutMs      = 300_000
-	DefaultLateReceiptTimeoutMs  = 600_000
-	DefaultLateReceiptMaxHashes  = 1024
 	DefaultShutdownTimeoutMs     = 60_000
 )
 
@@ -111,12 +104,6 @@ func (c *TxManager) applyDefaults() {
 	}
 	if c.PendingTimeoutMs == 0 {
 		c.PendingTimeoutMs = DefaultPendingTimeoutMs
-	}
-	if c.LateReceiptTimeoutMs == 0 {
-		c.LateReceiptTimeoutMs = DefaultLateReceiptTimeoutMs
-	}
-	if c.LateReceiptMaxHashes == 0 {
-		c.LateReceiptMaxHashes = DefaultLateReceiptMaxHashes
 	}
 	if c.ShutdownTimeoutMs == 0 {
 		c.ShutdownTimeoutMs = DefaultShutdownTimeoutMs
@@ -139,12 +126,6 @@ func (c TxManager) validate(required bool) error {
 	}
 	if c.PendingTimeoutMs < c.ReplacementIntervalMs {
 		return errors.New("txManager.pendingTimeoutMs must be at least replacementIntervalMs")
-	}
-	if c.LateReceiptTimeoutMs <= 0 || int64(c.LateReceiptTimeoutMs) > math.MaxInt64/int64(time.Millisecond) {
-		return errors.New("txManager.lateReceiptTimeoutMs must be positive and fit in a time.Duration")
-	}
-	if c.LateReceiptMaxHashes <= 0 {
-		return errors.New("txManager.lateReceiptMaxHashes must be positive")
 	}
 	if c.ShutdownTimeoutMs <= 0 {
 		return errors.New("txManager.shutdownTimeoutMs must be positive")
@@ -241,13 +222,11 @@ func (c TxManager) EngineConfig() engine.Config {
 	h := c.Horizon
 	return engine.Config{
 		Confirmations: c.Confirmations, MaxFeeGwei: c.MaxFeeGwei, PollInterval: c.PollInterval,
-		BroadcastTimeout:     time.Duration(c.BroadcastTimeoutMs) * time.Millisecond,
-		AccountPollInterval:  time.Duration(c.AccountPollIntervalMs) * time.Millisecond,
-		ReplacementInterval:  time.Duration(c.ReplacementIntervalMs) * time.Millisecond,
-		PendingTimeout:       time.Duration(c.PendingTimeoutMs) * time.Millisecond,
-		ShutdownTimeout:      time.Duration(c.ShutdownTimeoutMs) * time.Millisecond,
-		LateReceiptTimeout:   time.Duration(c.LateReceiptTimeoutMs) * time.Millisecond,
-		LateReceiptMaxHashes: c.LateReceiptMaxHashes,
+		BroadcastTimeout:    time.Duration(c.BroadcastTimeoutMs) * time.Millisecond,
+		AccountPollInterval: time.Duration(c.AccountPollIntervalMs) * time.Millisecond,
+		ReplacementInterval: time.Duration(c.ReplacementIntervalMs) * time.Millisecond,
+		PendingTimeout:      time.Duration(c.PendingTimeoutMs) * time.Millisecond,
+		ShutdownTimeout:     time.Duration(c.ShutdownTimeoutMs) * time.Millisecond,
 		Horizon: engine.HorizonConfig{
 			MaxBlocks: h.MaxBlocks, BlockTime: time.Duration(h.BlockTimeMs) * time.Millisecond,
 			TipFloorGwei: h.TipFloorGwei, FullBlockTipGwei: h.FullBlockTipGwei,

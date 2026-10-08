@@ -8,7 +8,7 @@ Recipes use opcode-prefixed `bytes[]` steps and packed operands/bindings from
 the current `IRecipes` schema. Literal values and indices fit `uint216`;
 runtime inputs and computed results retain all 256 bits. [Wire format](docs/DESIGN.md#recipe-encoding).
 
-The layout and style follow `../vault-solver`: integration-neutral infrastructure,
+The service uses integration-neutral infrastructure,
 isolated protocol packages, strict YAML, generated ABI bindings, Cobra, logr and
 one serialized transaction sender. [Design and comparison](docs/DESIGN.md).
 
@@ -83,8 +83,7 @@ proofs, request IDs or signatures.
 ## Lifecycle and recovery
 
 Prepared jobs and signed bytes are atomically persisted and fsynced before
-broadcast, including every replacement. Transaction processing uses the engine
-from [vault-solver](https://github.com/symbioticfi/vault-solver/tree/cc75494298aa3c9b4a17021564d569b811a8fd42):
+broadcast, including every replacement. Its local transaction engine provides
 mined-nonce admission, adaptive EIP-1559 horizon fees, next-block gas estimation,
 same-nonce fee replacements, exact rebroadcast of uncertain attempts, canonical
 receipt confirmation, bounded tracking and graceful shutdown. Caller cancellation
@@ -98,15 +97,16 @@ once, so timeout alone cannot authorize a retry or provider settlement. Recovery
 requires canonical receipt evidence; keeper progress is durable before the journal
 is acknowledged.
 
-The `txManager` settings follow vault-solver: `maxFeeGwei` is required for sending;
+In `txManager`, `maxFeeGwei` is required for sending;
 `broadcastTimeoutMs` defaults to 5000, `replacementIntervalMs` to 30000,
 `pendingTimeoutMs` to 300000 and `shutdownTimeoutMs` to 60000. The replacement
 interval controls fallback bumps when fee history is unavailable; ordinary repricing
 uses block evidence. `horizon` exposes the same fee, fullness, tip and gas-headroom
-settings (see [transaction design](docs/TRANSACTIONS.md)). The former static
-`maxFeePerGas`, `maxPriorityFeePerGas` and `gasLimit` fields are rejected.
-The metrics endpoint includes the engine's bounded `solver_bot_txmanager_*`
-lifecycle, fee, replacement and sender-account metrics.
+settings (see [transaction design](docs/TRANSACTIONS.md)).
+The metrics endpoint includes the engine's bounded `merkle_executor_txmanager_*`
+lifecycle, fee, replacement and sender-account metrics. Gas/fee counters cover
+receipts observed during active engine tracking. Recovery after tracking ends is
+owned by the durable journal and reported through its terminal logs and keeper outcomes.
 
 Issuer providers require the account's confirmed `Manage` logs to match their
 prepared calls, so a skipped recipe group cannot count as a request. Request jobs

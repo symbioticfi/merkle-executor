@@ -49,6 +49,73 @@ func TestRecoveryNeverRebroadcastsStoredRecipe(t *testing.T) {
 	}
 }
 
+func TestJournalResolvesLateReceiptAfterEngineStopsTracking(t *testing.T) {
+	for _, status := range []uint64{types.ReceiptStatusSuccessful, types.ReceiptStatusFailed} {
+		name := "confirmed"
+		if status == types.ReceiptStatusFailed {
+			name = "reverted"
+		}
+		t.Run(name, func(t *testing.T) {
+			store, err := state.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			b := newChain()
+			b.mine = false
+			m, err := New(b, testSigner(t), big.NewInt(1), store, Config{
+				MaxFeeGwei: 30, Confirmations: 2, PollInterval: time.Millisecond,
+				PendingTimeout: 100 * time.Millisecond, ReplacementInterval: 100 * time.Millisecond,
+				ShutdownTimeout: 10 * time.Millisecond,
+			}, logr.Discard())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = m.Start(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+			pending, err := m.Send(ctx, request())
+			cancel()
+			if !errors.Is(err, context.DeadlineExceeded) || !pending.Pending || m.flight != nil || !m.engine.LaneReady() {
+				t.Fatalf("journal did not retain work after active tracking ended: %+v %v", pending, err)
+			}
+			if err = m.Acknowledge(request().ID); err == nil {
+				t.Fatal("uncertain job acknowledged")
+			}
+			competing := request()
+			competing.ID = "next-recipe"
+			if _, err = m.Send(t.Context(), competing); !errors.Is(err, ErrLaneBusy) {
+				t.Fatalf("uncertain job lost ownership: %v", err)
+			}
+			b.mu.Lock()
+			sends := len(b.sent)
+			original := b.sent[0]
+			b.latest = original.Nonce() + 1
+			b.receipts[original.Hash()] = &types.Receipt{
+				TxHash: original.Hash(), Status: status, BlockNumber: new(big.Int).Set(b.receiptHeader.Number), BlockHash: b.receiptHeader.Hash(),
+			}
+			b.mu.Unlock()
+			got, err := m.Send(t.Context(), request())
+			if err != nil || got.Pending || got.Hash != original.Hash() || got.Execution == nil || got.Reverted != (status == types.ReceiptStatusFailed) {
+				t.Fatalf("journal failed to resolve late owned receipt: %+v %v", got, err)
+			}
+			b.mu.Lock()
+			after := len(b.sent)
+			b.mu.Unlock()
+			if after != sends {
+				t.Fatalf("receipt recovery broadcast transactions: before=%d after=%d", sends, after)
+			}
+			var saved record
+			found, err := store.Load(journalKey, &saved)
+			if err != nil || !found || saved.Terminal != name || saved.Execution == nil || saved.Execution.TxHash != original.Hash() {
+				t.Fatalf("late terminal evidence was not durable: %+v %v", saved, err)
+			}
+		})
+	}
+}
+
 type blockedEstimate struct {
 	*fakeChain
 	entered chan struct{}

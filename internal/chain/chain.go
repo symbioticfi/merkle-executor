@@ -139,7 +139,7 @@ func (c *Client) FeeHistory(ctx context.Context, count uint64, last *big.Int, pe
 	return history, rpcFailure("read fee history", err)
 }
 
-// EstimateGasNextBlock mirrors vault-solver's next-block simulation, including
+// EstimateGasNextBlock simulates the call against the next block, including
 // the fourth-parameter block override. Invalid-params causes stay discoverable
 // through errors.As so the engine applies its latest-state fallback headroom.
 func (c *Client) EstimateGasNextBlock(ctx context.Context, msg ethereum.CallMsg, parent *types.Header, blockTime time.Duration) (uint64, error) {

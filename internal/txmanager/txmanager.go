@@ -1,4 +1,4 @@
-// Package txmanager adapts the vault-solver engine to durable Merkle job ownership.
+// Package txmanager adds durable Merkle job ownership to the transaction engine.
 // The engine owns fees, gas, nonce selection, replacement and shutdown. The adapter
 // journals every signed variant before broadcast and releases a recipe only after
 // canonical execution evidence and durable keeper acknowledgement.
@@ -24,7 +24,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/signer"
 	"github.com/symbioticfi/merkle-executor/internal/state"
-	engine "github.com/symbioticfi/merkle-executor/internal/vaultsolver/txmanager"
+	engine "github.com/symbioticfi/merkle-executor/internal/txengine"
 )
 
 type Backend interface{ engine.Backend }
@@ -89,6 +89,10 @@ type Manager struct {
 }
 
 func New(backend Backend, s signer.Signer, chainID *big.Int, store *state.Store, cfg Config, log logr.Logger) (*Manager, error) {
+	return newManagerWithMetrics(backend, s, chainID, store, cfg, log, nil)
+}
+
+func newManagerWithMetrics(backend Backend, s signer.Signer, chainID *big.Int, store *state.Store, cfg Config, log logr.Logger, metrics *engine.Metrics) (*Manager, error) {
 	if backend == nil || s == nil || store == nil || chainID == nil || chainID.Sign() <= 0 {
 		return nil, errors.New("backend, signer, positive chain ID and durable store required")
 	}
@@ -110,7 +114,7 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, store *state.Store,
 		}
 		m.active.Store(&saved)
 	}
-	m.engine = engine.New(backend, &journalSigner{m}, m.chainID, cfg, log)
+	m.engine = engine.NewWithMetrics(backend, &journalSigner{m}, m.chainID, cfg, metrics, log)
 	m.restoreFloor()
 	if err := m.engine.ValidateFeeHeadroom(); err != nil {
 		return nil, err
@@ -126,19 +130,13 @@ func (m *Manager) restoreFloor() {
 	}
 }
 
-// NewWithMetrics exposes the same bounded transaction telemetry as vault-solver.
+// NewWithMetrics registers transaction telemetry in the service registry.
 func NewWithMetrics(backend Backend, s signer.Signer, chainID *big.Int, store *state.Store, cfg Config, log logr.Logger, registry prometheus.Registerer) (*Manager, error) {
-	m, err := New(backend, s, chainID, store, cfg, log)
-	if err != nil {
-		return nil, err
-	}
 	metrics, err := engine.NewMetrics(registry)
 	if err != nil {
 		return nil, err
 	}
-	m.engine = engine.NewWithMetrics(backend, &journalSigner{m}, m.chainID, cfg, metrics, log)
-	m.restoreFloor()
-	return m, nil
+	return newManagerWithMetrics(backend, s, chainID, store, cfg, log, metrics)
 }
 
 // Start initializes RPC readiness before launching the worker. Call Close before
@@ -280,7 +278,7 @@ func (m *Manager) Send(ctx context.Context, req Request) (Result, error) {
 			return Result{ID: req.ID}, errors.New("transaction manager not started")
 		}
 		m.intent = Request{ID: req.ID, To: req.To, Data: bytes.Clone(req.Data)}
-		channel, accepted := m.engine.SendAsync(ctx, engine.Request{To: req.To, Data: req.Data, Label: "execute_recipe", Solver: "merkle"})
+		channel, accepted := m.engine.SendAsync(ctx, engine.Request{To: req.To, Data: req.Data, Label: "execute_recipe"})
 		if !accepted {
 			return Result{ID: req.ID}, ErrLaneBusy
 		}
@@ -411,7 +409,7 @@ func (m *Manager) receipt(ctx context.Context, r *record, tx *types.Transaction)
 	if receipt == nil || receipt.TxHash != tx.Hash() || receipt.BlockNumber == nil || !receipt.BlockNumber.IsUint64() || receipt.BlockHash == (common.Hash{}) || receipt.Status > 1 {
 		return pending, false, errors.New("invalid transaction receipt")
 	}
-	receipt, err = m.engine.ConfirmRecoveredReceipt(ctx, receipt, r.Confirmations)
+	receipt, err = m.engine.ConfirmReceipt(ctx, receipt, r.Confirmations)
 	if err != nil {
 		return pending, true, err
 	}
