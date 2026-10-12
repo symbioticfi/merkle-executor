@@ -47,6 +47,18 @@ Handler `0x0DaBc0D9B270c9B0C4C77AaCeAa712b56D0F9178`: `contracts/WithdrawalHandl
 
 sUSN impl `0xebbcbc6672683e1956125e7c5e89e14ceac8cd3d`: inherited `@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol` SHA256 `8c65f46c961932ab4113c4758fbc96aaf350e812b040a201603131be59ada737`; asset storage. All Noon stage getters safe; returned-role hasRole remains a dependent second request on request route.
 
+Native USN redeemer `0x9F8D0a683871125083170F65430F8A15aFfa0086`:
+`contracts/RedeemHandlerV2.sol` SHA256
+`095557c6fdedf7647fe76268b3bf7af132507ca9afd9473947f9d23cf30aa9ec`.
+The nine native preparation getters (`usnToken`, `redeemableCollaterals`,
+`isWhitelisted` with explicit account, `treasury`, `redeemLimitPerBlock`,
+`currentBlockRedeemAmount`, `lastRedeemBlock`, `collateralDecimals`, and
+`calculateCollateralAmount` with explicit collateral/full amount) read storage
+or invoke the configured oracle from the handler in either calling context.
+They may aggregate. Treasury token `balanceOf` and `allowance` remain isolated
+inside the dependent JSON stage; native preparation never generalizes ERC20
+safety by selector. Full simulations and canonical receipt checks remain ordered.
+
 ## Pareto
 
 Queue target `0x5cC24f44cCAa80DD2c079156753fc1e908F495DC` -> impl `0x492af7fd7759897db2BE8992e497Cce6cc10EB02`: `contracts/IdleCDOEpochQueue.sol` SHA256 `487911f25919caeda4dbfbf55c3568d5a462be7c81402b4be830474f63780534`; all consumed queue getters public storage/mappings.

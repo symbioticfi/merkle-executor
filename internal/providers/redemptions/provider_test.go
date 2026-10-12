@@ -218,7 +218,7 @@ func assertIssuerAction(t *testing.T, data []byte, contract abi.ABI, method stri
 	}
 }
 
-func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRequest(t *testing.T) {
+func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRoute(t *testing.T) {
 	data, err := os.ReadFile("../../../config/assets/liquid-lane.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRequest(t *testing.T) 
 	if err = yaml.Unmarshal(data, &catalogue); err != nil {
 		t.Fatal(err)
 	}
-	wanted := strings.Fields("mF-ONE mROX mHYPER CarryTradeUSDTRYLeverage StockMarketTRBasisTrade mM1-USD JAAA JTRSY HYB deJAAA deJTRSY HYBOND PRIME mGLOBAL AA_FalconXUSDC sUSN")
+	wanted := strings.Fields("mF-ONE mROX mHYPER CarryTradeUSDTRYLeverage StockMarketTRBasisTrade mM1-USD JAAA JTRSY HYB deJAAA deJTRSY HYBOND PRIME mGLOBAL AA_FalconXUSDC sUSN USN")
 	if len(catalogue.Assets) != len(wanted) {
 		t.Fatalf("catalogue asset coverage: got %d, expected %d", len(catalogue.Assets), len(wanted))
 	}
@@ -243,6 +243,15 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRequest(t *testing.T) 
 				t.Fatal("duplicate catalogue asset")
 			}
 			seen[entry.Symbol] = true
+			if entry.Symbol == "USN" {
+				cfg, s, r := nativeNoonFixture(t)
+				cfg.ChainID, cfg.Token, cfg.OutputAsset, cfg.Target, cfg.Mode = entry.ChainID, entry.Token, entry.OutputAsset, entry.Target, entry.Mode
+				out, err := issuerProvider(t, cfg, r).Prepare(t.Context(), s)
+				if err != nil || len(out.Actions) != 1 || out.Inputs[3] != cfg.Amount {
+					t.Fatalf("native USN catalogue route is not executable: %+v %v", out, err)
+				}
+				return
+			}
 			cfg := issuerConfig(entry.Family)
 			cfg.ChainID, cfg.Token, cfg.OutputAsset, cfg.Target = entry.ChainID, entry.Token, entry.OutputAsset, entry.Target
 			cfg.CDO, cfg.Strategy = entry.CDO, entry.Strategy

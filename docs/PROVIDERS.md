@@ -64,6 +64,7 @@ preserve zero From. Neither executes inside Multicall or shares transient EVM st
 | Midas / OpenEden / Figure | 4 safe getters | 1 |
 | Centrifuge request / claim | 2 / 3 isolated getters | 1 JSON array |
 | Noon request / claim | 3 / 4 safe getters | request adds dependent role check; claim uses 1 |
+| Noon native USN redemption | 9 safe handler getters, then 2 isolated token getters | 2 |
 | Pareto request / queue claim / direct claim / instant claim | 12 / 12 / 14 / 11 safe getters | 1; direct claim may add dependent APR0 rate |
 | Securitize modern / legacy | 4 then 3 / 6 then 1 | 2; mixed safe and isolated calls share each stage |
 | Generic RPC provider | up to 256 isolated calls | 1 JSON array |
@@ -171,7 +172,7 @@ That consumer provider is not implemented here. This provider never posts RFQ or
 ## Liquid Lane issuer requests and claims
 
 The `redemptions` provider covers all 15 assets in the official LL factory list
-and the additional Noon sUSN route.
+and the additional Noon sUSN and native USN routes.
 The [asset catalogue and issuer guide](LIQUID-LANE-ASSETS.md) identify the six
 families, exact targets and each request/claim lifecycle. A Centrifuge request,
 for example, has this shape:
@@ -210,6 +211,49 @@ units for requests and USN units for claims. Both tokens have 18 decimals.
 The provider checks the asset and handler authorization at the pinned block;
 full recipe simulation checks the vault's configured receiver and caller
 eligibility. It does not automatically discover or advance request IDs.
+
+Native **USN → USDC** is a separate `family: noon`, `mode: redeem-usn` route:
+
+```yaml
+- name: redemptions
+  config:
+    family: noon
+    mode: redeem-usn
+    chainId: 1
+    token: "0xdA67B4284609d2d48e5d10cfAc411572727dc1eD"
+    outputAsset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    target: "0x9F8D0a683871125083170F65430F8A15aFfa0086"
+    amount: "1000000000000000000"
+    action: "2:0"
+    amountInput: 0
+```
+
+This mode accepts only these reviewed Ethereum addresses and a positive USN
+amount in **18-decimal base units**. Omit `requestId`, `epoch`, second-action and
+intermediate-input fields. USDT, USN minting and privileged instant sUSN exits
+are outside this route. An account's native USN whitelist is separate from any
+staking-vault withdrawal whitelist; the keeper never grants it.
+
+Preparation batches USN identity, collateral enablement, account whitelist,
+treasury, block counters, collateral decimals and the **full-amount**
+`calculateCollateralAmount(USDC, amount)` quote at one pinned block. The getter
+checks the collateral oracle's freshness and returns native 6-decimal USDC with
+Noon's peg and floor rounding. A one-token `getRate` cannot substitute for it.
+The counter resets when `lastRedeemBlock` precedes the pinned block. Dependent
+treasury USDC balance **and allowance to the handler** are checked together in
+isolated token reads; a funded treasury without allowance remains idle.
+
+The provider fills only the committed `redeemOnchain(USDC, amount)` action and
+optional USN input. The recipe must supply exact USN approval, allowance cleanup
+and a USDC output postcondition. Account balance and allowance can be established
+earlier in that recipe, including after an existing sUSN claim. Full simulation
+remains the execution gate; a readable quote alone does not prove redeemability.
+Production token pause, blacklist and whitelist restrictions can still prevent
+the USN burn or USDC transfer; local token fixtures do not attest those policies.
+Native completion requires canonical exact Manage-call identity, one matching
+handler `Redeemed` event, the USN burn and the matching account USDC transfer.
+It finishes as `redeemed`. The execution payout may differ from the old preview;
+minimum proceeds are enforced by the committed recipe.
 
 Confirmed request calls finish with `requested`, releasing the account for later
 claim strategies while the issuer retains pending state. This does not report

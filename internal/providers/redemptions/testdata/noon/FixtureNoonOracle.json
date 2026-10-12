@@ -1,0 +1,127 @@
+{
+  "abi": [
+    {
+      "inputs": [],
+      "name": "latestRoundData",
+      "outputs": [
+        {
+          "internalType": "uint80",
+          "name": "",
+          "type": "uint80"
+        },
+        {
+          "internalType": "int256",
+          "name": "",
+          "type": "int256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint80",
+          "name": "",
+          "type": "uint80"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "price",
+      "outputs": [
+        {
+          "internalType": "int256",
+          "name": "",
+          "type": "int256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "int256",
+          "name": "value",
+          "type": "int256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "updated",
+          "type": "uint256"
+        }
+      ],
+      "name": "set",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "updatedAt",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x60806040526305f5e10060005542600155348015601b57600080fd5b506101098061002b6000396000f3fe6080604052348015600f57600080fd5b506004361060465760003560e01c80637519ab5014604b578063a035b1fe146066578063a22c554014606e578063feaf968c146086575b600080fd5b605360015481565b6040519081526020015b60405180910390f35b605360005481565b6084607936600460b2565b600091909155600155565b005b6000546001805460408051838152602081019490945283018190526060830152608082015260a001605d565b6000806040838503121560c457600080fd5b5050803592602090910135915056fea26469706673582212202a5bf8bb879e28263fb591742d3f1364081b931c7262ec2da87b251937673a3a64736f6c634300081c0033",
+  "storageLayout": {
+    "storage": [
+      {
+        "astId": 7693,
+        "contract": "Fixture.sol:FixtureNoonOracle",
+        "label": "price",
+        "offset": 0,
+        "slot": "0",
+        "type": "t_int256"
+      },
+      {
+        "astId": 7697,
+        "contract": "Fixture.sol:FixtureNoonOracle",
+        "label": "updatedAt",
+        "offset": 0,
+        "slot": "1",
+        "type": "t_uint256"
+      }
+    ],
+    "types": {
+      "t_int256": {
+        "encoding": "inplace",
+        "label": "int256",
+        "numberOfBytes": "32"
+      },
+      "t_uint256": {
+        "encoding": "inplace",
+        "label": "uint256",
+        "numberOfBytes": "32"
+      }
+    }
+  },
+  "compiler": "v0.8.28+commit.7893614a",
+  "settings": {
+    "evmVersion": "paris",
+    "libraries": {},
+    "metadata": {
+      "useLiteralContent": true
+    },
+    "optimizer": {
+      "enabled": true,
+      "runs": 200
+    }
+  },
+  "sourceSha256": "44951e78d6eab153ca78d25fe33ca9509218e74484241bacd1b1627eafa70253"
+}

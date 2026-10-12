@@ -66,3 +66,42 @@ New adapter regressions cover persistence before original/replacement broadcasts
 These checks use ephemeral local chains and local HTTP/RPC fixtures. No production transactions or orders were submitted; production deployment and operator configuration were not verified.
 
 After the local-engine cleanup, `make check` and `make integration` passed again; lint reported zero issues and engine statement coverage was 92.2%. Both the duplicated operation-label and invalid receipt-status cost regressions failed before their fixes and pass afterward. Journal tests cover late successful and reverted receipts after active tracking ends, uncertain-job admission/acknowledgement blocking, no recovery rebroadcast and durable terminal evidence. Independent review found no remaining blockers. The primary checkout's tracked patch and untracked-file hashes remain unchanged.
+
+
+## Native Noon USN redemption (2026-10-12)
+
+The dedicated `redeem-usn` mode completes the separate USN→USDC leg while leaving
+sUSN request/claim behavior unchanged. Deterministic tests cover canonical route
+configuration, full-amount quote units, whitelist/collateral readiness, malformed
+and unavailable reads, treasury balance and allowance, block-budget boundaries,
+prior-block counter reset, exact managed calldata and burn/payout receipt identity.
+The source-pinned local test compiles the unmodified verified RedeemHandlerV2
+with native solc **0.8.28+commit.7893614a**, **Paris**, optimizer **200**, and the
+original literal-content metadata settings. The existing real RecipeExecutor
+and permission-enforcing account fixture execute exact approval, redemption,
+allowance cleanup and minimum-output checks. Local token/oracle fixtures prove
+a 1.234567890123456789-USN burn produces 1.233332 USDC at a 99.9% peg. Tests also
+reject whitelist removal, an empty treasury, missing treasury allowance,
+exhausted block budget, stale oracle data and a changed quote below the recipe's
+minimum. Mined reverting executions prove both the post-burn allowance failure
+and the post-payout minimum-output failure roll back balances, approvals and
+logs. The real full-amount quote for 2,999,999,999,999 wei USN at a 99.99% peg
+is one USDC base unit, where scaling the one-token rate would produce two.
+Below-$1 collateral also preserves the handler's $1 quote clamp and differs
+from its collateral `getRate` view.
+
+```sh
+python3 internal/providers/redemptions/testdata/noon/generate.py --check
+# Deliberate source/artifact refresh only:
+python3 internal/providers/redemptions/testdata/noon/generate.py --update
+make check
+make integration
+```
+
+`make integration` starts owned ephemeral Anvil processes; the native test sets
+its local chain ID to 1 and installs locally compiled runtime at the reviewed
+route addresses. It uses no mainnet fork, live keys or external chain writes.
+The handler runtime/source is real; USN/USDC token behavior, oracle and account
+are local fixtures. These tests do not verify live account enrollment, production
+USN/USDC pause, blacklist or whitelist restrictions, deployment liquidity,
+future upgrades or issuer availability.
