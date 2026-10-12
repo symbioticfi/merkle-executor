@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"math/big"
 )
 
@@ -15,7 +16,12 @@ func ConfirmReceipt(ctx context.Context, chain Backend, receipt *types.Receipt, 
 		return nil, errors.New("invalid receipt confirmation request")
 	}
 	witnessNumber := new(big.Int).Add(receipt.BlockNumber, new(big.Int).SetUint64(depth))
-	head, err := chain.HeaderByNumber(ctx, nil)
+	reads, err := protocolio.ReadGroup(ctx, chain, protocolio.ReadRequest{Kind: protocolio.ReadHeader}, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: witnessNumber})
+	if err != nil {
+		return nil, err
+	}
+	headResult := reads.At(0)
+	head, err := headResult.Header, headResult.Err
 	if err != nil {
 		return nil, err
 	}
@@ -25,7 +31,8 @@ func ConfirmReceipt(ctx context.Context, chain Backend, receipt *types.Receipt, 
 	if head.Number.Cmp(witnessNumber) < 0 {
 		return nil, nil
 	}
-	witness, err := chain.HeaderByNumber(ctx, witnessNumber)
+	witnessResult := reads.At(1)
+	witness, err := witnessResult.Header, witnessResult.Err
 	if err != nil {
 		return nil, err
 	}

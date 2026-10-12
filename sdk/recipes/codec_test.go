@@ -366,3 +366,14 @@ func TestBindingsAndPayloadFailures(t *testing.T) {
 		t.Fatal("missing query accepted")
 	}
 }
+
+func TestInputLimitMatchesRuntimeBoundary(t *testing.T) {
+	for _, index := range []int64{4095, 4096} {
+		recipe := Recipe{Steps: [][]byte{step(Add, pack(t, binaryArgs, input(index), literal(0)))}}
+		_, inspectErr := Inspect(recipe)
+		_, _, assembleErr := Assemble(recipe, nil, map[uint]string{uint(index): "1"}, nil, nil)
+		if (inspectErr == nil) != (index == 4095) || (assembleErr == nil) != (index == 4095) {
+			t.Fatalf("index %d: inspect=%v assemble=%v", index, inspectErr, assembleErr)
+		}
+	}
+}

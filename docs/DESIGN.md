@@ -58,8 +58,42 @@ providers match exact account `Manage` calls in receipt order; missing or skippe
 actions do not count as executed. A request finishes as `requested`, releasing the
 account lock while issuer-owned state retains the pending withdrawal. Independent
 claim strategies read current claim eligibility. Submission is never labelled paid.
+Issuer providers declare exclusive managed targets for receipt attribution. The
+keeper checks the complete immutable execute composition before signing and on
+recovery, retaining completed providers' claims. Repeated/static calls to those
+targets and arbitrary Call steps are unsupported; see [provider restrictions](PROVIDERS.md).
 Existing journals without evidence remain readable; new issuer reconciliation
 requires evidence and does not infer it from a successful transaction alone.
+
+## Preparation read stages
+
+The keeper can plan independent provider reads from a provisional value-only block
+pin and configured identity. This optional SDK contract lives in `protocolio`, keeping
+provider policy in the host and avoiding an import cycle through `provider`. Planning
+is pure local encoding. Initial metadata and planned calls share a bounded read group;
+only authenticated discovery plus configured tree validation can invoke their resolvers.
+Each resolver sees its own lazy results and must match the exact provisional pin.
+Ordinary member errors remain deferred until API eligibility requires them. Transport
+and batch-shape failures fail closed before provider classification, including when
+speculative results would later be unused. Merkl stages its existing strict aggregate
+as an isolated EVM call. Other providers retain their existing preparation behavior.
+
+A shared bounded recipe cache retains immutable event evidence only after successful
+closing preparation guards. Its key is full chain ID plus executor; its body preserves
+exact bytes, including trailing ABI data. Fresh metadata must match commitment and
+event block, and a newly read canonical event-block hash must authenticate the prior
+ordered/latest event evidence. The body is rehashed and inspected before reuse. Any
+semantic mismatch returns to cold log discovery; a matched hint's missing/failed header
+is a hard error. Initial/current metadata, permission roots/roles and full simulation
+are never cached. Public standalone discovery remains independently guarded and uncached.
+
+Cache hints are frozen per attempt and version-checked on invalidation. Mutex-protected
+FIFO entries are deep-copied on load/insert; callbacks cannot mutate pending verified
+cache bodies. Capacity derives from configured strategies and `recipeCacheBytes` bounds
+conservatively charged retained allocations, including payload/slice/object overhead.
+It defaults to 16 MiB; zero disables it and oversized recipes stay uncached. Transient
+attempt copies are released with the attempt. The cache has no journal representation,
+configuration fingerprint effect or authority to bypass a read or validation failure.
 
 ## Recipe encoding
 
@@ -88,3 +122,8 @@ Use contract-derived ABI/hash fixtures, generated binding checks, provider httpt
 fixtures, crash/restart and nonce/receipt tests, and a local Anvil full-execute test.
 Run build, race tests, vet and lint. Local validation does not establish production
 readiness for an unconfigured issuer, exchange API or deployed permission tree.
+
+Global recovery/state failures emit one sanitized keeper error and an iteration
+metric with `strategy="_global"`, `outcome="error"`. Strategy errors retain their
+own observations without a duplicate global event. Recovery failures remain
+retryable and never trigger submission on the failing iteration.

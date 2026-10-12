@@ -241,7 +241,7 @@ func validateValue(value Value, index int, steps [][]byte, inputs map[uint]struc
 	case Input:
 		// Bound host allocation, independently of the numerical input's full uint256 width.
 		if !value.Value.IsUint64() || value.Value.Uint64() > MaxInputIndex {
-			return errors.New("input index exceeds keeper limit of 65535")
+			return errors.Errorf("input index exceeds limit of %d", MaxInputIndex)
 		}
 		inputs[uint(value.Value.Uint64())] = struct{}{}
 	case Result:

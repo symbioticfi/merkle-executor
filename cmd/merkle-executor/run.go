@@ -25,6 +25,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/signer"
 	"github.com/symbioticfi/merkle-executor/internal/txmanager"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
@@ -47,7 +48,11 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 	defer flush()
 	chainID := new(big.Int).SetUint64(cfg.Chain.ChainID)
 	startup, cancel := context.WithTimeout(ctx, cfg.OperationTimeout)
-	client, err := chain.Dial(startup, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID)
+	var aggregate []common.Address
+	if cfg.Chain.Multicall3 != "" {
+		aggregate = append(aggregate, common.HexToAddress(cfg.Chain.Multicall3))
+	}
+	client, err := chain.Dial(startup, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID, aggregate...)
 	cancel()
 	if err != nil {
 		return err
@@ -72,7 +77,7 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 		}
 		strategies = append(strategies, s)
 	}
-	planner := &keeper.Planner{Chain: client, ChainID: chainID, Caller: common.HexToAddress(cfg.Signer.Address), Confirmations: cfg.TxManager.Confirmations}
+	planner := &keeper.Planner{Chain: client, ChainID: chainID, Caller: common.HexToAddress(cfg.Signer.Address), Confirmations: cfg.TxManager.Confirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), cfg.RecipeCacheBytes)}
 	if planOnly {
 		plans := make(map[string]keeper.Plan)
 		for _, s := range strategies {

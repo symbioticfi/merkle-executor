@@ -133,7 +133,7 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 		return nil, errors.New("requestId applies only to Noon claims")
 	}
 	for _, index := range []*uint{cfg.AmountInput, cfg.IntermediateInput} {
-		if index != nil && *index > 4095 {
+		if index != nil && *index > parse.MaxInputIndex {
 			return nil, errors.New("redemption input index exceeds limit")
 		}
 	}
@@ -226,8 +226,20 @@ func read[T any](ctx context.Context, p *Provider, s provider.Snapshot, target c
 	return value, nil
 }
 
-func (p *Provider) checkAddress(ctx context.Context, s provider.Snapshot, target common.Address, data []byte, unpack func([]byte) (common.Address, error), expected common.Address) error {
-	actual, err := read(ctx, p, s, target, data, unpack)
+func readResult[T any](result protocolio.ReadResult, unpack func([]byte) (T, error)) (T, error) {
+	var zero T
+	raw, err := result.CallData()
+	if err != nil {
+		return zero, err
+	}
+	value, err := unpack(raw)
+	if err != nil {
+		return zero, errors.Errorf("decode issuer response: %w", err)
+	}
+	return value, nil
+}
+func checkRead(result protocolio.ReadResult, unpack func([]byte) (common.Address, error), expected common.Address) error {
+	actual, err := readResult(result, unpack)
 	if err != nil {
 		return err
 	}
@@ -238,3 +250,19 @@ func (p *Provider) checkAddress(ctx context.Context, s provider.Snapshot, target
 }
 
 func idle(reason string) error { return errors.Errorf("%w: %s", provider.ErrNotReady, reason) }
+
+// ExclusiveTargets preserves each issuer action's receipt identity across
+// providers and restarts. Figure owns both calls, including its bound output.
+func (p *Provider) ExclusiveTargets() map[string]common.Address {
+	if p.cfg.Family == "figure" {
+		return map[string]common.Address{p.cfg.Action: p.token, p.cfg.SecondAction: p.target}
+	}
+	target := p.target
+	if p.cfg.Family == "pareto" && !strings.HasPrefix(p.cfg.Mode, "queue-") {
+		target = p.cdo
+	}
+	if p.cfg.Family == "noon" && p.cfg.Mode == "request" {
+		target = p.token
+	}
+	return map[string]common.Address{p.cfg.Action: target}
+}

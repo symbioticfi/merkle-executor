@@ -215,21 +215,33 @@ func parseFeeSnapshot(history *ethereum.FeeHistory, gasLimit uint64) (feeSnapsho
 
 // readFeeSnapshot reads the latest header (for the block gas limit and the next-block gas estimate)
 // and the fee-history window ending at the latest block.
+type feeContextBackend interface {
+	ReadFeeContext(context.Context, uint64, []float64) (*types.Header, *ethereum.FeeHistory, error, error)
+}
+
 func (m *Manager) readFeeSnapshot(ctx context.Context) (feeSnapshot, *types.Header, error) {
 	feeCtx, cancel := context.WithTimeout(ctx, m.feeReadTimeout())
 	defer cancel()
-	header, err := m.backend.HeaderByNumber(feeCtx, nil)
+	var header *types.Header
+	var history *ethereum.FeeHistory
+	var err, historyErr error
+	batched, ok := m.backend.(feeContextBackend)
+	if ok {
+		header, history, err, historyErr = batched.ReadFeeContext(feeCtx, uint64(m.horizon.window()), []float64{m.horizon.rewardPercentile})
+	} else {
+		header, err = m.backend.HeaderByNumber(feeCtx, nil)
+	}
 	if err != nil {
 		return feeSnapshot{}, nil, errors.Errorf("%w: header by number: %w", errFreshFeesUnavailable, err)
 	}
 	if header == nil || header.Number == nil || header.GasLimit == 0 {
 		return feeSnapshot{}, nil, errors.Errorf("%w: latest header has no number or gas limit", errFreshFeesUnavailable)
 	}
-	history, err := m.backend.FeeHistory(
-		feeCtx, uint64(m.horizon.window()), nil, []float64{m.horizon.rewardPercentile},
-	)
-	if err != nil {
-		return feeSnapshot{}, nil, errors.Errorf("%w: fee history: %w", errFreshFeesUnavailable, err)
+	if !ok {
+		history, historyErr = m.backend.FeeHistory(feeCtx, uint64(m.horizon.window()), nil, []float64{m.horizon.rewardPercentile})
+	}
+	if historyErr != nil {
+		return feeSnapshot{}, nil, errors.Errorf("%w: fee history: %w", errFreshFeesUnavailable, historyErr)
 	}
 	snapshot, err := parseFeeSnapshot(history, header.GasLimit)
 	if err != nil {

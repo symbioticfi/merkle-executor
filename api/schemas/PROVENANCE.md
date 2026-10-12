@@ -21,6 +21,28 @@ No schema or endpoint is fetched automatically during a normal build.
   `claim`, `claimed`, `getMerkleRoot`, `claimRecipient`. Its current implementation
   requires self/operator authorization and supports recipient overrides. Operators
   must verify the actual configured proxy implementation matches this subset.
+- `api/abi/Multicall3.json`: only `aggregate3((address,bool,bytes)[])`, extracted
+  from the compiled official [Multicall3 source](https://github.com/mds1/multicall3/blob/b667d67ecfa5361a81e8f110234ce242613b0012/src/Multicall3.sol)
+  at commit `b667d67ecfa5361a81e8f110234ce242613b0012`, inspected 2026-10-12.
+  `Call3` is `(target, allowFailure, callData)`; `Result` is `(success, returnData)`.
+  The payable entry point uses ordinary EVM calls and reverts if a failed call has
+  `allowFailure: false`. Merkl uses zero value and only its distributor's read-only,
+  caller-independent getters. The host also uses `allowFailure: true` for verified
+  independent getter groups, retaining per-member errors until validation consumes
+  them. [Read aggregation sources and limitations](READ_BATCHING.md) record every
+  supported scope; arbitrary calls remain isolated JSON-RPC members. No other
+  Multicall3 methods are exposed by this binding.
+  The pinned [deployment list](https://github.com/mds1/multicall3/blob/b667d67ecfa5361a81e8f110234ce242613b0012/deployments.json)
+  is reference material; operators must verify their configured chain and deployment.
+  There is no automatic address discovery or assumption of universal deployment.
+  The unmodified MIT-licensed source is vendored in
+  `internal/providers/merkl/testdata/Multicall3.sol`, SHA-256
+  `2054218939d3fa0f52f8ce1a33658d570a550671f63197356ee5744f7e188b1e`.
+  Its local Anvil artifact and the small distributor getter fixture are reproducibly
+  built with solc 0.8.12, London EVM, optimizer 200 runs and metadata bytecode hash
+  disabled. Run `python3 internal/providers/merkl/testdata/generate.py`, then
+  `make generate`. These local deployments establish aggregation and pinned-state
+  behavior, not the existence or correctness of any external chain deployment.
 - CoW source: <https://github.com/cowprotocol/services/blob/main/crates/orderbook/openapi.yml>
   and <https://docs.cow.fi/cow-protocol/reference/core/signing-schemes>, inspected
   2026-09-27. The settlement ABI subset is `domainSeparator()` and

@@ -7,20 +7,32 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
 	"github.com/symbioticfi/merkle-executor/api/bindings/noonwithdrawalhandler"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 func (p *Provider) noon(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {
 	vault := erc4626.NewERC4626()
 	handler := noonwithdrawalhandler.NewNoonWithdrawalHandler()
-	if err := p.checkAddress(ctx, s, p.token, vault.PackAsset(), vault.UnpackAsset, p.asset); err != nil {
+	requests := []protocolio.ReadRequest{protocolio.ContractRead(p.token, vault.PackAsset(), s.BlockNumber, true), protocolio.ContractRead(p.target, handler.PackUsn(), s.BlockNumber, true)}
+	if p.cfg.Mode == "request" {
+		requests = append(requests, protocolio.ContractRead(p.target, handler.PackSTAKINGVAULTROLE(), s.BlockNumber, true))
+	} else {
+		requests = append(requests, protocolio.ContractRead(p.target, handler.PackGetWithdrawalRequest(s.Account, p.requestID), s.BlockNumber, true), protocolio.ContractRead(p.target, handler.PackWithdrawPeriod(), s.BlockNumber, true))
+	}
+	group, err := protocolio.ReadGroup(ctx, p.deps.Chain, requests...)
+	if err != nil {
 		return nil, err
 	}
-	if err := p.checkAddress(ctx, s, p.target, handler.PackUsn(), handler.UnpackUsn, p.asset); err != nil {
+
+	if err := checkRead(group.At(0), vault.UnpackAsset, p.asset); err != nil {
+		return nil, err
+	}
+	if err := checkRead(group.At(1), handler.UnpackUsn, p.asset); err != nil {
 		return nil, err
 	}
 	if p.cfg.Mode == "request" {
-		role, err := read(ctx, p, s, p.target, handler.PackSTAKINGVAULTROLE(), handler.UnpackSTAKINGVAULTROLE)
+		role, err := readResult(group.At(2), handler.UnpackSTAKINGVAULTROLE)
 		if err != nil {
 			return nil, err
 		}
@@ -34,14 +46,14 @@ func (p *Provider) noon(ctx context.Context, s provider.Snapshot, out *provider.
 		out.Actions[p.cfg.Action] = vault.PackRedeem(p.amount, p.target, s.Account)
 		return p.amount, nil
 	}
-	request, err := read(ctx, p, s, p.target, handler.PackGetWithdrawalRequest(s.Account, p.requestID), handler.UnpackGetWithdrawalRequest)
+	request, err := readResult(group.At(2), handler.UnpackGetWithdrawalRequest)
 	if err != nil {
 		return nil, err
 	}
 	if request.Amount.Sign() == 0 || request.Claimed {
 		return nil, idle("Noon request is empty or already claimed")
 	}
-	period, err := read(ctx, p, s, p.target, handler.PackWithdrawPeriod(), handler.UnpackWithdrawPeriod)
+	period, err := readResult(group.At(3), handler.UnpackWithdrawPeriod)
 	if err != nil {
 		return nil, err
 	}

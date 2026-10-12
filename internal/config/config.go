@@ -20,6 +20,7 @@ import (
 )
 
 type Config struct {
+	RecipeCacheBytes int64         `yaml:"recipeCacheBytes"`
 	Mode             string        `yaml:"mode"`
 	Chain            Chain         `yaml:"chain"`
 	Signer           Signer        `yaml:"signer"`
@@ -33,6 +34,7 @@ type Config struct {
 }
 
 type Chain struct {
+	Multicall3  string `yaml:"multicall3"`
 	RPCURL      string `yaml:"rpcUrl"`
 	WriteRPCURL string `yaml:"writeRpcUrl"`
 	ChainID     uint64 `yaml:"chainId"`
@@ -66,7 +68,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, errors.Errorf("read configuration: %w", err)
 	}
-	var cfg Config
+	cfg := Config{RecipeCacheBytes: 16 << 20}
 	d := yaml.NewDecoder(bytes.NewReader(raw))
 	d.KnownFields(true)
 	if err := d.Decode(&cfg); err != nil {
@@ -123,8 +125,16 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
+	if c.RecipeCacheBytes < 0 {
+		return errors.New("recipeCacheBytes must be nonnegative")
+	}
 	if c.Mode != "simulate" && c.Mode != "send" {
 		return errors.New("mode must be simulate or send")
+	}
+	if c.Chain.Multicall3 != "" {
+		if _, err := parse.Address(c.Chain.Multicall3); err != nil {
+			return errors.New("chain.multicall3 must be a nonzero address when configured")
+		}
 	}
 	if c.Chain.ChainID == 0 {
 		return errors.New("positive chainId required")
@@ -187,6 +197,9 @@ func (c *Config) Validate() error {
 			return errors.New("provider count exceeds limit")
 		}
 		for _, p := range s.Providers {
+			if err := parse.RejectAliases(p.Config); err != nil {
+				return err
+			}
 			if p.Name == "" {
 				return errors.New("provider name required")
 			}

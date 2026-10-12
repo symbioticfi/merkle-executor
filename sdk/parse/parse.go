@@ -12,6 +12,9 @@ import (
 )
 
 func DecodeStrict(node yaml.Node, out any) error {
+	if err := RejectAliases(node); err != nil {
+		return err
+	}
 	raw, err := yaml.Marshal(&node)
 	if err != nil {
 		return errors.Errorf("encode config node: %w", err)
@@ -53,4 +56,29 @@ func Address(s string) (common.Address, error) {
 		return v, errors.New("zero address")
 	}
 	return v, nil
+}
+
+// MaxInputIndex is the shared service bound for a sparse runtime input vector.
+const MaxInputIndex = 4095
+
+func InputIndex(index uint) error {
+	if index > MaxInputIndex {
+		return errors.Errorf("input index exceeds limit of %d", MaxInputIndex)
+	}
+	return nil
+}
+
+// RejectAliases prevents operational values from changing when an anchor moves
+// without changing the node identity used by historical configuration hashes.
+// Anchor-free and unused-anchor configuration retains its original fingerprint.
+func RejectAliases(node yaml.Node) error {
+	if node.Kind == yaml.AliasNode {
+		return errors.New("YAML aliases are not supported in provider configuration")
+	}
+	for _, child := range node.Content {
+		if err := RejectAliases(*child); err != nil {
+			return err
+		}
+	}
+	return nil
 }

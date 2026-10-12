@@ -110,3 +110,49 @@ func TestTransactionHorizonDefaultsAndInvalidLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestOptionalGlobalMulticallAddress(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{{"", true}, {"0x0000000000000000000000000000000000000005", true}, {"0x0000000000000000000000000000000000000000", false}, {"not-address", false}} {
+		t.Run(tc.value, func(t *testing.T) {
+			text := validConfig
+			if tc.value != "" {
+				text = strings.Replace(text, "  chainId: 1", "  chainId: 1\n  multicall3: '"+tc.value+"'", 1)
+			}
+			_, err := Load(writeConfig(t, text))
+			if (err == nil) != tc.valid {
+				t.Fatalf("multicall address validation: %v", err)
+			}
+		})
+	}
+}
+
+func TestRecipeCacheBudgetConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name, yaml string
+		valid      bool
+	}{
+		{"default", "", true}, {"disabled", "recipeCacheBytes: 0\n", true}, {"bounded", "recipeCacheBytes: 4096\n", true}, {"negative", "recipeCacheBytes: -1\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, validConfig+tc.yaml))
+			if (err == nil) != tc.valid {
+				t.Fatalf("cache budget: %v", err)
+			}
+			if err == nil {
+				want := int64(16 << 20)
+				if tc.name == "disabled" {
+					want = 0
+				}
+				if tc.name == "bounded" {
+					want = 4096
+				}
+				if cfg.RecipeCacheBytes != want {
+					t.Fatalf("budget=%d want%d", cfg.RecipeCacheBytes, want)
+				}
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
 type Reader interface {
@@ -21,69 +22,21 @@ type Reader interface {
 // verifies both its indexed commitment and reconstructed ABI hash. Reorgs fail
 // closed. No event-supplied body is used without checking current contract state.
 func Discover(ctx context.Context, reader Reader, executor common.Address, block *big.Int) (Snapshot, Recipe, error) {
-	header, err := reader.HeaderByNumber(ctx, block)
-	if err != nil {
-		return Snapshot{}, Recipe{}, errors.Errorf("pin block: %w", err)
+	return discover(ctx, reader, executor, common.Address{}, block)
+}
+
+// DiscoverForAccount can read the configured account root with executor metadata,
+// but accepts it only after verifying that the executor names that exact account.
+func DiscoverForAccount(ctx context.Context, reader Reader, executor, expectedAccount common.Address, block *big.Int) (Snapshot, Recipe, error) {
+	if expectedAccount == (common.Address{}) {
+		return Snapshot{}, Recipe{}, errors.New("expected account must be nonzero")
 	}
-	if err = validateHeader(header, block); err != nil {
-		return Snapshot{}, Recipe{}, err
-	}
-	snapshot, err := readSnapshot(ctx, reader, executor, header)
-	if err != nil {
-		return Snapshot{}, Recipe{}, err
-	}
-	if snapshot.RecipeHash == (common.Hash{}) {
-		return Snapshot{}, Recipe{}, errors.New("executor recipe is unconfigured")
-	}
-	if snapshot.RecipeBlock > snapshot.BlockNumber {
-		return Snapshot{}, Recipe{}, errors.New("recipe block is in the future")
-	}
-	eventBlock := new(big.Int).SetUint64(snapshot.RecipeBlock)
-	eventHeader := header
-	if snapshot.RecipeBlock != snapshot.BlockNumber {
-		eventHeader, err = reader.HeaderByNumber(ctx, eventBlock)
-		if err != nil {
-			return Snapshot{}, Recipe{}, errors.Errorf("recipe block header: %w", err)
-		}
-		if err = validateHeader(eventHeader, eventBlock); err != nil {
-			return Snapshot{}, Recipe{}, err
-		}
-	}
-	eventID := executorABI.GetABI().Events["SetRecipe"].ID
-	logs, err := reader.FilterLogs(ctx, ethereum.FilterQuery{FromBlock: eventBlock, ToBlock: eventBlock, Addresses: []common.Address{executor}, Topics: [][]common.Hash{{eventID}}})
-	if err != nil {
-		return Snapshot{}, Recipe{}, errors.Errorf("read SetRecipe logs: %w", err)
-	}
-	if len(logs) == 0 {
-		return Snapshot{}, Recipe{}, errors.New("SetRecipe event missing")
-	}
-	sort.Slice(logs, func(i, j int) bool { return logs[i].Index < logs[j].Index })
-	for i, log := range logs {
-		if log.Removed || log.Address != executor || log.BlockNumber != snapshot.RecipeBlock || log.BlockHash != eventHeader.Hash() || len(log.Topics) != 2 || log.Topics[0] != eventID {
-			return Snapshot{}, Recipe{}, errors.New("invalid or noncanonical SetRecipe log")
-		}
-		if i > 0 && logs[i-1].Index == log.Index {
-			return Snapshot{}, Recipe{}, errors.New("duplicate SetRecipe log index")
-		}
-	}
-	latest := &logs[len(logs)-1]
-	if latest.Topics[1] != snapshot.RecipeHash {
-		return Snapshot{}, Recipe{}, errors.New("latest SetRecipe event differs from current commitment")
-	}
-	event, err := executorABI.UnpackSetRecipeEvent(latest)
-	if err != nil {
-		return Snapshot{}, Recipe{}, errors.Errorf("decode SetRecipe: %w", err)
-	}
-	recipe := Recipe{Queries: event.Queries, Steps: event.Steps}
-	hash, err := HashRecipe(recipe)
+	return discover(ctx, reader, executor, expectedAccount, block)
+}
+func discover(ctx context.Context, reader Reader, executor, expectedAccount common.Address, block *big.Int) (Snapshot, Recipe, error) {
+	snapshot, recipe, err := discoverForBuild(ctx, reader, executor, expectedAccount, block)
 	if err != nil {
 		return Snapshot{}, Recipe{}, err
-	}
-	if hash != snapshot.RecipeHash {
-		return Snapshot{}, Recipe{}, errors.New("SetRecipe body hash mismatch")
-	}
-	if _, err = Inspect(recipe); err != nil {
-		return Snapshot{}, Recipe{}, errors.Errorf("invalid committed recipe: %w", err)
 	}
 	if err = checkCanonical(ctx, reader, snapshot); err != nil {
 		return Snapshot{}, Recipe{}, err
@@ -91,16 +44,117 @@ func Discover(ctx context.Context, reader Reader, executor common.Address, block
 	return snapshot, recipe, nil
 }
 
-func readSnapshot(ctx context.Context, reader Reader, executor common.Address, header *types.Header) (Snapshot, error) {
+// discoverForBuild is private: only a guarded operation may defer its final fence.
+func discoverForBuild(ctx context.Context, reader Reader, executor, expectedAccount common.Address, block *big.Int) (Snapshot, Recipe, error) {
+	header, err := reader.HeaderByNumber(ctx, block)
+	if err != nil {
+		return Snapshot{}, Recipe{}, errors.Errorf("pin block: %w", err)
+	}
+	if err = validateHeader(header, block); err != nil {
+		return Snapshot{}, Recipe{}, err
+	}
+	snapshot, err := readSnapshot(ctx, reader, executor, expectedAccount, header)
+	if err != nil {
+		return Snapshot{}, Recipe{}, err
+	}
+	recipe, _, err := discoverRecipe(ctx, reader, snapshot, header)
+	return snapshot, recipe, err
+}
+
+func discoverRecipe(ctx context.Context, reader Reader, snapshot Snapshot, header *types.Header) (Recipe, common.Hash, error) {
+	if err := validateRecipeMetadata(snapshot); err != nil {
+		return Recipe{}, common.Hash{}, err
+	}
+	eventBlock := new(big.Int).SetUint64(snapshot.RecipeBlock)
+	eventID := executorABI.GetABI().Events["SetRecipe"].ID
+	query := ethereum.FilterQuery{FromBlock: eventBlock, ToBlock: eventBlock, Addresses: []common.Address{snapshot.Executor}, Topics: [][]common.Hash{{eventID}}}
+	requests := []protocolio.ReadRequest{}
+	if snapshot.RecipeBlock != snapshot.BlockNumber {
+		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: eventBlock})
+	}
+	requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadLogs, Filter: query})
+	evidence, err := protocolio.ReadGroup(ctx, reader, requests...)
+	if err != nil {
+		return Recipe{}, common.Hash{}, errors.Errorf("read recipe evidence: %w", err)
+	}
+	eventHeader := header
+	if snapshot.RecipeBlock != snapshot.BlockNumber {
+		result := evidence.At(0)
+		if result.Err != nil {
+			return Recipe{}, common.Hash{}, errors.Errorf("recipe block header: %w", result.Err)
+		}
+		eventHeader = result.Header
+		if err = validateHeader(eventHeader, eventBlock); err != nil {
+			return Recipe{}, common.Hash{}, err
+		}
+	}
+	result := evidence.At(len(requests) - 1)
+	if result.Err != nil {
+		return Recipe{}, common.Hash{}, errors.Errorf("read SetRecipe logs: %w", result.Err)
+	}
+	logs := result.Logs
+	if len(logs) == 0 {
+		return Recipe{}, common.Hash{}, errors.New("SetRecipe event missing")
+	}
+	sort.Slice(logs, func(i, j int) bool { return logs[i].Index < logs[j].Index })
+	for i, log := range logs {
+		if log.Removed || log.Address != snapshot.Executor || log.BlockNumber != snapshot.RecipeBlock || log.BlockHash != eventHeader.Hash() || len(log.Topics) != 2 || log.Topics[0] != eventID {
+			return Recipe{}, common.Hash{}, errors.New("invalid or noncanonical SetRecipe log")
+		}
+		if i > 0 && logs[i-1].Index == log.Index {
+			return Recipe{}, common.Hash{}, errors.New("duplicate SetRecipe log index")
+		}
+	}
+	latest := &logs[len(logs)-1]
+	if latest.Topics[1] != snapshot.RecipeHash {
+		return Recipe{}, common.Hash{}, errors.New("latest SetRecipe event differs from current commitment")
+	}
+	event, err := executorABI.UnpackSetRecipeEvent(latest)
+	if err != nil {
+		return Recipe{}, common.Hash{}, errors.Errorf("decode SetRecipe: %w", err)
+	}
+	recipe := Recipe{Queries: event.Queries, Steps: event.Steps}
+	hash, err := HashRecipe(recipe)
+	if err != nil {
+		return Recipe{}, common.Hash{}, err
+	}
+	if hash != snapshot.RecipeHash {
+		return Recipe{}, common.Hash{}, errors.New("SetRecipe body hash mismatch")
+	}
+	if _, err = Inspect(recipe); err != nil {
+		return Recipe{}, common.Hash{}, errors.Errorf("invalid committed recipe: %w", err)
+	}
+	return recipe, eventHeader.Hash(), nil
+}
+
+func validateRecipeMetadata(snapshot Snapshot) error {
+	if snapshot.RecipeHash == (common.Hash{}) {
+		return errors.New("executor recipe is unconfigured")
+	}
+	if snapshot.RecipeBlock > snapshot.BlockNumber {
+		return errors.New("recipe block is in the future")
+	}
+	return nil
+}
+
+func snapshotRequests(executor, expectedAccount common.Address, block *big.Int) []protocolio.ReadRequest {
+	requests := []protocolio.ReadRequest{
+		protocolio.ContractRead(executor, executorABI.PackAccount(), block, true),
+		protocolio.ContractRead(executor, executorABI.PackCaller(), block, true),
+		protocolio.ContractRead(executor, executorABI.PackRecipeHash(), block, true),
+		protocolio.ContractRead(executor, executorABI.PackRecipeBlock(), block, true),
+	}
+	if expectedAccount != (common.Address{}) {
+		requests = append(requests, protocolio.ContractRead(expectedAccount, accountABI.PackRoot(), block, true))
+	}
+	return requests
+}
+func decodeExecutorSnapshot(executor, expectedAccount common.Address, header *types.Header, call func(int) ([]byte, error)) (Snapshot, error) {
 	snapshot := Snapshot{BlockNumber: header.Number.Uint64(), BlockHash: header.Hash(), Timestamp: header.Time, Executor: executor}
 	if executor == (common.Address{}) {
 		return Snapshot{}, errors.New("zero executor address")
 	}
-	block := new(big.Int).Set(header.Number)
-	call := func(data []byte) ([]byte, error) {
-		return reader.CallContract(ctx, ethereum.CallMsg{To: &executor, Data: data}, block)
-	}
-	raw, err := call(executorABI.PackAccount())
+	raw, err := call(0)
 	if err != nil {
 		return Snapshot{}, errors.Errorf("read executor account: %w", err)
 	}
@@ -111,7 +165,10 @@ func readSnapshot(ctx context.Context, reader Reader, executor common.Address, h
 	if snapshot.Account == (common.Address{}) {
 		return Snapshot{}, errors.New("zero executor account")
 	}
-	raw, err = call(executorABI.PackCaller())
+	if expectedAccount != (common.Address{}) && snapshot.Account != expectedAccount {
+		return Snapshot{}, errors.New("executor account differs from configured account")
+	}
+	raw, err = call(1)
 	if err != nil {
 		return Snapshot{}, errors.Errorf("read caller: %w", err)
 	}
@@ -119,7 +176,7 @@ func readSnapshot(ctx context.Context, reader Reader, executor common.Address, h
 	if err != nil {
 		return Snapshot{}, errors.Errorf("decode caller: %w", err)
 	}
-	raw, err = call(executorABI.PackRecipeHash())
+	raw, err = call(2)
 	if err != nil {
 		return Snapshot{}, errors.Errorf("read recipe hash: %w", err)
 	}
@@ -128,7 +185,7 @@ func readSnapshot(ctx context.Context, reader Reader, executor common.Address, h
 		return Snapshot{}, errors.Errorf("decode recipe hash: %w", err)
 	}
 	snapshot.RecipeHash = hash
-	raw, err = call(executorABI.PackRecipeBlock())
+	raw, err = call(3)
 	if err != nil {
 		return Snapshot{}, errors.Errorf("read recipe block: %w", err)
 	}
@@ -140,7 +197,32 @@ func readSnapshot(ctx context.Context, reader Reader, executor common.Address, h
 		return Snapshot{}, errors.New("recipe block does not fit uint48")
 	}
 	snapshot.RecipeBlock = recipeBlock.Uint64()
-	raw, err = reader.CallContract(ctx, ethereum.CallMsg{To: &snapshot.Account, Data: accountABI.PackRoot()}, block)
+
+	return snapshot, nil
+}
+func readSnapshot(ctx context.Context, reader Reader, executor, expectedAccount common.Address, header *types.Header) (Snapshot, error) {
+	if executor == (common.Address{}) {
+		return Snapshot{}, errors.New("zero executor address")
+	}
+	block := new(big.Int).Set(header.Number)
+	group, err := protocolio.ReadGroup(ctx, reader, snapshotRequests(executor, expectedAccount, block)...)
+	if err != nil {
+		return Snapshot{}, errors.Errorf("read executor state: %w", err)
+	}
+	call := func(i int) ([]byte, error) { v := group.At(i); return v.Data, v.Err }
+	snapshot, err := decodeExecutorSnapshot(executor, expectedAccount, header, call)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	var raw []byte
+	if expectedAccount != (common.Address{}) {
+		raw, err = call(4)
+	} else {
+		raw, err = reader.CallContract(ctx, ethereum.CallMsg{To: &snapshot.Account, Data: accountABI.PackRoot()}, block)
+	}
+	return decodeSnapshotRoot(snapshot, raw, err)
+}
+func decodeSnapshotRoot(snapshot Snapshot, raw []byte, err error) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, errors.Errorf("read account root: %w", err)
 	}
@@ -150,6 +232,14 @@ func readSnapshot(ctx context.Context, reader Reader, executor common.Address, h
 	}
 	snapshot.Root = root
 	return snapshot, nil
+}
+func decodeCurrentSnapshot(snapshot Snapshot, header *types.Header, reads *protocolio.ReadResults) (Snapshot, error) {
+	current, err := decodeExecutorSnapshot(snapshot.Executor, snapshot.Account, header, func(i int) ([]byte, error) { v := reads.At(i); return v.Data, v.Err })
+	if err != nil {
+		return Snapshot{}, err
+	}
+	root := reads.At(4)
+	return decodeSnapshotRoot(current, root.Data, root.Err)
 }
 
 func validateHeader(header *types.Header, expected *big.Int) error {
@@ -183,20 +273,32 @@ func ValidateSnapshot(ctx context.Context, reader Reader, snapshot Snapshot, exp
 	if expectedCaller == (common.Address{}) || snapshot.Caller != expectedCaller {
 		return errors.New("snapshot caller does not match configured sender")
 	}
-	if err := checkCanonical(ctx, reader, snapshot); err != nil {
+	opening, err := protocolio.ReadGroup(ctx, reader, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(snapshot.BlockNumber)}, protocolio.ReadRequest{Kind: protocolio.ReadHeader})
+	if err != nil {
 		return err
 	}
-	header, err := reader.HeaderByNumber(ctx, nil)
-	if err != nil {
-		return errors.Errorf("read current head: %w", err)
+	original := opening.At(0)
+	if original.Err != nil {
+		return errors.Errorf("check snapshot block: %w", original.Err)
 	}
+	if err := validateHeader(original.Header, new(big.Int).SetUint64(snapshot.BlockNumber)); err != nil {
+		return err
+	}
+	if original.Header.Hash() != snapshot.BlockHash {
+		return errors.New("snapshot block was reorganized")
+	}
+	latest := opening.At(1)
+	if latest.Err != nil {
+		return errors.Errorf("read current head: %w", latest.Err)
+	}
+	header := latest.Header
 	if err = validateHeader(header, nil); err != nil {
 		return err
 	}
 	if header.Number.Uint64() < snapshot.BlockNumber {
 		return errors.New("current head precedes snapshot block")
 	}
-	current, err := readSnapshot(ctx, reader, snapshot.Executor, header)
+	current, err := readSnapshot(ctx, reader, snapshot.Executor, snapshot.Account, header)
 	if err != nil {
 		return err
 	}
@@ -208,24 +310,44 @@ func ValidateSnapshot(ctx context.Context, reader Reader, snapshot Snapshot, exp
 
 // VerifyRoles checks only assembled (not explicitly skipped) leaves at the
 // snapshot block. The leaf role belongs to the executor, never the keeper EOA.
-func VerifyRoles(ctx context.Context, reader Reader, snapshot Snapshot, leaves []common.Hash) error {
+func roleRequests(snapshot Snapshot, leaves []common.Hash) ([]common.Hash, []protocolio.ReadRequest) {
 	checked := make(map[common.Hash]bool, len(leaves))
+	unique := make([]common.Hash, 0, len(leaves))
+	requests := make([]protocolio.ReadRequest, 0, len(leaves))
 	for _, leaf := range leaves {
 		if checked[leaf] {
 			continue
 		}
 		checked[leaf] = true
-		raw, err := reader.CallContract(ctx, ethereum.CallMsg{To: &snapshot.Account, Data: accountABI.PackHasRole(leaf, snapshot.Executor)}, new(big.Int).SetUint64(snapshot.BlockNumber))
-		if err != nil {
-			return errors.Errorf("read leaf role %s: %w", leaf, err)
+		unique = append(unique, leaf)
+		requests = append(requests, protocolio.ContractRead(snapshot.Account, accountABI.PackHasRole(leaf, snapshot.Executor), new(big.Int).SetUint64(snapshot.BlockNumber), true))
+	}
+	return unique, requests
+}
+func verifyRoleResults(leaves []common.Hash, result func(int) protocolio.ReadResult) error {
+	for i, leaf := range leaves {
+		member := result(i)
+		if member.Err != nil {
+			return errors.Errorf("read leaf role %s: %w", leaf, member.Err)
 		}
-		allowed, err := accountABI.UnpackHasRole(raw)
+		allowed, err := accountABI.UnpackHasRole(member.Data)
 		if err != nil {
 			return errors.Errorf("decode leaf role %s: %w", leaf, err)
 		}
 		if !allowed {
 			return errors.Errorf("executor lacks leaf role %s", leaf)
 		}
+	}
+	return nil
+}
+func VerifyRoles(ctx context.Context, reader Reader, snapshot Snapshot, leaves []common.Hash) error {
+	unique, requests := roleRequests(snapshot, leaves)
+	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
+	if err != nil {
+		return errors.Errorf("read leaf roles: %w", err)
+	}
+	if err = verifyRoleResults(unique, reads.At); err != nil {
+		return err
 	}
 	return checkCanonical(ctx, reader, snapshot)
 }

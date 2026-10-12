@@ -3,6 +3,12 @@
 Providers are registered explicitly as `liquidlane`, `redemptions`, `securitize`,
 `merkl`, and `cowswap`, alongside the generic data providers.
 They prepare runtime inputs and replacement calldata for curator-approved actions.
+Every numerical input index, including optional provider input mappings, must be
+in `0..4095`. Inspection, assembly and provider configuration use the same bound.
+Provider configuration cannot contain YAML aliases (including merge aliases).
+Write operational values explicitly; alias-free configuration fingerprints are
+unchanged, preserving durable job recovery. Existing alias-based active jobs need
+operator investigation; the service does not rewrite their journal or identity.
 Targets, values, masks, permission proofs and instruction order remain committed by
 RecipeExecutor. A provider cannot install a missing approval or authorization leaf.
 The full recipe is simulated before submission.
@@ -18,6 +24,109 @@ network path), `apiKeyEnv` optionally names an environment variable containing a
 credential, `timeoutSeconds` defaults to 10 (1..120), and `maxResponseBytes` defaults to
 2097152 (maximum 16777216). Credentials, response bodies and complete URLs are omitted
 from request errors. Redirects are never followed. No literal API key belongs in YAML.
+
+## Read batching
+
+The production read client sends independent stages as JSON-RPC arrays, bounded
+at 256 members and 32 MiB of response data. Responses are matched by ID; missing,
+duplicate or unknown IDs, malformed aggregates and transport failures fail closed.
+There is no individual-call retry after a batch fails. Ordinary member errors stay
+attached to their getter and are consumed in the original validation order. For
+example, a paused ramp remains idle despite a speculative minimum-read failure.
+
+Optional `chain.multicall3` must name a verified nonzero deployment on the configured
+chain. With it, compatible source-reviewed getters at the same pinned block become
+one `aggregate3` call with `allowFailure: true`. An independent stage containing both
+safe and unknown getters uses one JSON array containing the aggregate plus isolated
+calls. Without the field, the same stages use JSON arrays alone. An invalid configured
+address or failed aggregate never silently falls back. Configuration remains compatible
+with existing global chain settings and does not change strategy fingerprints. Merkl's
+required provider-local `multicall3` and its migration instructions below still apply.
+
+[Source revisions, hashes and supported implementations](../api/schemas/READ_BATCHING.md)
+cover core metadata/roles, Liquid Lane, CoW, Midas, OpenEden, Figure, Noon, Pareto and
+Securitize ramp-local getters. Operators must verify custom deployments and proxy
+upgrades retain those semantics. Securitize token decimals aggregate only for the
+explicit reviewed mainnet VBILL, ARKVX, USDC and USDtb addresses. Its discovered
+liquidity-token getter and legacy settlement liquidity remain isolated. Centrifuge
+vault reads remain isolated because their implementations are not sufficiently
+verified. Arbitrary `rpc` inputs preserve `From: account`; arbitrary ERC-1271 checks
+preserve zero From. Neither executes inside Multicall or shares transient EVM state.
+
+| Read stage | Getters / RPC methods per stage | Network requests |
+| --- | --- | --- |
+| Initial recipe metadata and staged providers | 5 safe getters + independent staged calls + optional cached event header | 1 through 256 members |
+| Standalone unique account leaf roles | up to 256 safe getters | 1 per chunk, then canonical fence |
+| Preparation validation | 5 current metadata getters + unique roles + isolated simulation | 1 through 250 roles; opening and closing header stages add 2 |
+| Presend validation | 5 current metadata getters + isolated latest simulation | 1; opening and closing header stages add 2 |
+| Liquid Lane | 3 safe getters, then 6 safe getters | 2; unresolved ERC-1271 checks add 1 JSON array |
+| CoW Advance | domain, fill, account approval (3 safe getters) | 1, with later canonical fences |
+| Midas / OpenEden / Figure | 4 safe getters | 1 |
+| Centrifuge request / claim | 2 / 3 isolated getters | 1 JSON array |
+| Noon request / claim | 3 / 4 safe getters | request adds dependent role check; claim uses 1 |
+| Pareto request / queue claim / direct claim / instant claim | 12 / 12 / 14 / 11 safe getters | 1; direct claim may add dependent APR0 rate |
+| Securitize modern / legacy | 4 then 3 / 6 then 1 | 2; mixed safe and isolated calls share each stage |
+| Generic RPC provider | up to 256 isolated calls | 1 JSON array |
+| Merkl | 2 + 2N strict getters, up to 66 | 1 isolated aggregate sharing initial metadata array |
+| Account telemetry / fee context | 3 / 2 isolated RPC methods | 1 JSON array each |
+
+Wallet-only Securitize decimals and the CoW Prepare domain remain individual reads.
+Full simulations preserve their caller and isolated EVM execution while sharing a
+JSON array with metadata getters. Dependent arguments and hash-linked ancestry
+remain sequential. Closing canonical checks run after the contract reads; original
+and current block headers can share one array. No signing, transaction mutation,
+nonce admission or broadcast is batched. Complete telemetry is required before any
+account gauge changes; fee context makes no atomic head/history guarantee. Receipt
+sweeps retain every signed attempt, can accept a later owned receipt despite an
+earlier member error, and keep final canonical fences.
+
+Preparation discovers the recipe, builds provider outputs and calldata, then checks
+opening headers, current metadata, every unique active role and the pinned full
+simulation. Both the original and captured current block are checked again after all
+read chunks. Metadata is reread even at an unchanged head: a matching hash alone does
+not authenticate recovered fields or earlier number-bound RPC responses. Preparation
+reports role errors before simulation errors, then metadata errors. Opening canonical
+checks now run before those reads to pin the current metadata. Presend checks metadata
+before accepting the fresh nil/latest simulation, and rejects a mismatch between the
+plan's authenticated executor and its send destination before any RPC.
+
+Merkl plans its configured distributor reads without I/O, then the keeper puts its
+strict aggregate beside the initial metadata getters. The aggregate remains isolated
+from the global safe-getter aggregate. Provider API eligibility is checked after
+recipe/account/caller/tree validation and before consuming staged results. Batch
+backends can execute unused speculative getters, but unused member errors do not
+replace an absent-reward skip or idle result. An outer transport or malformed batch
+failure stops the attempt before API classification; it never retries individual
+calls. Legacy backends consume only eligible provider reads lazily. Providers without
+staging keep their ordinary preparation path.
+
+The optional recipe-evidence cache stores exact authenticated event bodies, keyed by
+full chain ID and executor. Every attempt rereads metadata. A warm hit additionally
+requires the same recipe hash and event block, that block's canonical hash, exact body
+hash and valid recipe structure. Changed commitments or event-block reorgs trigger
+cold discovery; a required cached-header read failure is an error. Entries are stored
+only after every preparation guard succeeds. Account/root/caller/roles and provider
+values are never cached. `recipeCacheBytes` defaults to 16777216 (16 MiB); explicit
+zero disables caching. The total conservative retained-allocation budget includes
+payloads, empty slice slots and overhead, alongside an entry limit derived from the
+configured strategy count. Oversized recipes remain uncached. Entries use FIFO
+eviction, disappear on restart, and do not change strategy fingerprints.
+
+Local HTTP fixtures measure Merkl-only `Planner.Prepare` with one active leaf and a
+distinct event block at **6 network requests cold / 5 warm**. Cold preparation reads
+initial head, metadata plus Merkl, event evidence, opening headers, combined validation
+and closing headers; a warm hit moves the cached event header into the metadata array
+and omits event-log discovery. With global Multicall, cold requests include five arrays
+and 10 outer RPC methods at an unchanged head (12 when it advances). Warm preparation
+uses four arrays and 9 or 11 methods. `Planner.Validate` stays at **3 requests**, all
+arrays, with 5 or 6 methods. The local provider-free Anvil fixture also uses **6 cold /
+5 warm requests**, with 9/8 outer methods at the same head or 11/10 across different
+heads. Getter aggregate sizes remain `[5, 7]` at the same head and `[5, 5, 2]` across
+heads; presend has one five-getter aggregate. Up to 250 unique roles fit beside five
+metadata getters and one isolated simulation in a 256-member validation group;
+larger groups check every role before closing the guards. Anvil also proves three
+caller-sensitive data reads share one HTTP array while retaining caller and isolated
+temporary state. These are local fixture measurements, not deployment or latency claims.
 
 ## Liquid Lane signed connector inventory swap
 
@@ -150,7 +259,55 @@ calls. A skipped group cannot complete a request. Except for Figure's verified
 unwrap-result binding, calldata supplied by these providers must remain unchanged
 by runtime bindings: reconciliation checks the exact prepared issuer calls.
 
+Receipt-dependent issuer providers require exclusive managed targets. A wallet
+request owns its token target; an atomic Securitize route owns its offramp;
+redemptions own their configured issuer call targets, with Figure owning both
+PRIME unwrap and wYLDS request. Another provider or static Manage action cannot
+call the same target in the same recipe. This restriction includes zero-gated
+populated slots and two calls that would both execute successfully. Separate
+strategies can perform repeated routes. Figure's ordered two-call flow and
+verified actual-output binding remain supported.
+
+Recipes with these providers cannot contain arbitrary `Call` instructions:
+a direct call can invoke account `manage` and make receipt attribution ambiguous.
+Normal `Approve`, reads, arithmetic, unrelated Manage targets, and later atomic
+payment-token transfers remain supported. Explicitly empty skipped runtime slots
+cannot execute, but a provider's own expected action cannot be skipped.
+
+These checks run before any new signing and again against durable execute bytes
+on recovery, including providers already marked complete. An old ambiguous job
+remains owned and blocked for operator investigation; its instructions, outputs,
+progress and transaction identity are not changed or silently released.
+
 ## Merkl cumulative account rewards
+
+Merkl reads distributor state through one Multicall3 `aggregate3` RPC call at the
+pinned snapshot block. The batch contains the effective root, the account's default
+recipient, and the claimed amount and recipient for each configured token: at most
+66 EVM getter calls for 32 tokens. Every subcall targets the configured distributor
+with `allowFailure: false`. RPC failures, malformed batches, missing results and
+failed getters are errors; there is no fallback to individual RPC calls.
+
+Token-specific claim recipients take precedence over the default. The default is
+fetched once in every batch and decoded only when a token has no override. An unused
+redirected or malformed default cannot override explicit account recipients. Every
+preparation refreshes the complete batch. Direct `Provider.Prepare` and legacy
+nonbatch readers skip distributor reads for absent rewards. The keeper's batch path
+may already have executed the speculative aggregate, but does not consume its member
+error when the API classifies the reward as absent.
+
+`multicall3` is a required, nonzero address. Before using a chain, verify that the
+configured address has the official Multicall3 deployment and supports `aggregate3`
+at the snapshot block. Consult the pinned [source and deployment provenance](../api/schemas/PROVENANCE.md);
+do not assume a common address exists on every chain. This read-only batching does
+not change the distributor target or authorized claim calldata in the recipe.
+
+For existing configurations, finish every active job **before upgrading the binary
+and adding `multicall3` to YAML**. This includes combined strategies whose Merkl
+provider is already complete while another provider remains active. The new field
+changes the durable configuration fingerprint; the new binary requires it and cannot
+drain an old job under its original YAML. Do not rewrite journal fingerprints or
+migrate active jobs to bypass this check.
 
 ```yaml
 - name: merkl
@@ -158,6 +315,7 @@ by runtime bindings: reconciliation checks the exact prepared issuer calls.
     http:
       url: https://api.merkl.xyz
     distributor: "0x0000000000000000000000000000000000000004"
+    multicall3: "0x0000000000000000000000000000000000000005" # replace with verified deployment
     tokens: ["0x0000000000000000000000000000000000000001"]
     proofLengths: [1]
     action: "0:0"

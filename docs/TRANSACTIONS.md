@@ -14,6 +14,9 @@ Configuration lives in `txManager`. `maxFeeGwei` is a finite positive ceiling. D
 
 `horizon` defaults: maxBlocks 6 (allowed 3–12), blockTimeMs 12000, tipFloorGwei 0.02, fullBlockTipGwei 0.1, congestedTipFloorGwei 0.2, congestedTipCapGwei 15, congestedRewardBlocks 3, congestedRewardPercentile 50, escalateAfterFullBlocks 2, stallAfterBlocks 3, gasHeadroomBps 500, fallbackGasHeadroomBps 1000. Tips must be finite, positive and ordered; windows are bounded to 64 blocks and fallback headroom to 5000 bps. Startup checks that the congested tip leaves initial base-fee headroom under the global cap.
 
+Both read and write HTTP RPC clients refuse redirects, including transaction
+submission redirects, so signed payloads stay on the configured endpoint.
+
 Read RPC handles simulation, fee history, receipts and confirmation headers. Write RPC handles nonce admission and broadcast. RPC error text is redacted but preserves a finite allowlist of nonce, fee/rejection and execution-revert classifications; original typed causes remain available for invalid-params fallback and revert decoding. No endpoint credentials or provider response text appear in lifecycle logs.
 
 The engine has no solver identity or protocol-obsolescence callback. Receipt confirmation and restoring the confirmed nonce floor are ordinary engine APIs. Merkle owns recovery after tracking ends: it polls stored variants directly, without a second passive observer, hash cache, deduplication ledger or receipt callback. The removed passive-observer settings are rejected by strict YAML. Engine gas/fee metrics account receipts found during active tracking; recovered terminal receipts are reported by journal logs and keeper outcomes, without passive-observer cost counters.

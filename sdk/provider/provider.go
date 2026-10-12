@@ -106,3 +106,13 @@ type Provider interface {
 	Prepare(ctx context.Context, snapshot Snapshot) (Output, error)
 	Advance(ctx context.Context, snapshot Snapshot, output Output, state json.RawMessage) (Progress, error)
 }
+
+// ExclusiveTargetProvider requires sole ownership of managed calls to its
+// settlement targets. Each key is a prepared action key. Hosts must validate
+// these claims against the entire immutable execute call before submission and
+// recovery, including providers whose progress was already persisted as done.
+// This conservative boundary prevents receipt evidence being reused across
+// providers or confused with static calls when the protocol has no action ID.
+type ExclusiveTargetProvider interface {
+	ExclusiveTargets() map[string]common.Address
+}

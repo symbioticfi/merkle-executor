@@ -7,8 +7,13 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
+	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
 	figure "github.com/symbioticfi/merkle-executor/api/bindings/figureyieldvault"
@@ -101,5 +106,52 @@ func TestFigureReconcilesActualUnwrapAmount(t *testing.T) {
 				t.Fatal("reconciliation changed persisted preparation")
 			}
 		})
+	}
+}
+
+func TestFigureCompositionAndActualOutputBinding(t *testing.T) {
+	cfg := issuerConfig("figure")
+	cfg.Action = "0:0"
+	cfg.SecondAction = "2:0"
+	s, reader := issuerFixture(t, cfg)
+	p := issuerProvider(t, cfg, reader)
+	out, err := p.Prepare(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	word, _ := abi.NewType("uint256", "", nil)
+	addressType, _ := abi.NewType("address", "", nil)
+	dataType, _ := abi.NewType("bytes", "", nil)
+	words, _ := abi.NewType("uint256[]", "", nil)
+	hashes, _ := abi.NewType("bytes32[]", "", nil)
+	bindings, _ := abi.NewType("uint256[][]", "", nil)
+	manageArgs := abi.Arguments{{Type: word}, {Type: hashes}, {Type: bindings}}
+	pack := func(args abi.Arguments, values ...any) []byte {
+		raw, err := args.Pack(values...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	queryArgs := abi.Arguments{{Type: addressType}, {Type: dataType}, {Type: words}, {Type: word}}
+	query := pack(queryArgs, common.HexToAddress(cfg.Target), erc20.NewERC20().PackBalanceOf(s.Account), []*big.Int{}, big.NewInt(0))
+	resultBinding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(4), 224), new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(1)))
+	first := append([]byte{9}, pack(manageArgs, big.NewInt(1), [][32]byte{{1}}, [][]*big.Int{{}})...)
+	read := append([]byte{0}, pack(abi.Arguments{{Type: word}}, big.NewInt(0))...)
+	second := append([]byte{9}, pack(manageArgs, big.NewInt(1), [][32]byte{{2}}, [][]*big.Int{{resultBinding}})...)
+	token, target := common.HexToAddress(cfg.Token), common.HexToAddress(cfg.Target)
+	runtime := [][]byte{
+		account.NewMerkleAccount().PackManage([]account.IMerkleAccountAction{{Target: token, Value: new(big.Int), Data: out.Actions[cfg.Action]}})[4:],
+		account.NewMerkleAccount().PackManage([]account.IMerkleAccountAction{{Target: target, Value: new(big.Int), Data: out.Actions[cfg.SecondAction]}})[4:],
+	}
+	calldata := executor.NewRecipeExecutor().PackExecute([][]byte{query}, [][]byte{first, read, second}, nil, runtime)
+	if err := keeper.ValidateComposition(calldata, []provider.Provider{p}); err != nil {
+		t.Fatal(err)
+	}
+	calls := []protocolio.ManagedCall{{Target: token, Data: out.Actions[cfg.Action]}, {Target: target, Data: figure.NewFigureYieldVault().PackRequestRedeem(big.NewInt(150))}}
+	s.Execution.Logs = []types.Log{figureWithdrawLog(t, s, token, 150, 100), issuerManageLog(t, s, calls)}
+	s.Execution.Logs[1].Index = 1
+	if progress, err := p.Advance(context.Background(), s, out, nil); err != nil || !progress.Done {
+		t.Fatalf("bound Figure composition failed: %+v %v", progress, err)
 	}
 }
