@@ -67,7 +67,8 @@ Independent reads use bounded JSON-RPC arrays on the read endpoint. Optional
 getters; verify that address's deployment on the configured chain before enabling
 it. Omitting the field keeps JSON batching. Arbitrary data reads and ERC-1271
 checks preserve their original caller and separate `eth_call` execution. Full
-simulations, dependent reads and final canonical fences remain ordered.
+simulations remain isolated EVM calls while sharing JSON arrays with getters.
+Dependent reads and the later closing canonical checks remain ordered.
 [Batching scopes, counts and compatibility](docs/PROVIDERS.md#read-batching).
 
 ## Permissions and runtime inputs

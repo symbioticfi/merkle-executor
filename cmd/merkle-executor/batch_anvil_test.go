@@ -89,6 +89,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesData(t *testing.T) {
 	var mu sync.Mutex
 	requests, arrays, methods := 0, 0, 0
 	var aggregateSizes []int
+	advanceAfterEvidence := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var raw json.RawMessage
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
@@ -138,7 +139,19 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesData(t *testing.T) {
 				}
 			}
 		}
+		shouldAdvance := false
+		for _, q := range batch {
+			if advanceAfterEvidence && q.Method == "eth_getLogs" {
+				shouldAdvance = true
+				advanceAfterEvidence = false
+			}
+		}
 		mu.Unlock()
+		if shouldAdvance {
+			if err := client.Client().CallContext(ctx, nil, "evm_mine"); err != nil {
+				t.Error(err)
+			}
+		}
 		proxy.ServeHTTP(w, r)
 	}))
 	defer server.Close()
@@ -155,7 +168,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesData(t *testing.T) {
 		t.Fatal(err)
 	}
 	mu.Lock()
-	if requests != 10 || arrays != 5 || methods != 12 || !reflect.DeepEqual(aggregateSizes, []int{5, 2, 5}) {
+	if requests != 6 || arrays != 5 || methods != 9 || !reflect.DeepEqual(aggregateSizes, []int{5, 7}) {
 		t.Errorf("Prepare counts requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
 	}
 	mu.Unlock()
@@ -164,8 +177,34 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesData(t *testing.T) {
 		t.Fatal(err)
 	}
 	mu.Lock()
-	if requests != 4 || arrays != 2 || methods != 5 || !reflect.DeepEqual(aggregateSizes, []int{5}) {
+	if requests != 3 || arrays != 3 || methods != 5 || !reflect.DeepEqual(aggregateSizes, []int{5}) {
 		t.Errorf("Validate counts requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
+	}
+	mu.Unlock()
+
+	reset()
+	mu.Lock()
+	advanceAfterEvidence = true
+	mu.Unlock()
+	advanced, err := planner.Prepare(ctx, keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: treePath}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(advanced.Calldata, plan.Calldata) || !reflect.DeepEqual(advanced.Leaves, plan.Leaves) {
+		t.Fatal("head advance changed authorized bytes or leaves")
+	}
+	mu.Lock()
+	if requests != 6 || arrays != 5 || methods != 11 || !reflect.DeepEqual(aggregateSizes, []int{5, 5, 2}) {
+		t.Errorf("advanced Prepare requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
+	}
+	mu.Unlock()
+	reset()
+	if err := planner.Validate(ctx, advanced); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	if requests != 3 || arrays != 3 || methods != 6 || !reflect.DeepEqual(aggregateSizes, []int{5}) {
+		t.Errorf("advanced Validate requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
 	}
 	mu.Unlock()
 	cfg := data.RPCConfig{Reads: []data.Read{

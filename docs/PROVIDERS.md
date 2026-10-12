@@ -56,7 +56,9 @@ preserve zero From. Neither executes inside Multicall or shares transient EVM st
 | Read stage | Getters / RPC methods per stage | Network requests |
 | --- | --- | --- |
 | Expected-account recipe metadata | 5 safe getters | 1 |
-| Unique account leaf roles | up to 256 safe getters | 1 per chunk, then canonical fence |
+| Standalone unique account leaf roles | up to 256 safe getters | 1 per chunk, then canonical fence |
+| Preparation validation | 5 current metadata getters + unique roles + isolated simulation | 1 through 250 roles; opening and closing header stages add 2 |
+| Presend validation | 5 current metadata getters + isolated latest simulation | 1; opening and closing header stages add 2 |
 | Liquid Lane | 3 safe getters, then 6 safe getters | 2; unresolved ERC-1271 checks add 1 JSON array |
 | CoW Advance | domain, fill, account approval (3 safe getters) | 1, with later canonical fences |
 | Midas / OpenEden / Figure | 4 safe getters | 1 |
@@ -68,23 +70,41 @@ preserve zero From. Neither executes inside Multicall or shares transient EVM st
 | Merkl | 2 + 2N strict getters, up to 66 | 1 dedicated aggregate call |
 | Account telemetry / fee context | 3 / 2 isolated RPC methods | 1 JSON array each |
 
-Wallet-only Securitize decimals, CoW Prepare domain, full simulations, dependent
-arguments, hash-linked ancestry and final canonical checks remain individual reads.
-No signing, transaction mutation, nonce admission or broadcast is batched. Complete
-telemetry is required before any account gauge changes; fee context makes no atomic
-head/history guarantee. Receipt sweeps retain every signed attempt, can accept a later
-owned receipt despite an earlier member error, and keep final canonical fences.
+Wallet-only Securitize decimals and the CoW Prepare domain remain individual reads.
+Full simulations preserve their caller and isolated EVM execution while sharing a
+JSON array with metadata getters. Dependent arguments and hash-linked ancestry
+remain sequential. Closing canonical checks run after the contract reads; original
+and current block headers can share one array. No signing, transaction mutation,
+nonce admission or broadcast is batched. Complete telemetry is required before any
+account gauge changes; fee context makes no atomic head/history guarantee. Receipt
+sweeps retain every signed attempt, can accept a later owned receipt despite an
+earlier member error, and keep final canonical fences.
+
+Preparation discovers the recipe, builds provider outputs and calldata, then checks
+opening headers, current metadata, every unique active role and the pinned full
+simulation. Both the original and captured current block are checked again after all
+read chunks. Metadata is reread even at an unchanged head: a matching hash alone does
+not authenticate recovered fields or earlier number-bound RPC responses. Preparation
+reports role errors before simulation errors, then metadata errors. Opening canonical
+checks now run before those reads to pin the current metadata. Presend checks metadata
+before accepting the fresh nil/latest simulation, and rejects a mismatch between the
+plan's authenticated executor and its send destination before any RPC.
 
 Local HTTP fixtures measure a Merkl-only successful `Planner.Prepare` with one active
-leaf and a distinct recipe-event block at **11 network requests**: discovery 4,
-Merkl 1, roles and their fence 2, simulation 1, revalidation 3. These comprise five
-JSON arrays and six single requests, carrying 13 outer RPC methods with global
-Multicall enabled. `Planner.Validate` uses **4 requests**, including two arrays and
-five outer methods. The local Anvil fixture measures the provider-free two-leaf
-case at 10 requests and executes metadata/roles through the official Multicall3
-artifact. It also proves three caller-sensitive data reads share one HTTP array
-while retaining their caller and isolated temporary state. These are local fixture
-measurements, not claims about external deployment availability or provider latency.
+leaf and a distinct recipe-event block at **7 network requests**: initial head,
+metadata, event evidence, Merkl aggregate, opening headers, combined validation, and
+closing headers. Five requests are JSON arrays. With global Multicall enabled, these
+carry 10 outer RPC methods at an unchanged head, or 12 when the latest head advances.
+`Planner.Validate` uses **3 requests**, all arrays, carrying 5 or 6 outer methods
+respectively. The local Anvil provider-free two-leaf fixture uses **6 requests**
+(five arrays), carrying 9 or 11 outer methods. Its getter aggregate sizes are `[5, 7]`
+at the same head and `[5, 5, 2]` across different heads; presend has one five-getter
+aggregate. Up to 250 unique roles fit beside five metadata getters and one isolated
+simulation in a single 256-member validation group; larger groups check every role
+across chunks before closing the guards. The Anvil fixture also proves three
+caller-sensitive data reads share one HTTP array while retaining their caller and
+isolated temporary state. These are local fixture measurements, not claims about
+external deployment availability or provider latency.
 
 ## Liquid Lane signed connector inventory swap
 

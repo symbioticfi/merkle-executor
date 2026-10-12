@@ -45,7 +45,7 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	headers := map[uint64]*types.Header{11: {Number: big.NewInt(11), Difficulty: new(big.Int), Time: 1000}, 12: {Number: big.NewInt(12), Difficulty: new(big.Int), Time: 1001}}
+	headers := map[uint64]*types.Header{11: {Number: big.NewInt(11), Difficulty: new(big.Int), Time: 1000}, 12: {Number: big.NewInt(12), Difficulty: new(big.Int), Time: 1001}, 13: {Number: big.NewInt(13), Difficulty: new(big.Int), Time: 1002}}
 	eABI := executor.NewRecipeExecutor().GetABI()
 	event := eABI.Events["SetRecipe"]
 	eventData, err := event.Inputs.NonIndexed().Pack(recipe.Queries, recipe.Steps)
@@ -119,6 +119,9 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 		return raw
 	}
 	requests, arrays, methods := 0, 0, 0
+	currentHead := uint64(12)
+	advanceAfterEvidence := false
+	simulationBlock := `"0xc"`
 	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var raw json.RawMessage
 		_ = json.NewDecoder(r.Body).Decode(&raw)
@@ -145,19 +148,34 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 			case "eth_chainId":
 				value = "0x1"
 			case "eth_getBlockByNumber":
-				n := uint64(12)
-				if string(q.Params[0]) == `"0xb"` {
-					n = 11
+				n := currentHead
+				if string(q.Params[0]) != `"latest"` {
+					var encoded string
+					_ = json.Unmarshal(q.Params[0], &encoded)
+					parsed, err := hexutil.DecodeUint64(encoded)
+					if err != nil {
+						t.Error(err)
+					}
+					n = parsed
 				}
 				value = headers[n]
 			case "eth_getLogs":
 				value = []types.Log{log}
+				if advanceAfterEvidence {
+					currentHead = 13
+				}
 			case "eth_call":
 				var call struct {
 					To    common.Address
+					From  common.Address
 					Input hexutil.Bytes
 				}
 				_ = json.Unmarshal(q.Params[0], &call)
+				if call.To == target && bytes.Equal(call.Input[:4], eABI.Methods["execute"].ID) {
+					if call.From != caller || string(q.Params[1]) != simulationBlock {
+						t.Errorf("simulation context changed caller=%s block=%s", call.From, q.Params[1])
+					}
+				}
 				value = hexutil.Bytes(contract(call.To, call.Input))
 			default:
 				t.Fatalf("unexpected RPC %s", q.Method)
@@ -191,13 +209,35 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	planner := keeper.Planner{Chain: backend, ChainID: big.NewInt(1), Caller: caller}
-	requests, arrays, methods = 0, 0, 0
-	plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []provider.Provider{p}})
-	if err != nil || requests != 11 || arrays != 5 || methods != 13 || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0].Actions["0:0"], claim) {
-		t.Fatalf("Merkl Prepare requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
-	}
-	requests, arrays, methods = 0, 0, 0
-	if err := planner.Validate(t.Context(), plan); err != nil || requests != 4 || arrays != 2 || methods != 5 {
-		t.Fatalf("Validate requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
+
+	var previous []byte
+	for _, advanced := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same", true: "advanced"}[advanced], func(t *testing.T) {
+			currentHead = 12
+			advanceAfterEvidence = advanced
+			simulationBlock = `"0xc"`
+			requests, arrays, methods = 0, 0, 0
+			plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []provider.Provider{p}})
+			wantMethods := 10
+			if advanced {
+				wantMethods = 12
+			}
+			if err != nil || requests != 7 || arrays != 5 || methods != wantMethods || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0].Actions["0:0"], claim) {
+				t.Fatalf("Merkl Prepare requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
+			}
+			if previous != nil && !bytes.Equal(previous, plan.Calldata) {
+				t.Fatal("head advance changed approved execution")
+			}
+			previous = bytes.Clone(plan.Calldata)
+			simulationBlock = `"latest"`
+			requests, arrays, methods = 0, 0, 0
+			wantMethods = 5
+			if advanced {
+				wantMethods = 6
+			}
+			if err := planner.Validate(t.Context(), plan); err != nil || requests != 3 || arrays != 3 || methods != wantMethods {
+				t.Fatalf("Validate requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
+			}
+		})
 	}
 }
