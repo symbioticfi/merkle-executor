@@ -130,6 +130,13 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	if e != nil || p.maxOut.Sign() == 0 {
 		return nil, errors.New("LL maxAmountOut must be positive uint256")
 	}
+	for _, index := range []*uint{c.AmountInInput, c.AmountOutInput} {
+		if index != nil {
+			if err := parse.InputIndex(*index); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if c.AmountInInput != nil && c.AmountOutInput != nil && *c.AmountInInput == *c.AmountOutInput {
 		return nil, errors.New("LL duplicate input index")
 	}

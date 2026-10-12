@@ -85,7 +85,10 @@ func staticFactory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider
 	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
 	}
-	for _, value := range cfg.Inputs {
+	for index, value := range cfg.Inputs {
+		if err := parse.InputIndex(index); err != nil {
+			return nil, err
+		}
 		if _, err := parse.Uint256(value); err != nil {
 			return nil, err
 		}
@@ -103,10 +106,18 @@ func rpcFactory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, e
 	}
 	seen := make(map[uint]bool)
 	for _, read := range cfg.Reads {
-		if seen[read.Input] || read.Input > 4095 {
+		if seen[read.Input] || read.Input > parse.MaxInputIndex {
 			return nil, errors.New("duplicate or excessive RPC input index")
 		}
 		seen[read.Input] = true
+	}
+
+	for _, action := range cfg.Actions {
+		for _, word := range action.Words {
+			if err := parse.InputIndex(word.Input); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return &source{rpc: &cfg, deps: deps}, nil
 }
@@ -137,6 +148,12 @@ func httpFactory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, 
 	}
 	if len(cfg.Inputs) == 0 && len(cfg.Actions) == 0 {
 		return nil, errors.New("HTTP output mappings required")
+	}
+
+	for index := range cfg.Inputs {
+		if err := parse.InputIndex(index); err != nil {
+			return nil, err
+		}
 	}
 	return &source{http: &cfg, deps: deps}, nil
 }

@@ -4,7 +4,8 @@ export GOTOOLCHAIN := go1.27.1
 PKG := github.com/symbioticfi/merkle-executor
 VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
-LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/internal/version.Commit=$(COMMIT)
+DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/internal/version.Commit=$(COMMIT) -X $(PKG)/internal/version.Date=$(DATE)
 GOLANGCI_LINT_VERSION := v2.13.2
 ABIGEN_VERSION := v1.17.5
 # The abigen CLI's swiss dependency excludes Go 1.27; service builds use 1.27.1.

@@ -134,6 +134,13 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	if e != nil {
 		return nil, e
 	}
+	for _, index := range []*uint{c.SellAmountInput, c.BuyAmountInput} {
+		if index != nil {
+			if err := parse.InputIndex(*index); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if c.SellAmountInput != nil && c.BuyAmountInput != nil && *c.SellAmountInput == *c.BuyAmountInput {
 		return nil, errors.New("CoW duplicate input index")
 	}

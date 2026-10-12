@@ -21,3 +21,13 @@ jobs:
         with:
           version: v1.8.1
       - run: make integration
+
+      - name: Verify container build metadata
+        env:
+          DOCKER_BUILDKIT: '1'
+        run: |
+          build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          docker build --secret id=merkle_sdk_read_token,env=MERKLE_SDK_READ_TOKEN \
+            --build-arg VERSION=ci --build-arg COMMIT="$GITHUB_SHA" --build-arg DATE="$build_date" \
+            -f deploy/Dockerfile -t merkle-executor:ci .
+          test "$(docker run --rm merkle-executor:ci version)" = "ci ($GITHUB_SHA, $build_date)"

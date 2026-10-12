@@ -230,3 +230,59 @@ func TestRPCStartupCancellationRetainsIdentityWithoutEndpointDetails(t *testing.
 		t.Fatalf("startup cancellation was not safely preserved: %v", err)
 	}
 }
+
+func TestRPCNeverFollowsReadOrSubmissionRedirects(t *testing.T) {
+	for _, mode := range []string{"read identity", "write identity", "read call", "submission"} {
+		t.Run(mode, func(t *testing.T) {
+			target := newRPCFixture(t, "0x1")
+			source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request rpcRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					return
+				}
+				redirect := mode == "read identity" || mode == "write identity" || mode == "read call" && request.Method == "eth_call" || mode == "submission" && request.Method == "eth_sendRawTransaction"
+				if redirect {
+					http.Redirect(w, r, target.server.URL+"/private-redirect-path", http.StatusTemporaryRedirect)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": "0x1"})
+			}))
+			defer source.Close()
+			readURL, writeURL := source.URL, ""
+			if mode == "write identity" || mode == "submission" {
+				readURL = newRPCFixture(t, "0x1").server.URL
+				writeURL = source.URL
+			}
+			client, err := Dial(context.Background(), readURL, writeURL, big.NewInt(1))
+			if mode == "read identity" || mode == "write identity" {
+				if err == nil {
+					client.Close()
+					t.Error("redirected chain identity accepted")
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer client.Close()
+				if mode == "submission" {
+					err = client.SendTransaction(context.Background(), testTransaction())
+				} else {
+					a := common.HexToAddress("0x123")
+					_, err = client.CallContract(context.Background(), ethereum.CallMsg{To: &a}, nil)
+				}
+				if err == nil {
+					t.Error("RPC followed redirect")
+				}
+			}
+			if err != nil && strings.Contains(err.Error(), "private-redirect-path") {
+				t.Fatal("redirect URL leaked")
+			}
+			target.mu.Lock()
+			defer target.mu.Unlock()
+			if len(target.requests) != 0 {
+				t.Fatalf("redirect target received %d requests", len(target.requests))
+			}
+		})
+	}
+}

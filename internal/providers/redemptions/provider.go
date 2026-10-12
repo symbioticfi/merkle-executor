@@ -133,7 +133,7 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 		return nil, errors.New("requestId applies only to Noon claims")
 	}
 	for _, index := range []*uint{cfg.AmountInput, cfg.IntermediateInput} {
-		if index != nil && *index > 4095 {
+		if index != nil && *index > parse.MaxInputIndex {
 			return nil, errors.New("redemption input index exceeds limit")
 		}
 	}
@@ -238,3 +238,19 @@ func (p *Provider) checkAddress(ctx context.Context, s provider.Snapshot, target
 }
 
 func idle(reason string) error { return errors.Errorf("%w: %s", provider.ErrNotReady, reason) }
+
+// ExclusiveTargets preserves each issuer action's receipt identity across
+// providers and restarts. Figure owns both calls, including its bound output.
+func (p *Provider) ExclusiveTargets() map[string]common.Address {
+	if p.cfg.Family == "figure" {
+		return map[string]common.Address{p.cfg.Action: p.token, p.cfg.SecondAction: p.target}
+	}
+	target := p.target
+	if p.cfg.Family == "pareto" && !strings.HasPrefix(p.cfg.Mode, "queue-") {
+		target = p.cdo
+	}
+	if p.cfg.Family == "noon" && p.cfg.Mode == "request" {
+		target = p.token
+	}
+	return map[string]common.Address{p.cfg.Action: target}
+}

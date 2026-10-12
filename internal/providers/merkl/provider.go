@@ -94,6 +94,9 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	seenInputs := map[uint]bool{}
 	for _, indices := range [][]uint{c.AmountInputs, c.ClaimableInputs} {
 		for _, i := range indices {
+			if err := parse.InputIndex(i); err != nil {
+				return nil, err
+			}
 			if seenInputs[i] {
 				return nil, errors.New("Merkl duplicate input index")
 			}
@@ -223,6 +226,8 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	amounts := make([]*big.Int, len(p.tokens))
 	proofs := make([][][32]byte, len(p.tokens))
 	inputs := map[uint]string{}
+	var defaultRecipient common.Address
+	defaultLoaded := false
 	for i, t := range p.tokens {
 		reward := selected[t]
 		amount, e := parse.Uint256(reward.Amount)
@@ -274,14 +279,18 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 			return provider.Output{}, errors.New("invalid Merkl claim recipient response")
 		}
 		if recipient == (common.Address{}) {
-			raw, e = call(a.PackClaimRecipient(s.Account, common.Address{}))
-			if e != nil {
-				return provider.Output{}, e
+			if !defaultLoaded {
+				raw, e = call(a.PackClaimRecipient(s.Account, common.Address{}))
+				if e != nil {
+					return provider.Output{}, e
+				}
+				defaultRecipient, e = a.UnpackClaimRecipient(raw)
+				if e != nil {
+					return provider.Output{}, errors.New("invalid Merkl default claim recipient response")
+				}
+				defaultLoaded = true
 			}
-			recipient, e = a.UnpackClaimRecipient(raw)
-			if e != nil {
-				return provider.Output{}, errors.New("invalid Merkl default claim recipient response")
-			}
+			recipient = defaultRecipient
 		}
 		if recipient != (common.Address{}) && recipient != s.Account {
 			return provider.Output{}, errors.New("Merkl distributor would redirect rewards away from account")

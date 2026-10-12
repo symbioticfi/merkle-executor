@@ -103,6 +103,13 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 			return nil, errors.New("Securitize minOutput must be positive uint256")
 		}
 	}
+	for _, index := range []*uint{c.AmountInput, c.MinOutputInput} {
+		if index != nil {
+			if err := parse.InputIndex(*index); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if c.AmountInput != nil && c.MinOutputInput != nil && *c.AmountInput == *c.MinOutputInput {
 		return nil, errors.New("duplicate Securitize input assignment")
 	}
@@ -372,4 +379,14 @@ func (p *Provider) redemptionEvent(s provider.Snapshot) (*big.Int, error) {
 		return nil, errors.New("Securitize redemption completion event missing")
 	}
 	return received, nil
+}
+
+// ExclusiveTargets rejects repeated wallet token / offramp routes, including
+// static and other-provider actions, before their receipts become ambiguous.
+func (p *Provider) ExclusiveTargets() map[string]common.Address {
+	target := p.target
+	if p.cfg.Mode == "wallet" {
+		target = p.token
+	}
+	return map[string]common.Address{p.cfg.Action: target}
 }

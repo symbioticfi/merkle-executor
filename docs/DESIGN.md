@@ -58,6 +58,10 @@ providers match exact account `Manage` calls in receipt order; missing or skippe
 actions do not count as executed. A request finishes as `requested`, releasing the
 account lock while issuer-owned state retains the pending withdrawal. Independent
 claim strategies read current claim eligibility. Submission is never labelled paid.
+Issuer providers declare exclusive managed targets for receipt attribution. The
+keeper checks the complete immutable execute composition before signing and on
+recovery, retaining completed providers' claims. Repeated/static calls to those
+targets and arbitrary Call steps are unsupported; see [provider restrictions](PROVIDERS.md).
 Existing journals without evidence remain readable; new issuer reconciliation
 requires evidence and does not infer it from a successful transaction alone.
 
@@ -88,3 +92,8 @@ Use contract-derived ABI/hash fixtures, generated binding checks, provider httpt
 fixtures, crash/restart and nonce/receipt tests, and a local Anvil full-execute test.
 Run build, race tests, vet and lint. Local validation does not establish production
 readiness for an unconfigured issuer, exchange API or deployed permission tree.
+
+Global recovery/state failures emit one sanitized keeper error and an iteration
+metric with `strategy="_global"`, `outcome="error"`. Strategy errors retain their
+own observations without a duplicate global event. Recovery failures remain
+retryable and never trigger submission on the failing iteration.

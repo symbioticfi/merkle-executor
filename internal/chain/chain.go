@@ -5,6 +5,7 @@ import (
 	"context"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"math/big"
+	"net/http"
 	"strings"
 	"time"
 
@@ -12,19 +13,29 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 )
 
 type Client struct {
 	*ethclient.Client
 	write *ethclient.Client
+	http  *http.Client
 }
 
 func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int) (*Client, error) {
 	if expected == nil || expected.Sign() <= 0 {
 		return nil, errors.New("positive expected chain ID required")
 	}
-	read, err := ethclient.DialContext(ctx, readURL)
+
+	httpClient := &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	connected := false
+	defer func() {
+		if !connected {
+			httpClient.CloseIdleConnections()
+		}
+	}()
+	read, err := dialHTTP(ctx, readURL, httpClient)
 	if err != nil {
 		return nil, rpcFailure("connect read RPC", err)
 	}
@@ -39,7 +50,7 @@ func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int) (*Cl
 	}
 	write := read
 	if writeURL != "" && writeURL != readURL {
-		write, err = ethclient.DialContext(ctx, writeURL)
+		write, err = dialHTTP(ctx, writeURL, httpClient)
 		if err != nil {
 			read.Close()
 			return nil, rpcFailure("connect write RPC", err)
@@ -56,9 +67,20 @@ func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int) (*Cl
 			return nil, errors.New("write RPC chain identity mismatch")
 		}
 	}
-	return &Client{Client: read, write: write}, nil
+	connected = true
+	return &Client{Client: read, write: write, http: httpClient}, nil
+}
+func dialHTTP(ctx context.Context, endpoint string, client *http.Client) (*ethclient.Client, error) {
+	connection, err := rpc.DialOptions(ctx, endpoint, rpc.WithHTTPClient(client))
+	if err != nil {
+		return nil, err
+	}
+	return ethclient.NewClient(connection), nil
 }
 func (c *Client) Close() {
+	if c.http != nil {
+		defer c.http.CloseIdleConnections()
+	}
 	c.Client.Close()
 	if c.write != c.Client {
 		c.write.Close()

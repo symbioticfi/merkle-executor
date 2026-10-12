@@ -187,6 +187,9 @@ func (c *Config) Validate() error {
 			return errors.New("provider count exceeds limit")
 		}
 		for _, p := range s.Providers {
+			if err := parse.RejectAliases(p.Config); err != nil {
+				return err
+			}
 			if p.Name == "" {
 				return errors.New("provider name required")
 			}

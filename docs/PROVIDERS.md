@@ -3,6 +3,12 @@
 Providers are registered explicitly as `liquidlane`, `redemptions`, `securitize`,
 `merkl`, and `cowswap`, alongside the generic data providers.
 They prepare runtime inputs and replacement calldata for curator-approved actions.
+Every numerical input index, including optional provider input mappings, must be
+in `0..4095`. Inspection, assembly and provider configuration use the same bound.
+Provider configuration cannot contain YAML aliases (including merge aliases).
+Write operational values explicitly; alias-free configuration fingerprints are
+unchanged, preserving durable job recovery. Existing alias-based active jobs need
+operator investigation; the service does not rewrite their journal or identity.
 Targets, values, masks, permission proofs and instruction order remain committed by
 RecipeExecutor. A provider cannot install a missing approval or authorization leaf.
 The full recipe is simulated before submission.
@@ -150,7 +156,31 @@ calls. A skipped group cannot complete a request. Except for Figure's verified
 unwrap-result binding, calldata supplied by these providers must remain unchanged
 by runtime bindings: reconciliation checks the exact prepared issuer calls.
 
+Receipt-dependent issuer providers require exclusive managed targets. A wallet
+request owns its token target; an atomic Securitize route owns its offramp;
+redemptions own their configured issuer call targets, with Figure owning both
+PRIME unwrap and wYLDS request. Another provider or static Manage action cannot
+call the same target in the same recipe. This restriction includes zero-gated
+populated slots and two calls that would both execute successfully. Separate
+strategies can perform repeated routes. Figure's ordered two-call flow and
+verified actual-output binding remain supported.
+
+Recipes with these providers cannot contain arbitrary `Call` instructions:
+a direct call can invoke account `manage` and make receipt attribution ambiguous.
+Normal `Approve`, reads, arithmetic, unrelated Manage targets, and later atomic
+payment-token transfers remain supported. Explicitly empty skipped runtime slots
+cannot execute, but a provider's own expected action cannot be skipped.
+
+These checks run before any new signing and again against durable execute bytes
+on recovery, including providers already marked complete. An old ambiguous job
+remains owned and blocked for operator investigation; its instructions, outputs,
+progress and transaction identity are not changed or silently released.
+
 ## Merkl cumulative account rewards
+
+Merkl's token-specific claim recipients take precedence over the default. The
+fallback recipient is read once, lazily, per pinned preparation; it is refreshed
+for every new preparation. A 32-token all-fallback batch uses 66 contract reads.
 
 ```yaml
 - name: merkl
