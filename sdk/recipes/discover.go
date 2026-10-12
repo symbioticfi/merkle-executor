@@ -34,6 +34,18 @@ func DiscoverForAccount(ctx context.Context, reader Reader, executor, expectedAc
 	return discover(ctx, reader, executor, expectedAccount, block)
 }
 func discover(ctx context.Context, reader Reader, executor, expectedAccount common.Address, block *big.Int) (Snapshot, Recipe, error) {
+	snapshot, recipe, err := discoverForBuild(ctx, reader, executor, expectedAccount, block)
+	if err != nil {
+		return Snapshot{}, Recipe{}, err
+	}
+	if err = checkCanonical(ctx, reader, snapshot); err != nil {
+		return Snapshot{}, Recipe{}, err
+	}
+	return snapshot, recipe, nil
+}
+
+// discoverForBuild is private: only a guarded operation may defer its final fence.
+func discoverForBuild(ctx context.Context, reader Reader, executor, expectedAccount common.Address, block *big.Int) (Snapshot, Recipe, error) {
 	header, err := reader.HeaderByNumber(ctx, block)
 	if err != nil {
 		return Snapshot{}, Recipe{}, errors.Errorf("pin block: %w", err)
@@ -110,18 +122,10 @@ func discover(ctx context.Context, reader Reader, executor, expectedAccount comm
 	if _, err = Inspect(recipe); err != nil {
 		return Snapshot{}, Recipe{}, errors.Errorf("invalid committed recipe: %w", err)
 	}
-	if err = checkCanonical(ctx, reader, snapshot); err != nil {
-		return Snapshot{}, Recipe{}, err
-	}
 	return snapshot, recipe, nil
 }
 
-func readSnapshot(ctx context.Context, reader Reader, executor, expectedAccount common.Address, header *types.Header) (Snapshot, error) {
-	snapshot := Snapshot{BlockNumber: header.Number.Uint64(), BlockHash: header.Hash(), Timestamp: header.Time, Executor: executor}
-	if executor == (common.Address{}) {
-		return Snapshot{}, errors.New("zero executor address")
-	}
-	block := new(big.Int).Set(header.Number)
+func snapshotRequests(executor, expectedAccount common.Address, block *big.Int) []protocolio.ReadRequest {
 	requests := []protocolio.ReadRequest{
 		protocolio.ContractRead(executor, executorABI.PackAccount(), block, true),
 		protocolio.ContractRead(executor, executorABI.PackCaller(), block, true),
@@ -131,11 +135,13 @@ func readSnapshot(ctx context.Context, reader Reader, executor, expectedAccount 
 	if expectedAccount != (common.Address{}) {
 		requests = append(requests, protocolio.ContractRead(expectedAccount, accountABI.PackRoot(), block, true))
 	}
-	group, err := protocolio.ReadGroup(ctx, reader, requests...)
-	if err != nil {
-		return Snapshot{}, errors.Errorf("read executor state: %w", err)
+	return requests
+}
+func decodeExecutorSnapshot(executor, expectedAccount common.Address, header *types.Header, call func(int) ([]byte, error)) (Snapshot, error) {
+	snapshot := Snapshot{BlockNumber: header.Number.Uint64(), BlockHash: header.Hash(), Timestamp: header.Time, Executor: executor}
+	if executor == (common.Address{}) {
+		return Snapshot{}, errors.New("zero executor address")
 	}
-	call := func(index int) ([]byte, error) { result := group.At(index); return result.Data, result.Err }
 	raw, err := call(0)
 	if err != nil {
 		return Snapshot{}, errors.Errorf("read executor account: %w", err)
@@ -179,11 +185,32 @@ func readSnapshot(ctx context.Context, reader Reader, executor, expectedAccount 
 		return Snapshot{}, errors.New("recipe block does not fit uint48")
 	}
 	snapshot.RecipeBlock = recipeBlock.Uint64()
+
+	return snapshot, nil
+}
+func readSnapshot(ctx context.Context, reader Reader, executor, expectedAccount common.Address, header *types.Header) (Snapshot, error) {
+	if executor == (common.Address{}) {
+		return Snapshot{}, errors.New("zero executor address")
+	}
+	block := new(big.Int).Set(header.Number)
+	group, err := protocolio.ReadGroup(ctx, reader, snapshotRequests(executor, expectedAccount, block)...)
+	if err != nil {
+		return Snapshot{}, errors.Errorf("read executor state: %w", err)
+	}
+	call := func(i int) ([]byte, error) { v := group.At(i); return v.Data, v.Err }
+	snapshot, err := decodeExecutorSnapshot(executor, expectedAccount, header, call)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	var raw []byte
 	if expectedAccount != (common.Address{}) {
 		raw, err = call(4)
 	} else {
 		raw, err = reader.CallContract(ctx, ethereum.CallMsg{To: &snapshot.Account, Data: accountABI.PackRoot()}, block)
 	}
+	return decodeSnapshotRoot(snapshot, raw, err)
+}
+func decodeSnapshotRoot(snapshot Snapshot, raw []byte, err error) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, errors.Errorf("read account root: %w", err)
 	}
@@ -193,6 +220,14 @@ func readSnapshot(ctx context.Context, reader Reader, executor, expectedAccount 
 	}
 	snapshot.Root = root
 	return snapshot, nil
+}
+func decodeCurrentSnapshot(snapshot Snapshot, header *types.Header, reads *protocolio.ReadResults) (Snapshot, error) {
+	current, err := decodeExecutorSnapshot(snapshot.Executor, snapshot.Account, header, func(i int) ([]byte, error) { v := reads.At(i); return v.Data, v.Err })
+	if err != nil {
+		return Snapshot{}, err
+	}
+	root := reads.At(4)
+	return decodeSnapshotRoot(current, root.Data, root.Err)
 }
 
 func validateHeader(header *types.Header, expected *big.Int) error {
@@ -263,7 +298,7 @@ func ValidateSnapshot(ctx context.Context, reader Reader, snapshot Snapshot, exp
 
 // VerifyRoles checks only assembled (not explicitly skipped) leaves at the
 // snapshot block. The leaf role belongs to the executor, never the keeper EOA.
-func VerifyRoles(ctx context.Context, reader Reader, snapshot Snapshot, leaves []common.Hash) error {
+func roleRequests(snapshot Snapshot, leaves []common.Hash) ([]common.Hash, []protocolio.ReadRequest) {
 	checked := make(map[common.Hash]bool, len(leaves))
 	unique := make([]common.Hash, 0, len(leaves))
 	requests := make([]protocolio.ReadRequest, 0, len(leaves))
@@ -275,23 +310,32 @@ func VerifyRoles(ctx context.Context, reader Reader, snapshot Snapshot, leaves [
 		unique = append(unique, leaf)
 		requests = append(requests, protocolio.ContractRead(snapshot.Account, accountABI.PackHasRole(leaf, snapshot.Executor), new(big.Int).SetUint64(snapshot.BlockNumber), true))
 	}
-	group, err := protocolio.ReadGroup(ctx, reader, requests...)
-	if err != nil {
-		return errors.Errorf("read leaf roles: %w", err)
-	}
-	for i, leaf := range unique {
-		result := group.At(i)
-		raw, err := result.Data, result.Err
-		if err != nil {
-			return errors.Errorf("read leaf role %s: %w", leaf, err)
+	return unique, requests
+}
+func verifyRoleResults(leaves []common.Hash, result func(int) protocolio.ReadResult) error {
+	for i, leaf := range leaves {
+		member := result(i)
+		if member.Err != nil {
+			return errors.Errorf("read leaf role %s: %w", leaf, member.Err)
 		}
-		allowed, err := accountABI.UnpackHasRole(raw)
+		allowed, err := accountABI.UnpackHasRole(member.Data)
 		if err != nil {
 			return errors.Errorf("decode leaf role %s: %w", leaf, err)
 		}
 		if !allowed {
 			return errors.Errorf("executor lacks leaf role %s", leaf)
 		}
+	}
+	return nil
+}
+func VerifyRoles(ctx context.Context, reader Reader, snapshot Snapshot, leaves []common.Hash) error {
+	unique, requests := roleRequests(snapshot, leaves)
+	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
+	if err != nil {
+		return errors.Errorf("read leaf roles: %w", err)
+	}
+	if err = verifyRoleResults(unique, reads.At); err != nil {
+		return err
 	}
 	return checkCanonical(ctx, reader, snapshot)
 }

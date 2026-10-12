@@ -45,61 +45,48 @@ type Planner struct {
 
 func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) {
 	var plan Plan
-	snap, recipe, err := recipes.DiscoverForAccount(ctx, p.Chain, common.HexToAddress(strategy.Config.Executor), common.HexToAddress(strategy.Config.Account), nil)
-	if err != nil {
-		return plan, errors.Errorf("discover recipe: %w", err)
-	}
-	if snap.Caller != p.Caller || snap.Account != common.HexToAddress(strategy.Config.Account) {
-		return plan, errors.New("configured caller/account mismatch")
-	}
-	if strategy.Config.RecipeHash != "" && snap.RecipeHash != common.HexToHash(strategy.Config.RecipeHash) {
-		return plan, errors.New("configured recipe hash mismatch")
-	}
-	tree, err := recipes.LoadTree(strategy.Config.Tree)
-	if err != nil {
-		return plan, errors.Errorf("load permission tree: %w", err)
-	}
-	if tree.Root != snap.Root {
-		return plan, errors.New("permission tree does not match active account root")
-	}
-	if tree.ChainID != nil && tree.ChainID.Cmp(p.ChainID) != 0 {
-		return plan, errors.New("permission tree chain mismatch")
-	}
-	if tree.Account != nil && *tree.Account != snap.Account {
-		return plan, errors.New("permission tree account mismatch")
-	}
-	plan.Recipe = snap
-	plan.Snapshot = provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snap.BlockNumber), BlockHash: snap.BlockHash, Timestamp: snap.Timestamp, Executor: snap.Executor, Account: snap.Account, Caller: snap.Caller, RecipeHash: snap.RecipeHash, Root: snap.Root}
-	inputs := make(map[uint]string)
-	actions := make(map[string]hexutil.Bytes)
-	var skips []uint
-	for _, pr := range strategy.Providers {
-		out, err := pr.Prepare(ctx, plan.Snapshot)
+	err := recipes.PrepareExecution(ctx, p.Chain, common.HexToAddress(strategy.Config.Executor), common.HexToAddress(strategy.Config.Account), p.Caller, func(snap recipes.Snapshot, recipe recipes.Recipe) ([]byte, []common.Hash, error) {
+		if strategy.Config.RecipeHash != "" && snap.RecipeHash != common.HexToHash(strategy.Config.RecipeHash) {
+			return nil, nil, errors.New("configured recipe hash mismatch")
+		}
+		tree, err := recipes.LoadTree(strategy.Config.Tree)
 		if err != nil {
-			return plan, errors.Errorf("resolve runtime: %w", err)
+			return nil, nil, errors.Errorf("load permission tree: %w", err)
 		}
-		if err := merge(inputs, actions, &skips, out); err != nil {
-			return plan, err
+		if tree.Root != snap.Root {
+			return nil, nil, errors.New("permission tree does not match active account root")
 		}
-		plan.Outputs = append(plan.Outputs, out)
-	}
-	plan.Calldata, plan.Leaves, err = recipes.Assemble(recipe, tree, inputs, actions, skips)
-	if err != nil {
-		return plan, errors.Errorf("assemble runtime: %w", err)
-	}
-	if err := ValidateComposition(plan.Calldata, strategy.Providers); err != nil {
-		return plan, err
-	}
-	if err := recipes.VerifyRoles(ctx, p.Chain, snap, plan.Leaves); err != nil {
-		return plan, err
-	}
-	if _, err := p.Chain.CallContract(ctx, ethereum.CallMsg{From: p.Caller, To: &snap.Executor, Data: plan.Calldata}, plan.Snapshot.BlockNumber); err != nil {
-		return plan, errors.New("full recipe simulation failed")
-	}
-	if err := recipes.ValidateSnapshot(ctx, p.Chain, snap, p.Caller); err != nil {
-		return plan, err
-	}
-	return plan, nil
+		if tree.ChainID != nil && tree.ChainID.Cmp(p.ChainID) != 0 {
+			return nil, nil, errors.New("permission tree chain mismatch")
+		}
+		if tree.Account != nil && *tree.Account != snap.Account {
+			return nil, nil, errors.New("permission tree account mismatch")
+		}
+		plan.Recipe = snap
+		plan.Snapshot = provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snap.BlockNumber), BlockHash: snap.BlockHash, Timestamp: snap.Timestamp, Executor: snap.Executor, Account: snap.Account, Caller: snap.Caller, RecipeHash: snap.RecipeHash, Root: snap.Root}
+		inputs := make(map[uint]string)
+		actions := make(map[string]hexutil.Bytes)
+		var skips []uint
+		for _, pr := range strategy.Providers {
+			out, err := pr.Prepare(ctx, plan.Snapshot)
+			if err != nil {
+				return nil, nil, errors.Errorf("resolve runtime: %w", err)
+			}
+			if err := merge(inputs, actions, &skips, out); err != nil {
+				return nil, nil, err
+			}
+			plan.Outputs = append(plan.Outputs, out)
+		}
+		plan.Calldata, plan.Leaves, err = recipes.Assemble(recipe, tree, inputs, actions, skips)
+		if err != nil {
+			return nil, nil, errors.Errorf("assemble runtime: %w", err)
+		}
+		if err := ValidateComposition(plan.Calldata, strategy.Providers); err != nil {
+			return nil, nil, err
+		}
+		return plan.Calldata, plan.Leaves, nil
+	})
+	return plan, err
 }
 
 func merge(inputs map[uint]string, actions map[string]hexutil.Bytes, skips *[]uint, out provider.Output) error {
@@ -131,14 +118,10 @@ func merge(inputs map[uint]string, actions map[string]hexutil.Bytes, skips *[]ui
 
 // Validate re-simulates immutable prepared bytes at current state before admission.
 func (p *Planner) Validate(ctx context.Context, plan Plan) error {
-	if err := recipes.ValidateSnapshot(ctx, p.Chain, plan.Recipe, p.Caller); err != nil {
-		return err
+	if plan.Snapshot.Executor != plan.Recipe.Executor {
+		return errors.New("prepared plan executor mismatch")
 	}
-	_, err := p.Chain.CallContract(ctx, ethereum.CallMsg{From: p.Caller, To: &plan.Snapshot.Executor, Data: plan.Calldata}, nil)
-	if err != nil {
-		return errors.New("prepared recipe no longer simulates")
-	}
-	return nil
+	return recipes.ValidateExecution(ctx, p.Chain, plan.Recipe, p.Caller, plan.Calldata)
 }
 
 func (p *Planner) ConfirmedSnapshot(ctx context.Context, original provider.Snapshot) (provider.Snapshot, error) {

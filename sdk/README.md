@@ -62,7 +62,25 @@ that do not need speculative results. Missing members invalidate the whole group
 
 `recipes.DiscoverForAccount` groups executor metadata with the configured account
 root and verifies the returned account before accepting that root. Existing
-`Discover` remains compatible and reads the discovered root afterward. Role checks
-deduplicate leaves. Canonical fences and full caller-bound simulations remain
-separate reads. Submission batches initial owned-attempt receipts and opening
-confirmation evidence while retaining nonce ownership and durable transitions.
+`Discover` remains compatible and reads the discovered root afterward. Standalone
+discovery, role checks and `ValidateSnapshot` retain their own canonical guards.
+Role checks deduplicate leaves.
+
+`recipes.PrepareExecution` encloses discovery, a preparation-only build callback,
+and execution validation. The callback may read provider data and assemble authorized
+calldata; it must not sign, persist or mutate external state, and its results remain
+provisional until the helper succeeds. Validation groups current metadata, original-pin
+roles and an isolated caller-bound full simulation, then checks both captured block
+hashes after all chunks. Through 250 unique roles this fits one 256-member group.
+Roles are validated before simulation, then current metadata; opening canonical
+checks run first to pin the current reads. Metadata is always reread, including when
+the head hash is unchanged.
+
+`recipes.ValidateExecution` groups current metadata with an isolated nil/latest
+simulation and closes both block guards afterward. Metadata errors take priority over
+simulation errors. `keeper.Planner.Validate` rejects inconsistent discovery and send
+executors before any reads. Full simulations can share a JSON array with getters but
+never share Multicall execution or temporary EVM state. The later closing header phase
+can batch both original and current headers. Submission batches initial owned-attempt
+receipts and opening confirmation evidence while retaining nonce ownership and durable
+transitions.
