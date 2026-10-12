@@ -49,7 +49,7 @@ func rewardBatch(t *testing.T) ([]wire.MerklReward, common.Hash, [][][32]byte) {
 	return rows, levels[len(levels)-1][0], proofs
 }
 func TestDefaultRecipientReadOncePerPinnedPreparation(t *testing.T) {
-	for _, mode := range []string{"missing default", "account default", "overridden", "mixed", "redirected", "malformed default"} {
+	for _, mode := range []string{"missing default", "account default", "overridden", "unused malformed default", "mixed", "redirected", "malformed default"} {
 		t.Run(mode, func(t *testing.T) {
 			rows, root, proofs := rewardBatch(t)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -61,7 +61,6 @@ func TestDefaultRecipientReadOncePerPinnedPreparation(t *testing.T) {
 			calls, defaults := 0, 0
 			pinned := big.NewInt(12)
 			chain := reader(func(_ context.Context, m ethereum.CallMsg, b *big.Int) ([]byte, error) {
-				calls++
 				if b.Cmp(pinned) != 0 {
 					t.Fatal("read escaped pinned snapshot")
 				}
@@ -82,7 +81,7 @@ func TestDefaultRecipientReadOncePerPinnedPreparation(t *testing.T) {
 					token := args[1].(common.Address)
 					if token == (common.Address{}) {
 						defaults++
-						if mode == "malformed default" {
+						if mode == "malformed default" || mode == "unused malformed default" {
 							return []byte{1}, nil
 						}
 						if pinned.Int64() == 13 || mode == "redirected" {
@@ -91,7 +90,7 @@ func TestDefaultRecipientReadOncePerPinnedPreparation(t *testing.T) {
 						if mode == "account default" {
 							return method.Outputs.Pack(addr(3))
 						}
-					} else if mode == "overridden" || mode == "mixed" && token.Big().Int64()%2 == 0 {
+					} else if mode == "overridden" || mode == "unused malformed default" || mode == "mixed" && token.Big().Int64()%2 == 0 {
 						return method.Outputs.Pack(addr(3))
 					}
 					return method.Outputs.Pack(common.Address{})
@@ -100,7 +99,7 @@ func TestDefaultRecipientReadOncePerPinnedPreparation(t *testing.T) {
 				return nil, nil
 			})
 			tokens, users, amounts := make([]common.Address, 32), make([]common.Address, 32), make([]*big.Int, 32)
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Action: "0:0"}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Action: "0:0"}
 			for i, row := range rows {
 				tokens[i] = common.HexToAddress(row.Token.Address)
 				users[i] = addr(3)
@@ -110,12 +109,17 @@ func TestDefaultRecipientReadOncePerPinnedPreparation(t *testing.T) {
 			}
 			payload := a.PackClaim(users, tokens, amounts, proofs)
 			cfg.CalldataBytes = len(payload)
-			p, err := Factory(node(t, cfg), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
+			batch := multicallReader(t, tokens, chain)
+			outer := reader(func(ctx context.Context, m ethereum.CallMsg, b *big.Int) ([]byte, error) {
+				calls++
+				return batch(ctx, m, b)
+			})
+			p, err := Factory(node(t, cfg), providerRegistry.Deps{Chain: outer, HTTP: srv.Client()})
 			if err != nil {
 				t.Fatal(err)
 			}
 			snap := provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: new(big.Int).Set(pinned), Account: addr(3), Timestamp: 1000}
-			_, err = p.Prepare(context.Background(), snap)
+			out, err := p.Prepare(context.Background(), snap)
 			if mode == "redirected" || mode == "malformed default" {
 				if err == nil {
 					t.Fatal("invalid default recipient accepted")
@@ -125,10 +129,11 @@ func TestDefaultRecipientReadOncePerPinnedPreparation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, wantDefault := 66, 1
-			if mode == "overridden" {
-				want, wantDefault = 65, 0
+			if !bytes.Equal(out.Actions["0:0"], payload) {
+				t.Fatal("batch changed cumulative claim payload")
 			}
+			want, wantDefault := 1, 1
+
 			if calls != want || defaults != wantDefault {
 				t.Fatalf("RPC reads=%d default=%d, want %d/%d", calls, defaults, want, wantDefault)
 			}
@@ -136,11 +141,11 @@ func TestDefaultRecipientReadOncePerPinnedPreparation(t *testing.T) {
 			snap.BlockNumber = new(big.Int).Set(pinned)
 			calls, defaults = 0, 0
 			_, err = p.Prepare(context.Background(), snap)
-			if mode == "overridden" {
-				if err != nil || defaults != 0 {
+			if mode == "overridden" || mode == "unused malformed default" {
+				if err != nil || defaults != 1 || calls != 1 {
 					t.Fatal("explicit recipients must bypass default")
 				}
-			} else if err == nil || defaults != 1 {
+			} else if err == nil || defaults != 1 || calls != 1 {
 				t.Fatal("default recipient cached across blocks")
 			}
 		})

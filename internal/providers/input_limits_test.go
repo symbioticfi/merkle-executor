@@ -34,7 +34,7 @@ func TestEveryProviderInputIndexBoundary(t *testing.T) {
 	hash := "'0x0000000000000000000000000000000000000000000000000000000000000000'"
 	cow := "http: {url: 'http://localhost'}\nsettlement: " + a + "\nsellToken: " + a + "\nbuyToken: " + b + "\nsellAmount: '1000'\nminBuyAmount: '1'\nvaliditySeconds: 600\nappData: " + hash + "\naction: '0:0'\n"
 	ll := "http: {url: 'http://localhost'}\nformat: connector-v1\nconnector: " + a + "\ntoken: " + a + "\noutputAsset: " + b + "\nrecipient: " + a + "\nprotocol: " + a + "\ndiscountId: " + hash + "\namountIn: '1'\nmaxAmountOut: '1'\naction: '0:0'\ncalldataBytes: 4\n"
-	rewards := "http: {url: 'http://localhost'}\ndistributor: " + a + "\ntokens: [" + a + "]\nproofLengths: [0]\naction: '0:0'\ncalldataBytes: 4\n"
+	rewards := "http: {url: 'http://localhost'}\nmulticall3: " + b + "\ndistributor: " + a + "\ntokens: [" + a + "]\nproofLengths: [0]\naction: '0:0'\ncalldataBytes: 4\n"
 	redemption := "family: figure\nmode: request\nchainId: 1\ntoken: " + a + "\noutputAsset: " + b + "\ntarget: " + b + "\namount: '1'\naction: '0:0'\nsecondAction: '1:0'\n"
 	sec := "mode: modern\nchainId: 1\ntoken: " + a + "\ntarget: " + b + "\npaymentToken: " + b + "\namount: '1'\nminOutput: '1'\naction: '0:0'\n"
 	for _, tc := range []struct{ name, base, field string }{

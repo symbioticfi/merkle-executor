@@ -178,9 +178,30 @@ progress and transaction identity are not changed or silently released.
 
 ## Merkl cumulative account rewards
 
-Merkl's token-specific claim recipients take precedence over the default. The
-fallback recipient is read once, lazily, per pinned preparation; it is refreshed
-for every new preparation. A 32-token all-fallback batch uses 66 contract reads.
+Merkl reads distributor state through one Multicall3 `aggregate3` RPC call at the
+pinned snapshot block. The batch contains the effective root, the account's default
+recipient, and the claimed amount and recipient for each configured token: at most
+66 EVM getter calls for 32 tokens. Every subcall targets the configured distributor
+with `allowFailure: false`. RPC failures, malformed batches, missing results and
+failed getters are errors; there is no fallback to individual RPC calls.
+
+Token-specific claim recipients take precedence over the default. The default is
+fetched once in every batch and decoded only when a token has no override. An unused
+redirected or malformed default cannot override explicit account recipients. Every
+preparation refreshes the complete batch; absent configured rewards require no RPC.
+
+`multicall3` is a required, nonzero address. Before using a chain, verify that the
+configured address has the official Multicall3 deployment and supports `aggregate3`
+at the snapshot block. Consult the pinned [source and deployment provenance](../api/schemas/PROVENANCE.md);
+do not assume a common address exists on every chain. This read-only batching does
+not change the distributor target or authorized claim calldata in the recipe.
+
+For existing configurations, finish every active job **before upgrading the binary
+and adding `multicall3` to YAML**. This includes combined strategies whose Merkl
+provider is already complete while another provider remains active. The new field
+changes the durable configuration fingerprint; the new binary requires it and cannot
+drain an old job under its original YAML. Do not rewrite journal fingerprints or
+migrate active jobs to bypass this check.
 
 ```yaml
 - name: merkl
@@ -188,6 +209,7 @@ for every new preparation. A 32-token all-fallback batch uses 66 contract reads.
     http:
       url: https://api.merkl.xyz
     distributor: "0x0000000000000000000000000000000000000004"
+    multicall3: "0x0000000000000000000000000000000000000005" # replace with verified deployment
     tokens: ["0x0000000000000000000000000000000000000001"]
     proofLengths: [1]
     action: "0:0"
