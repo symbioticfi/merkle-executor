@@ -1,3 +1,5 @@
+# Total retained recipe-evidence cache budget; 0 disables (default 16 MiB).
+recipeCacheBytes: 16777216
 # Replace the sample addresses and publish matching recipes/permission trees.
 # This example validates without contacting an RPC or reading a private key.
 mode: simulate

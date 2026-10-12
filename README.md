@@ -69,6 +69,11 @@ it. Omitting the field keeps JSON batching. Arbitrary data reads and ERC-1271
 checks preserve their original caller and separate `eth_call` execution. Full
 simulations remain isolated EVM calls while sharing JSON arrays with getters.
 Dependent reads and the later closing canonical checks remain ordered.
+Merkl reads share the initial metadata request. Verified recipe-event bodies can
+be reused after fresh metadata and canonical event-header checks; account state,
+permissions and simulation remain fresh. `recipeCacheBytes` sets the total retained
+cache budget (default 16777216 / 16 MiB, `0` disables). Entries are also limited by
+the number of configured strategies and are cleared on restart.
 [Batching scopes, counts and compatibility](docs/PROVIDERS.md#read-batching).
 
 ## Permissions and runtime inputs

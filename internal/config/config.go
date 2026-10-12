@@ -20,6 +20,7 @@ import (
 )
 
 type Config struct {
+	RecipeCacheBytes int64         `yaml:"recipeCacheBytes"`
 	Mode             string        `yaml:"mode"`
 	Chain            Chain         `yaml:"chain"`
 	Signer           Signer        `yaml:"signer"`
@@ -67,7 +68,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, errors.Errorf("read configuration: %w", err)
 	}
-	var cfg Config
+	cfg := Config{RecipeCacheBytes: 16 << 20}
 	d := yaml.NewDecoder(bytes.NewReader(raw))
 	d.KnownFields(true)
 	if err := d.Decode(&cfg); err != nil {
@@ -124,6 +125,9 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
+	if c.RecipeCacheBytes < 0 {
+		return errors.New("recipeCacheBytes must be nonnegative")
+	}
 	if c.Mode != "simulate" && c.Mode != "send" {
 		return errors.New("mode must be simulate or send")
 	}

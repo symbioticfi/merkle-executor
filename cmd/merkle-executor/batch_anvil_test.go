@@ -89,7 +89,8 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesData(t *testing.T) {
 	var mu sync.Mutex
 	requests, arrays, methods := 0, 0, 0
 	var aggregateSizes []int
-	advanceAfterEvidence := false
+	advanceOnValidation := false
+	latestReads := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var raw json.RawMessage
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
@@ -141,9 +142,11 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesData(t *testing.T) {
 		}
 		shouldAdvance := false
 		for _, q := range batch {
-			if advanceAfterEvidence && q.Method == "eth_getLogs" {
-				shouldAdvance = true
-				advanceAfterEvidence = false
+			if q.Method == "eth_getBlockByNumber" && string(q.Params[0]) == `"latest"` {
+				latestReads++
+				if advanceOnValidation && latestReads == 2 {
+					shouldAdvance = true
+				}
 			}
 		}
 		mu.Unlock()
@@ -160,53 +163,62 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesData(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer batched.Close()
-	reset := func() { mu.Lock(); defer mu.Unlock(); requests, arrays, methods = 0, 0, 0; aggregateSizes = nil }
-	reset()
+	reset := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		requests, arrays, methods, latestReads = 0, 0, 0, 0
+		aggregateSizes = nil
+	}
 	planner := keeper.Planner{Chain: batched, ChainID: big.NewInt(31337), Caller: owner}
-	plan, err := planner.Prepare(ctx, keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: treePath}})
-	if err != nil {
-		t.Fatal(err)
+	var plan keeper.Plan
+	for _, advanced := range []bool{false, true} {
+		planner.RecipeCache = recipes.NewRecipeCache(1, 1<<20)
+		for _, warm := range []bool{false, true} {
+			reset()
+			mu.Lock()
+			advanceOnValidation = advanced
+			mu.Unlock()
+			current, err := planner.Prepare(ctx, keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: treePath}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.Calldata == nil {
+				plan = current
+			}
+			if !bytes.Equal(current.Calldata, plan.Calldata) || !reflect.DeepEqual(current.Leaves, plan.Leaves) {
+				t.Fatal("warm cache/head advance changed authorized bytes or leaves")
+			}
+			wantRequests, wantArrays, wantMethods := 6, 5, 9
+			wantAggregates := []int{5, 7}
+			if advanced {
+				wantMethods, wantAggregates = 11, []int{5, 5, 2}
+			}
+			if warm {
+				wantRequests--
+				wantArrays--
+				wantMethods--
+			}
+			mu.Lock()
+			if requests != wantRequests || arrays != wantArrays || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, wantAggregates) {
+				t.Errorf("Prepare warm=%t advanced=%t requests=%d arrays=%d methods=%d aggregates=%v", warm, advanced, requests, arrays, methods, aggregateSizes)
+			}
+			mu.Unlock()
+			reset()
+			// This phase must simulate nil/latest and retain both closing pins.
+			if err := planner.Validate(ctx, current); err != nil {
+				t.Fatal(err)
+			}
+			wantMethods = 5
+			if advanced {
+				wantMethods = 6
+			}
+			mu.Lock()
+			if requests != 3 || arrays != 3 || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, []int{5}) {
+				t.Errorf("Validate warm=%t advanced=%t requests=%d arrays=%d methods=%d aggregates=%v", warm, advanced, requests, arrays, methods, aggregateSizes)
+			}
+			mu.Unlock()
+		}
 	}
-	mu.Lock()
-	if requests != 6 || arrays != 5 || methods != 9 || !reflect.DeepEqual(aggregateSizes, []int{5, 7}) {
-		t.Errorf("Prepare counts requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
-	}
-	mu.Unlock()
-	reset()
-	if err := planner.Validate(ctx, plan); err != nil {
-		t.Fatal(err)
-	}
-	mu.Lock()
-	if requests != 3 || arrays != 3 || methods != 5 || !reflect.DeepEqual(aggregateSizes, []int{5}) {
-		t.Errorf("Validate counts requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
-	}
-	mu.Unlock()
-
-	reset()
-	mu.Lock()
-	advanceAfterEvidence = true
-	mu.Unlock()
-	advanced, err := planner.Prepare(ctx, keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: treePath}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(advanced.Calldata, plan.Calldata) || !reflect.DeepEqual(advanced.Leaves, plan.Leaves) {
-		t.Fatal("head advance changed authorized bytes or leaves")
-	}
-	mu.Lock()
-	if requests != 6 || arrays != 5 || methods != 11 || !reflect.DeepEqual(aggregateSizes, []int{5, 5, 2}) {
-		t.Errorf("advanced Prepare requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
-	}
-	mu.Unlock()
-	reset()
-	if err := planner.Validate(ctx, advanced); err != nil {
-		t.Fatal(err)
-	}
-	mu.Lock()
-	if requests != 3 || arrays != 3 || methods != 6 || !reflect.DeepEqual(aggregateSizes, []int{5}) {
-		t.Errorf("advanced Validate requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
-	}
-	mu.Unlock()
 	cfg := data.RPCConfig{Reads: []data.Read{
 		{Target: token.Hex(), Data: hexutil.Encode(tokenABI.PackTransfer(owners[1], big.NewInt(1))), Input: 0},
 		{Target: token.Hex(), Data: hexutil.Encode(tokenABI.PackApprove(owners[1], big.NewInt(1))), Input: 1},

@@ -25,6 +25,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/signer"
 	"github.com/symbioticfi/merkle-executor/internal/txmanager"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
@@ -76,7 +77,7 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 		}
 		strategies = append(strategies, s)
 	}
-	planner := &keeper.Planner{Chain: client, ChainID: chainID, Caller: common.HexToAddress(cfg.Signer.Address), Confirmations: cfg.TxManager.Confirmations}
+	planner := &keeper.Planner{Chain: client, ChainID: chainID, Caller: common.HexToAddress(cfg.Signer.Address), Confirmations: cfg.TxManager.Confirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), cfg.RecipeCacheBytes)}
 	if planOnly {
 		plans := make(map[string]keeper.Plan)
 		for _, s := range strategies {

@@ -55,7 +55,7 @@ preserve zero From. Neither executes inside Multicall or shares transient EVM st
 
 | Read stage | Getters / RPC methods per stage | Network requests |
 | --- | --- | --- |
-| Expected-account recipe metadata | 5 safe getters | 1 |
+| Initial recipe metadata and staged providers | 5 safe getters + independent staged calls + optional cached event header | 1 through 256 members |
 | Standalone unique account leaf roles | up to 256 safe getters | 1 per chunk, then canonical fence |
 | Preparation validation | 5 current metadata getters + unique roles + isolated simulation | 1 through 250 roles; opening and closing header stages add 2 |
 | Presend validation | 5 current metadata getters + isolated latest simulation | 1; opening and closing header stages add 2 |
@@ -67,7 +67,7 @@ preserve zero From. Neither executes inside Multicall or shares transient EVM st
 | Pareto request / queue claim / direct claim / instant claim | 12 / 12 / 14 / 11 safe getters | 1; direct claim may add dependent APR0 rate |
 | Securitize modern / legacy | 4 then 3 / 6 then 1 | 2; mixed safe and isolated calls share each stage |
 | Generic RPC provider | up to 256 isolated calls | 1 JSON array |
-| Merkl | 2 + 2N strict getters, up to 66 | 1 dedicated aggregate call |
+| Merkl | 2 + 2N strict getters, up to 66 | 1 isolated aggregate sharing initial metadata array |
 | Account telemetry / fee context | 3 / 2 isolated RPC methods | 1 JSON array each |
 
 Wallet-only Securitize decimals and the CoW Prepare domain remain individual reads.
@@ -90,21 +90,43 @@ checks now run before those reads to pin the current metadata. Presend checks me
 before accepting the fresh nil/latest simulation, and rejects a mismatch between the
 plan's authenticated executor and its send destination before any RPC.
 
-Local HTTP fixtures measure a Merkl-only successful `Planner.Prepare` with one active
-leaf and a distinct recipe-event block at **7 network requests**: initial head,
-metadata, event evidence, Merkl aggregate, opening headers, combined validation, and
-closing headers. Five requests are JSON arrays. With global Multicall enabled, these
-carry 10 outer RPC methods at an unchanged head, or 12 when the latest head advances.
-`Planner.Validate` uses **3 requests**, all arrays, carrying 5 or 6 outer methods
-respectively. The local Anvil provider-free two-leaf fixture uses **6 requests**
-(five arrays), carrying 9 or 11 outer methods. Its getter aggregate sizes are `[5, 7]`
-at the same head and `[5, 5, 2]` across different heads; presend has one five-getter
-aggregate. Up to 250 unique roles fit beside five metadata getters and one isolated
-simulation in a single 256-member validation group; larger groups check every role
-across chunks before closing the guards. The Anvil fixture also proves three
-caller-sensitive data reads share one HTTP array while retaining their caller and
-isolated temporary state. These are local fixture measurements, not claims about
-external deployment availability or provider latency.
+Merkl plans its configured distributor reads without I/O, then the keeper puts its
+strict aggregate beside the initial metadata getters. The aggregate remains isolated
+from the global safe-getter aggregate. Provider API eligibility is checked after
+recipe/account/caller/tree validation and before consuming staged results. Batch
+backends can execute unused speculative getters, but unused member errors do not
+replace an absent-reward skip or idle result. An outer transport or malformed batch
+failure stops the attempt before API classification; it never retries individual
+calls. Legacy backends consume only eligible provider reads lazily. Providers without
+staging keep their ordinary preparation path.
+
+The optional recipe-evidence cache stores exact authenticated event bodies, keyed by
+full chain ID and executor. Every attempt rereads metadata. A warm hit additionally
+requires the same recipe hash and event block, that block's canonical hash, exact body
+hash and valid recipe structure. Changed commitments or event-block reorgs trigger
+cold discovery; a required cached-header read failure is an error. Entries are stored
+only after every preparation guard succeeds. Account/root/caller/roles and provider
+values are never cached. `recipeCacheBytes` defaults to 16777216 (16 MiB); explicit
+zero disables caching. The total conservative retained-allocation budget includes
+payloads, empty slice slots and overhead, alongside an entry limit derived from the
+configured strategy count. Oversized recipes remain uncached. Entries use FIFO
+eviction, disappear on restart, and do not change strategy fingerprints.
+
+Local HTTP fixtures measure Merkl-only `Planner.Prepare` with one active leaf and a
+distinct event block at **6 network requests cold / 5 warm**. Cold preparation reads
+initial head, metadata plus Merkl, event evidence, opening headers, combined validation
+and closing headers; a warm hit moves the cached event header into the metadata array
+and omits event-log discovery. With global Multicall, cold requests include five arrays
+and 10 outer RPC methods at an unchanged head (12 when it advances). Warm preparation
+uses four arrays and 9 or 11 methods. `Planner.Validate` stays at **3 requests**, all
+arrays, with 5 or 6 methods. The local provider-free Anvil fixture also uses **6 cold /
+5 warm requests**, with 9/8 outer methods at the same head or 11/10 across different
+heads. Getter aggregate sizes remain `[5, 7]` at the same head and `[5, 5, 2]` across
+heads; presend has one five-getter aggregate. Up to 250 unique roles fit beside five
+metadata getters and one isolated simulation in a 256-member validation group;
+larger groups check every role before closing the guards. Anvil also proves three
+caller-sensitive data reads share one HTTP array while retaining caller and isolated
+temporary state. These are local fixture measurements, not deployment or latency claims.
 
 ## Liquid Lane signed connector inventory swap
 
@@ -269,7 +291,10 @@ failed getters are errors; there is no fallback to individual RPC calls.
 Token-specific claim recipients take precedence over the default. The default is
 fetched once in every batch and decoded only when a token has no override. An unused
 redirected or malformed default cannot override explicit account recipients. Every
-preparation refreshes the complete batch; absent configured rewards require no RPC.
+preparation refreshes the complete batch. Direct `Provider.Prepare` and legacy
+nonbatch readers skip distributor reads for absent rewards. The keeper's batch path
+may already have executed the speculative aggregate, but does not consume its member
+error when the API classifies the reward as absent.
 
 `multicall3` is a required, nonzero address. Before using a chain, verify that the
 configured address has the official Multicall3 deployment and supports `aggregate3`
