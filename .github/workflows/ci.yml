@@ -22,8 +22,7 @@ jobs:
           version: v1.8.1
       - run: make integration
 
-      - name: Verify container build metadata
-        env:
+      - env:
           DOCKER_BUILDKIT: '1'
         run: |
           build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
