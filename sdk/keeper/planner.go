@@ -45,7 +45,7 @@ type Planner struct {
 
 func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) {
 	var plan Plan
-	snap, recipe, err := recipes.Discover(ctx, p.Chain, common.HexToAddress(strategy.Config.Executor), nil)
+	snap, recipe, err := recipes.DiscoverForAccount(ctx, p.Chain, common.HexToAddress(strategy.Config.Executor), common.HexToAddress(strategy.Config.Account), nil)
 	if err != nil {
 		return plan, errors.Errorf("discover recipe: %w", err)
 	}

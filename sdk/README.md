@@ -50,3 +50,19 @@ call `keeper.ValidateComposition` before submission and reconciliation themselve
 Input indices are bounded by `parse.MaxInputIndex` (4095), also exported through
 `recipes.MaxInputIndex`. Strict provider YAML decoding rejects aliases so moving
 an anchor cannot alter a value behind an unchanged host configuration fingerprint.
+
+`protocolio.BatchReader` is optional and transport-neutral. `ReadGroup` chunks
+independent stages at 256 members and returns ordered member results, separately
+from transport errors. Existing backends keep lazy individual reads; a failed real
+batch never falls back to singles. `MulticallSafe` is an explicit assertion of
+caller independence and read-only behavior, not an ABI `view` inference. The host
+chooses the transport and deployment; SDK code contains no protocol-specific rules.
+Member errors are consumed in validation order, preserving idle/terminal branches
+that do not need speculative results. Missing members invalidate the whole group.
+
+`recipes.DiscoverForAccount` groups executor metadata with the configured account
+root and verifies the returned account before accepting that root. Existing
+`Discover` remains compatible and reads the discovered root afterward. Role checks
+deduplicate leaves. Canonical fences and full caller-bound simulations remain
+separate reads. Submission batches initial owned-attempt receipts and opening
+confirmation evidence while retaining nonce ownership and durable transitions.

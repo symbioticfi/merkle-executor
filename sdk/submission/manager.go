@@ -20,6 +20,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
@@ -313,9 +314,18 @@ func (m *Manager) wait(ctx context.Context) (Result, error) {
 		if err != nil {
 			return result(r), err
 		}
+		requests := make([]protocolio.ReadRequest, len(txs))
+		for i, tx := range txs {
+			requests[i] = protocolio.ReadRequest{Kind: protocolio.ReadReceipt, Hash: tx.Hash()}
+		}
+		reads, err := protocolio.ReadGroup(ctx, m.backend, requests...)
+		if err != nil {
+			return m.retainedResult(r.ID), err
+		}
 		var sweepErr error
-		for _, tx := range txs {
-			res, _, err := m.receipt(ctx, r, tx)
+		for i, tx := range txs {
+			member := reads.At(i)
+			res, _, err := m.receiptResult(ctx, r, tx, member.Receipt, member.Err)
 			if res.Confirmed || res.Reverted {
 				return res, nil
 			}
@@ -372,13 +382,12 @@ func (m *Manager) recordSigned(unsigned, signed *types.Transaction) error {
 	return nil
 }
 
-// receipt requires the exact signed hash, its canonical block and the configured
+// receiptResult requires the exact signed hash, its canonical block and the configured
 // number of blocks after inclusion. Terminal progress is durable before return.
-func (m *Manager) receipt(ctx context.Context, r *record, tx *types.Transaction) (Result, bool, error) {
+func (m *Manager) receiptResult(ctx context.Context, r *record, tx *types.Transaction, receipt *types.Receipt, err error) (Result, bool, error) {
 	pending := result(r)
 	pending.Confirmed, pending.Reverted, pending.Pending = false, false, true
 	pending.Execution = nil
-	receipt, err := m.backend.TransactionReceipt(ctx, tx.Hash())
 	if errors.Is(err, ethereum.NotFound) {
 		return pending, false, nil
 	}
