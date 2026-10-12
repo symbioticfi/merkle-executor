@@ -84,3 +84,27 @@ never share Multicall execution or temporary EVM state. The later closing header
 can batch both original and current headers. Submission batches initial owned-attempt
 receipts and opening confirmation evidence while retaining nonce ownership and durable
 transitions.
+
+`protocolio.StagedProvider` optionally supplies a pure `PlanPreparation` for a value-only
+provisional pin. It does no I/O and receives no fabricated recipe/root authority. A
+preparation-local resolver receives the authenticated snapshot and a bounded, lazy
+accessor for its own results. Exact chain/block/hash/time/executor/account/caller
+identity must match before resolution; providers should classify API eligibility
+before consuming getters. `keeper.Planner` automatically uses this optional contract.
+Nonstaged providers and direct `Provider.Prepare` calls remain compatible. Speculative
+batch member errors stay lazy; outer transport/shape failures are fatal before provider
+classification and never trigger single-call retries.
+
+`PrepareExecutionWithOptions` can stage these reads with initial metadata and accept a
+`RecipeCache`. The old `PrepareExecution` and standalone discovery APIs remain uncached.
+`NewRecipeCache(capacity, bytes)` bounds a mutex-protected FIFO by entries and conservative
+retained allocation bytes (including payloads, empty slice slots and fixed overhead).
+Hosts set capacity from configured strategies; a nil cache disables it. Only exact
+recipe bodies plus commitment, event block and event hash are retained under full
+chain-ID/executor keys. A hit rereads metadata and the canonical event header, validates
+the body hash/structure and retains every later role/simulation/canonical check. Bodies
+are copied on load/insert and separated from mutable build callbacks. Only fully closed,
+successful preparations can populate the cache; failed builds or guards cannot. No
+provider getter or mutable account state is cached. Invalidating a frozen hint uses an
+entry version so it cannot erase a concurrent replacement. Transient per-attempt copies
+are not part of the retained-byte budget.

@@ -16,17 +16,41 @@ import (
 // but must not sign, persist or mutate external state. Its snapshot is provisional:
 // callers must not use the prepared result unless this operation succeeds.
 func PrepareExecution(ctx context.Context, reader Reader, executor, account, caller common.Address, build func(Snapshot, Recipe) ([]byte, []common.Hash, error)) error {
+	if build == nil {
+		return errors.New("expected account, caller and preparation callback required")
+	}
+	return PrepareExecutionWithOptions(ctx, reader, executor, account, caller, PreparationOptions{}, func(s Snapshot, r Recipe, _ protocolio.ReadAccessor) ([]byte, []common.Hash, error) {
+		return build(s, r)
+	})
+}
+
+// PreparationOptions enables attempt-local staged reads without changing the
+// independently guarded discovery APIs. Stage must perform only pure local work.
+type PreparationOptions struct {
+	ChainID *big.Int
+	Cache   *RecipeCache
+	Stage   func(protocolio.PreparationPin) []protocolio.ReadRequest
+}
+
+// PrepareExecutionWithOptions retains every execution guard while allowing
+// independent provider reads beside initial metadata. The build callback only
+// receives staged results after recipe evidence and configured identity checks.
+func PrepareExecutionWithOptions(ctx context.Context, reader Reader, executor, account, caller common.Address, options PreparationOptions, build func(Snapshot, Recipe, protocolio.ReadAccessor) ([]byte, []common.Hash, error)) error {
 	if account == (common.Address{}) || caller == (common.Address{}) || build == nil {
 		return errors.New("expected account, caller and preparation callback required")
 	}
-	snapshot, recipe, err := discoverForBuild(ctx, reader, executor, account, nil)
+	snapshot, recipe, staged, pending, err := discoverPreparation(ctx, reader, executor, account, caller, options)
 	if err != nil {
 		return errors.Errorf("discover recipe: %w", err)
 	}
 	if snapshot.Caller != caller {
 		return errors.New("configured caller/account mismatch")
 	}
-	calldata, leaves, err := build(snapshot, recipe)
+	buildRecipe := recipe
+	if pending != nil {
+		buildRecipe = cloneRecipe(recipe)
+	}
+	calldata, leaves, err := build(snapshot, buildRecipe, staged)
 	if err != nil {
 		return err
 	}
@@ -53,7 +77,11 @@ func PrepareExecution(ctx context.Context, reader Reader, executor, account, cal
 	if err = validateCurrent(snapshot, current, reads, caller); err != nil {
 		return err
 	}
-	return closeExecution(ctx, reader, snapshot, current)
+	if err = closeExecution(ctx, reader, snapshot, current); err != nil {
+		return err
+	}
+	options.Cache.put(pending)
+	return nil
 }
 
 // ValidateExecution rereads all current metadata even when the head hash matches
@@ -153,4 +181,93 @@ func closeExecution(ctx context.Context, reader Reader, snapshot Snapshot, curre
 		}
 	}
 	return nil
+}
+
+func discoverPreparation(ctx context.Context, reader Reader, executor, account, caller common.Address, options PreparationOptions) (Snapshot, Recipe, protocolio.ReadAccessor, *recipeEvidence, error) {
+	if options.Stage == nil && options.Cache == nil {
+		snapshot, recipe, err := discoverForBuild(ctx, reader, executor, account, nil)
+		return snapshot, recipe, nil, nil, err
+	}
+	header, err := reader.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return Snapshot{}, Recipe{}, nil, nil, errors.Errorf("pin block: %w", err)
+	}
+	if err = validateHeader(header, nil); err != nil {
+		return Snapshot{}, Recipe{}, nil, nil, err
+	}
+	if executor == (common.Address{}) {
+		return Snapshot{}, Recipe{}, nil, nil, errors.New("zero executor address")
+	}
+	pin := protocolio.PreparationPin{BlockNumber: header.Number.Uint64(), BlockHash: header.Hash(), Timestamp: header.Time, Executor: executor, Account: account, Caller: caller}
+	if options.ChainID != nil {
+		pin.ChainID = options.ChainID.String()
+	}
+	if err = pin.Validate(); err != nil {
+		return Snapshot{}, Recipe{}, nil, nil, err
+	}
+	key := evidenceKey{chainID: pin.ChainID, executor: executor}
+	hint := options.Cache.load(key) // Freeze once; never consult a later concurrent entry.
+	requests := snapshotRequests(executor, account, header.Number)
+	var extra []protocolio.ReadRequest
+	if options.Stage != nil {
+		extra = options.Stage(pin)
+	}
+	requests = append(requests, extra...)
+	hintIndex := len(requests)
+	if hint != nil && hint.block != pin.BlockNumber {
+		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(hint.block)})
+	}
+	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
+	if err != nil {
+		return Snapshot{}, Recipe{}, nil, nil, errors.Errorf("read executor state: %w", err)
+	}
+	snapshot, err := decodeCurrentSnapshot(Snapshot{Executor: executor, Account: account}, header, reads)
+	if err != nil {
+		return Snapshot{}, Recipe{}, nil, nil, err
+	}
+	if err = validateRecipeMetadata(snapshot); err != nil {
+		return Snapshot{}, Recipe{}, nil, nil, err
+	}
+	var recipe Recipe
+	var eventHash common.Hash
+	hit := false
+	if hint != nil && hint.hash == snapshot.RecipeHash && hint.block == snapshot.RecipeBlock {
+		eventHeader := header
+		if hint.block != pin.BlockNumber {
+			result := reads.At(hintIndex)
+			if result.Err != nil {
+				return Snapshot{}, Recipe{}, nil, nil, errors.Errorf("cached recipe block header: %w", result.Err)
+			}
+			eventHeader = result.Header
+		}
+		if err = validateHeader(eventHeader, new(big.Int).SetUint64(hint.block)); err != nil {
+			return Snapshot{}, Recipe{}, nil, nil, err
+		}
+		if eventHeader.Hash() == hint.eventHash {
+			hash, hashErr := HashRecipe(hint.recipe)
+			_, inspectErr := Inspect(hint.recipe)
+			hit = hashErr == nil && inspectErr == nil && hash == snapshot.RecipeHash && snapshot.RecipeHash != (common.Hash{}) && snapshot.RecipeBlock <= snapshot.BlockNumber
+			if hit {
+				recipe, eventHash = hint.recipe, hint.eventHash
+			}
+		}
+	}
+	if !hit {
+		options.Cache.discard(hint)
+		recipe, eventHash, err = discoverRecipe(ctx, reader, snapshot, header)
+		if err != nil {
+			return Snapshot{}, Recipe{}, nil, nil, err
+		}
+	}
+	// Preserve verified bytes separately from the mutable build callback's clone.
+	pending := &recipeEvidence{key: key, recipe: recipe, hash: snapshot.RecipeHash, block: snapshot.RecipeBlock, eventHash: eventHash}
+	if !options.Cache.retainable(pending) {
+		pending = nil
+	}
+	return snapshot, recipe, func(i int) protocolio.ReadResult {
+		if i < 0 || i >= len(extra) {
+			return protocolio.ReadResult{Err: errors.New("staged result index outside preparation")}
+		}
+		return reads.At(5 + i)
+	}, pending, nil
 }

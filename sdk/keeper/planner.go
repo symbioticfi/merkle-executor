@@ -41,11 +41,17 @@ type Planner struct {
 	ChainID       *big.Int
 	Caller        common.Address
 	Confirmations uint64
+	RecipeCache   *recipes.RecipeCache
 }
 
 func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) {
 	var plan Plan
-	err := recipes.PrepareExecution(ctx, p.Chain, common.HexToAddress(strategy.Config.Executor), common.HexToAddress(strategy.Config.Account), p.Caller, func(snap recipes.Snapshot, recipe recipes.Recipe) ([]byte, []common.Hash, error) {
+	var preparation *protocolio.Preparation
+	options := recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache, Stage: func(pin protocolio.PreparationPin) []protocolio.ReadRequest {
+		preparation = protocolio.PlanPreparation(strategy.Providers, pin)
+		return preparation.Requests()
+	}}
+	err := recipes.PrepareExecutionWithOptions(ctx, p.Chain, common.HexToAddress(strategy.Config.Executor), common.HexToAddress(strategy.Config.Account), p.Caller, options, func(snap recipes.Snapshot, recipe recipes.Recipe, staged protocolio.ReadAccessor) ([]byte, []common.Hash, error) {
 		if strategy.Config.RecipeHash != "" && snap.RecipeHash != common.HexToHash(strategy.Config.RecipeHash) {
 			return nil, nil, errors.New("configured recipe hash mismatch")
 		}
@@ -67,8 +73,8 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 		inputs := make(map[uint]string)
 		actions := make(map[string]hexutil.Bytes)
 		var skips []uint
-		for _, pr := range strategy.Providers {
-			out, err := pr.Prepare(ctx, plan.Snapshot)
+		for i := range strategy.Providers {
+			out, err := preparation.Resolve(ctx, i, plan.Snapshot, staged)
 			if err != nil {
 				return nil, nil, errors.Errorf("resolve runtime: %w", err)
 			}
