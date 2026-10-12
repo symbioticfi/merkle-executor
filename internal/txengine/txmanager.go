@@ -25,6 +25,7 @@ import (
 
 	"github.com/symbioticfi/merkle-executor/internal/observability"
 	"github.com/symbioticfi/merkle-executor/internal/signer"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
 // Backend is the EVM client surface the manager needs. NonceAt must read the sending endpoint
@@ -66,6 +67,9 @@ type accountTelemetryBackend interface {
 }
 
 // accountReading is one complete telemetry snapshot.
+type batchedAccountTelemetryBackend interface {
+	ReadAccountTelemetry(context.Context, common.Address) (*big.Int, uint64, uint64, error)
+}
 type accountReading struct {
 	balance                   *big.Int
 	latestNonce, pendingNonce uint64
@@ -429,6 +433,10 @@ func (m *Manager) readAccount(ctx context.Context) error {
 func (m *Manager) readAccountTelemetry(ctx context.Context) (accountReading, error) {
 	var reading accountReading
 	var err error
+	if backend, ok := m.backend.(batchedAccountTelemetryBackend); ok {
+		reading.balance, reading.latestNonce, reading.pendingNonce, err = backend.ReadAccountTelemetry(ctx, m.signer.Address())
+		return reading, err
+	}
 	if backend, ok := m.backend.(accountTelemetryBackend); ok {
 		if reading.balance, err = backend.ReadBalanceAt(ctx, m.signer.Address()); err != nil {
 			return accountReading{}, err
@@ -1581,13 +1589,12 @@ func (m *Manager) waitForConfirmations(
 	var headReads, receiptReads, ancestryReads readStreak
 	missing := 0
 	for {
-		headBefore, headErr := m.confirmationHead(ctx)
+		headBefore, refreshed, headErr, err := m.confirmationOpening(ctx, hash)
 		if headErr != nil {
 			headReads.failed(log, headErr, "confirmation head unavailable", "hash", hash.Hex())
 		} else {
 			headReads.recovered(log, "confirmation head reads recovered", "hash", hash.Hex())
 		}
-		refreshed, err := m.confirmationReceipt(ctx, hash)
 		switch {
 		case errors.Is(err, errReceiptReorged):
 			// One null can be a lagging upstream rather than a reorg; require two in a row.
@@ -1633,6 +1640,28 @@ func (m *Manager) waitForConfirmations(
 	}
 }
 
+// Both independent opening reads get the full per-read budget from the same
+// start time. Legacy backends keep their separate sequential timeout contexts.
+func (m *Manager) confirmationOpening(ctx context.Context, hash common.Hash) (*types.Header, *types.Receipt, error, error) {
+	if _, ok := m.backend.(protocolio.BatchReader); !ok {
+		head, he := m.confirmationHead(ctx)
+		receipt, re := m.confirmationReceipt(ctx, hash)
+		return head, receipt, he, re
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	defer cancel()
+	reads, err := protocolio.ReadGroup(lookupCtx, m.backend, protocolio.ReadRequest{Kind: protocolio.ReadHeader}, protocolio.ReadRequest{Kind: protocolio.ReadReceipt, Hash: hash})
+	if err != nil {
+		return nil, nil, err, err
+	}
+	head, receipt := reads.At(0), reads.At(1)
+	if head.Err == nil && (head.Header == nil || head.Header.Number == nil) {
+		head.Err = errors.New("latest header number is required")
+	}
+	confirmed, err := confirmationReceiptResult(hash, receipt.Receipt, receipt.Err)
+	return head.Header, confirmed, head.Err, err
+}
+
 func (m *Manager) confirmationHead(ctx context.Context) (*types.Header, error) {
 	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
 	defer cancel()
@@ -1650,6 +1679,9 @@ func (m *Manager) confirmationReceipt(ctx context.Context, hash common.Hash) (*t
 	receiptCtx, cancelReceipt := context.WithTimeout(ctx, m.receiptReadTimeout())
 	receipt, err := m.backend.TransactionReceipt(receiptCtx, hash)
 	cancelReceipt()
+	return confirmationReceiptResult(hash, receipt, err)
+}
+func confirmationReceiptResult(hash common.Hash, receipt *types.Receipt, err error) (*types.Receipt, error) {
 	if errors.Is(err, ethereum.NotFound) {
 		return nil, errors.Errorf("%w: receipt %s disappeared", errReceiptReorged, hash.Hex())
 	}

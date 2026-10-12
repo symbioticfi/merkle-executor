@@ -123,7 +123,20 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if err := p.snapshot(s); err != nil {
 		return provider.Output{}, err
 	}
-	decimals, err := p.tokenDecimals(ctx, s, p.token)
+	var first *protocolio.ReadResults
+	var err error
+	if p.cfg.Mode != "wallet" {
+		first, err = p.initialReads(ctx, s)
+		if err != nil {
+			return provider.Output{}, err
+		}
+	}
+	var decimals uint8
+	if first == nil {
+		decimals, err = p.tokenDecimals(ctx, s, p.token)
+	} else {
+		decimals, err = decodeRead(first.At(0), securitizetoken.NewSecuritizeToken().UnpackDecimals, "decimals")
+	}
 	if err != nil {
 		return provider.Output{}, err
 	}
@@ -132,7 +145,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	}
 	expected := new(big.Int)
 	if p.cfg.Mode != "wallet" {
-		expected, err = p.quote(ctx, s, decimals)
+		expected, err = p.quote(ctx, s, decimals, first)
 		if err != nil {
 			return provider.Output{}, err
 		}
@@ -203,60 +216,110 @@ func (p *Provider) tokenDecimals(ctx context.Context, s provider.Snapshot, token
 	return v[0].(uint8), nil
 }
 
-func (p *Provider) quote(ctx context.Context, s provider.Snapshot, decimals uint8) (*big.Int, error) {
-	a := modern.NewSecuritizeOffRamp().GetABI()
-	assetMethod, liquidityMethod := "assetAddress", "liquidityProvider"
-	if p.cfg.Mode == "legacy" {
-		a = legacy.NewSecuritizeLegacyOffRamp().GetABI()
-		assetMethod, liquidityMethod = "asset", "liquidity"
+// Only these source-reviewed token deployments have caller-independent decimals.
+// Other configured tokens remain isolated even when the ramp reads aggregate.
+func (p *Provider) safeDecimals(token common.Address) bool {
+	if p.cfg.ChainID != 1 {
+		return false
 	}
-	v, err := p.call(ctx, s, p.target, a, "paused")
+	switch token {
+	case common.HexToAddress("0x2255718832bC9fD3bE1CaF75084F4803DA14FF01"),
+		common.HexToAddress("0xDf1c8e71CbDF48af50B36F96AD2eb6F5094Ba72a"),
+		common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
+		common.HexToAddress("0xC139190F447e929f090Edeb554D95AbB8b18aC1C"):
+		return true
+	}
+	return false
+}
+func (p *Provider) initialReads(ctx context.Context, s provider.Snapshot) (*protocolio.ReadResults, error) {
+	token := securitizetoken.NewSecuritizeToken()
+	req := []protocolio.ReadRequest{protocolio.ContractRead(p.token, token.PackDecimals(), s.BlockNumber, p.safeDecimals(p.token))}
+	if p.cfg.Mode == "modern" {
+		a := modern.NewSecuritizeOffRamp()
+		for _, data := range [][]byte{a.PackPaused(), a.PackAssetAddress(), a.PackLiquidityProvider()} {
+			req = append(req, protocolio.ContractRead(p.target, data, s.BlockNumber, true))
+		}
+	} else {
+		a := legacy.NewSecuritizeLegacyOffRamp()
+		for _, data := range [][]byte{a.PackPaused(), a.PackAsset(), a.PackLiquidity(), a.PackSettlement()} {
+			req = append(req, protocolio.ContractRead(p.target, data, s.BlockNumber, true))
+		}
+		req = append(req, protocolio.ContractRead(p.payment, token.PackDecimals(), s.BlockNumber, p.safeDecimals(p.payment)))
+	}
+	return protocolio.ReadGroup(ctx, p.deps.Chain, req...)
+}
+func decodeRead[T any](result protocolio.ReadResult, unpack func([]byte) (T, error), name string) (T, error) {
+	var zero T
+	raw, err := result.CallData()
+	if err != nil {
+		return zero, err
+	}
+	v, err := unpack(raw)
+	if err != nil {
+		return zero, errors.Errorf("invalid Securitize %s response", name)
+	}
+	return v, nil
+}
+func (p *Provider) quote(ctx context.Context, s provider.Snapshot, decimals uint8, first *protocolio.ReadResults) (*big.Int, error) {
+	a := modern.NewSecuritizeOffRamp()
+	old := legacy.NewSecuritizeLegacyOffRamp()
+	// paused has the same ABI in both supported ramp implementations.
+	paused, err := decodeRead(first.At(1), a.UnpackPaused, "paused")
 	if err != nil {
 		return nil, err
 	}
-	if v[0].(bool) {
+	if paused {
 		return nil, errors.Errorf("%w: Securitize offramp is paused", provider.ErrNotReady)
 	}
-	v, err = p.call(ctx, s, p.target, a, assetMethod)
+	asset, err := decodeRead(first.At(2), a.UnpackAssetAddress, "asset")
 	if err != nil {
 		return nil, err
 	}
-	if v[0].(common.Address) != p.token {
+	if asset != p.token {
 		return nil, errors.New("Securitize offramp asset mismatch")
 	}
-	v, err = p.call(ctx, s, p.target, a, liquidityMethod)
+	payment, err := decodeRead(first.At(3), a.UnpackLiquidityProvider, "liquidity")
 	if err != nil {
 		return nil, err
 	}
-	payment := v[0].(common.Address)
-	liquidityTarget := p.target
-	liquidityABI := a
 	expected := new(big.Int)
+	var liquidity *big.Int
 	if p.cfg.Mode == "modern" {
 		if payment == (common.Address{}) {
 			return nil, errors.New("Securitize liquidity provider is zero")
 		}
-		v, err = p.call(ctx, s, payment, securitizetopology.NewSecuritizeTopology().GetABI(), "liquidityToken")
+		topology := securitizetopology.NewSecuritizeTopology()
+		reads, err := protocolio.ReadGroup(ctx, p.deps.Chain,
+			protocolio.ContractRead(payment, topology.PackLiquidityToken(), s.BlockNumber, false),
+			protocolio.ContractRead(p.target, a.PackCalculateLiquidityTokenAmount(p.amount), s.BlockNumber, true),
+			protocolio.ContractRead(p.target, a.PackAvailableLiquidity(), s.BlockNumber, true))
 		if err != nil {
 			return nil, err
 		}
-		payment = v[0].(common.Address)
-		v, err = p.call(ctx, s, p.target, a, "calculateLiquidityTokenAmount", p.amount)
+		payment, err = decodeRead(reads.At(0), topology.UnpackLiquidityToken, "liquidityToken")
 		if err != nil {
 			return nil, err
 		}
-		expected = v[0].(*big.Int)
+		expected, err = decodeRead(reads.At(1), a.UnpackCalculateLiquidityTokenAmount, "calculateLiquidityTokenAmount")
+		if err != nil {
+			return nil, err
+		}
+		if payment != p.payment {
+			return nil, errors.New("Securitize offramp payment token mismatch")
+		}
+		liquidity, err = decodeRead(reads.At(2), a.UnpackAvailableLiquidity, "availableLiquidity")
+		if err != nil {
+			return nil, err
+		}
 	} else {
-		v, err = p.call(ctx, s, p.target, a, "settlement")
+		settlement, err := decodeRead(first.At(4), old.UnpackSettlement, "settlement")
 		if err != nil {
 			return nil, err
 		}
-		liquidityTarget = v[0].(common.Address)
-		liquidityABI = securitizetopology.NewSecuritizeTopology().GetABI()
-		if liquidityTarget == (common.Address{}) {
+		if settlement == (common.Address{}) {
 			return nil, errors.New("Securitize settlement is zero")
 		}
-		outDecimals, err := p.tokenDecimals(ctx, s, p.payment)
+		outDecimals, err := decodeRead(first.At(5), securitizetoken.NewSecuritizeToken().UnpackDecimals, "decimals")
 		if err != nil {
 			return nil, err
 		}
@@ -267,15 +330,16 @@ func (p *Provider) quote(ctx context.Context, s provider.Snapshot, decimals uint
 		if expected.BitLen() > 256 {
 			return nil, errors.New("Securitize normalized output overflows uint256")
 		}
+		if payment != p.payment {
+			return nil, errors.New("Securitize offramp payment token mismatch")
+		}
+		values, err := p.call(ctx, s, settlement, securitizetopology.NewSecuritizeTopology().GetABI(), "availableLiquidity")
+		if err != nil {
+			return nil, err
+		}
+		liquidity = values[0].(*big.Int)
 	}
-	if payment != p.payment {
-		return nil, errors.New("Securitize offramp payment token mismatch")
-	}
-	v, err = p.call(ctx, s, liquidityTarget, liquidityABI, "availableLiquidity")
-	if err != nil {
-		return nil, err
-	}
-	if v[0].(*big.Int).Cmp(expected) < 0 {
+	if liquidity.Cmp(expected) < 0 {
 		return nil, errors.Errorf("%w: Securitize offramp liquidity is insufficient", provider.ErrNotReady)
 	}
 	return expected, nil

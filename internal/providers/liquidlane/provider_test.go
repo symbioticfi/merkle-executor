@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -143,6 +144,15 @@ func TestPrepareConnectorAndRejectLegacyDomain(t *testing.T) {
 			if result.Inputs[0] != "100" || result.Inputs[1] != "990" || hexutil.Encode(result.Actions["0:0"]) != hexutil.Encode(payload) || requests != 1 {
 				t.Fatalf("wrong prepared output %+v", result)
 			}
+			batched := &llBatchReader{reader: chain}
+			bp, err := Factory(node(t, cfg), providerRegistry.Deps{Chain: batched, HTTP: srv.Client()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bout, err := bp.Prepare(context.Background(), s)
+			if err != nil || !reflect.DeepEqual(result, bout) || !reflect.DeepEqual(batched.groups, []int{3, 6}) {
+				t.Fatalf("batch output/groups: %+v %v %v", bout, err, batched.groups)
+			}
 			cfg.OutputAsset = addr(9).Hex()
 			p, e = Factory(node(t, cfg), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
 			if e != nil {
@@ -214,5 +224,32 @@ func TestContractSignatureUsesPinnedERC1271(t *testing.T) {
 	approved = false
 	if validSignature(context.Background(), chain, snap, addr(6), digest, []byte{0x42}) || calls != 2 {
 		t.Fatal("wrong ERC1271 magic accepted")
+	}
+}
+
+type llBatchReader struct {
+	reader
+	groups []int
+}
+
+func (r *llBatchReader) BatchRead(ctx context.Context, req []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
+	r.groups = append(r.groups, len(req))
+	out := make([]protocolio.ReadResult, len(req))
+	for i, q := range req {
+		out[i].Data, out[i].Err = r.CallContract(ctx, q.Call, q.Block)
+	}
+	return out, nil
+}
+func TestContractSignaturesBatchUnresolvedCalls(t *testing.T) {
+	a := accountbinding.NewMerkleAccount().GetABI()
+	r := &llBatchReader{reader: reader(func(_ context.Context, m ethereum.CallMsg, b *big.Int) ([]byte, error) {
+		if m.From != (common.Address{}) || b.Int64() != 12 || (*m.To != addr(6) && *m.To != addr(7)) {
+			t.Fatal("changed signature call context")
+		}
+		return a.Methods["isValidSignature"].Outputs.Pack([4]byte{0x16, 0x26, 0xba, 0x7e})
+	})}
+	s := provider.Snapshot{BlockNumber: big.NewInt(12)}
+	if !validSignatures(context.Background(), r, s, signatureCheck{addr(6), common.Hash{}, []byte{1}}, signatureCheck{addr(7), common.Hash{}, []byte{2}}) || !reflect.DeepEqual(r.groups, []int{2}) {
+		t.Fatalf("signature groups %v", r.groups)
 	}
 }

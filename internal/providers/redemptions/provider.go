@@ -226,8 +226,20 @@ func read[T any](ctx context.Context, p *Provider, s provider.Snapshot, target c
 	return value, nil
 }
 
-func (p *Provider) checkAddress(ctx context.Context, s provider.Snapshot, target common.Address, data []byte, unpack func([]byte) (common.Address, error), expected common.Address) error {
-	actual, err := read(ctx, p, s, target, data, unpack)
+func readResult[T any](result protocolio.ReadResult, unpack func([]byte) (T, error)) (T, error) {
+	var zero T
+	raw, err := result.CallData()
+	if err != nil {
+		return zero, err
+	}
+	value, err := unpack(raw)
+	if err != nil {
+		return zero, errors.Errorf("decode issuer response: %w", err)
+	}
+	return value, nil
+}
+func checkRead(result protocolio.ReadResult, unpack func([]byte) (common.Address, error), expected common.Address) error {
+	actual, err := readResult(result, unpack)
 	if err != nil {
 		return err
 	}

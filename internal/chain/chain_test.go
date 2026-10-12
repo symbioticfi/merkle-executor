@@ -35,8 +35,21 @@ func newRPCFixture(t *testing.T, chainID string) *rpcFixture {
 	t.Helper()
 	f := &rpcFixture{chainID: chainID}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Error(err)
+			return
+		}
+		f.mu.Lock()
+		failEarly := f.fail
+		f.mu.Unlock()
+		if failEarly {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("upstream-error-body-test-secret"))
+			return
+		}
 		var request rpcRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if err := json.Unmarshal(raw, &request); err != nil {
 			t.Error("invalid JSON-RPC request")
 			w.WriteHeader(http.StatusBadRequest)
 			return

@@ -19,11 +19,20 @@ import (
 
 type Client struct {
 	*ethclient.Client
-	write *ethclient.Client
-	http  *http.Client
+	write     *ethclient.Client
+	http      *http.Client
+	readURL   string
+	multicall common.Address
 }
 
-func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int) (*Client, error) {
+func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int, aggregate ...common.Address) (*Client, error) {
+	if len(aggregate) > 1 || len(aggregate) == 1 && aggregate[0] == (common.Address{}) {
+		return nil, errors.New("one nonzero Multicall3 address required when configured")
+	}
+	var multicall common.Address
+	if len(aggregate) == 1 {
+		multicall = aggregate[0]
+	}
 	if expected == nil || expected.Sign() <= 0 {
 		return nil, errors.New("positive expected chain ID required")
 	}
@@ -68,7 +77,7 @@ func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int) (*Cl
 		}
 	}
 	connected = true
-	return &Client{Client: read, write: write, http: httpClient}, nil
+	return &Client{Client: read, write: write, http: httpClient, readURL: readURL, multicall: multicall}, nil
 }
 func dialHTTP(ctx context.Context, endpoint string, client *http.Client) (*ethclient.Client, error) {
 	connection, err := rpc.DialOptions(ctx, endpoint, rpc.WithHTTPClient(client))
@@ -192,12 +201,4 @@ func (c *Client) BalanceAt(ctx context.Context, account common.Address, block *b
 }
 func (c *Client) ReadBalanceAt(ctx context.Context, account common.Address) (*big.Int, error) {
 	return c.BalanceAt(ctx, account, nil)
-}
-func (c *Client) ReadNonces(ctx context.Context, account common.Address) (uint64, uint64, error) {
-	mined, err := c.Client.NonceAt(ctx, account, nil)
-	if err != nil {
-		return 0, 0, rpcFailure("read telemetry mined nonce", err)
-	}
-	pending, err := c.Client.PendingNonceAt(ctx, account)
-	return mined, pending, rpcFailure("read telemetry pending nonce", err)
 }

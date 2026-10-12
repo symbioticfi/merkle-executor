@@ -273,10 +273,7 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	if e = p.validateOrder(d.Order, s.Account); e != nil {
 		return provider.Progress{}, e
 	}
-	domain, e := p.domain(ctx, s)
-	if e != nil {
-		return provider.Progress{}, e
-	}
+	domain := protocolio.Domain("Gnosis Protocol", "v2", s.ChainID, p.settlement)
 	buffer, e := EncodeOrder(d.Order)
 	if e != nil {
 		return provider.Progress{}, e
@@ -297,7 +294,23 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 		return provider.Progress{}, errors.New("invalid CoW UID")
 	}
 	settlement := settlementbinding.NewCowSettlement()
-	raw, e := protocolio.CallData(ctx, p.deps.Chain, s, p.settlement, settlement.PackFilledAmount(uidBytes))
+	account := accountbinding.NewMerkleAccount()
+	reads, e := protocolio.ReadGroup(ctx, p.deps.Chain,
+		protocolio.ContractRead(p.settlement, settlement.PackDomainSeparator(), s.BlockNumber, true),
+		protocolio.ContractRead(p.settlement, settlement.PackFilledAmount(uidBytes), s.BlockNumber, true),
+		protocolio.ContractRead(s.Account, account.PackSignatures(d.Digest), s.BlockNumber, true))
+	if e != nil {
+		return provider.Progress{}, e
+	}
+	raw, e := reads.At(0).CallData()
+	if e != nil {
+		return provider.Progress{}, e
+	}
+	declared, e := settlement.UnpackDomainSeparator(raw)
+	if e != nil || common.Hash(declared) != domain {
+		return provider.Progress{}, errors.New("CoW settlement domain mismatch")
+	}
+	raw, e = reads.At(1).CallData()
 	if e != nil {
 		return provider.Progress{}, e
 	}
@@ -325,8 +338,7 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 		}
 		return progress(d, "expired", true), nil
 	}
-	account := accountbinding.NewMerkleAccount()
-	raw, e = protocolio.CallData(ctx, p.deps.Chain, s, s.Account, account.PackSignatures(d.Digest))
+	raw, e = reads.At(2).CallData()
 	if e != nil {
 		return provider.Progress{}, e
 	}

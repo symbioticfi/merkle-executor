@@ -56,9 +56,19 @@ reconcile same-key nonce races, but independent recipe services have no shared
 business-state reservation and can each execute the same recipe.
 
 All relative paths resolve against the configuration file. Addresses, endpoints,
-limits and polling cadence are configured; no production addresses are embedded.
+limits and polling cadence are configured. Contract targets always come from
+configuration; a reviewed token address list only restricts which Securitize
+`decimals` getters may aggregate.
 Secrets use `*Env` references and are read at point of use. `chain.rpcUrl` and
 `chain.writeRpcUrl` support environment interpolation. HTTP redirects are refused.
+
+Independent reads use bounded JSON-RPC arrays on the read endpoint. Optional
+`chain.multicall3` enables EVM aggregation for source-verified, caller-independent
+getters; verify that address's deployment on the configured chain before enabling
+it. Omitting the field keeps JSON batching. Arbitrary data reads and ERC-1271
+checks preserve their original caller and separate `eth_call` execution. Full
+simulations, dependent reads and final canonical fences remain ordered.
+[Batching scopes, counts and compatibility](docs/PROVIDERS.md#read-batching).
 
 ## Permissions and runtime inputs
 

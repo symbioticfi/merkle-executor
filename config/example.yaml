@@ -2,6 +2,8 @@
 # This example validates without contacting an RPC or reading a private key.
 mode: simulate
 chain:
+  # Optional: set only to a verified Multicall3 deployment on this chain.
+  # multicall3: "0x0000000000000000000000000000000000000005"
   chainId: 1
   rpcUrl: http://127.0.0.1:8545
 signer:

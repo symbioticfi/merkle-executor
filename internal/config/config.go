@@ -33,6 +33,7 @@ type Config struct {
 }
 
 type Chain struct {
+	Multicall3  string `yaml:"multicall3"`
 	RPCURL      string `yaml:"rpcUrl"`
 	WriteRPCURL string `yaml:"writeRpcUrl"`
 	ChainID     uint64 `yaml:"chainId"`
@@ -125,6 +126,11 @@ func Load(path string) (*Config, error) {
 func (c *Config) Validate() error {
 	if c.Mode != "simulate" && c.Mode != "send" {
 		return errors.New("mode must be simulate or send")
+	}
+	if c.Chain.Multicall3 != "" {
+		if _, err := parse.Address(c.Chain.Multicall3); err != nil {
+			return errors.New("chain.multicall3 must be a nonzero address when configured")
+		}
 	}
 	if c.Chain.ChainID == 0 {
 		return errors.New("positive chainId required")

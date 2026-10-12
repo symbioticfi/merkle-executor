@@ -110,3 +110,21 @@ func TestTransactionHorizonDefaultsAndInvalidLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestOptionalGlobalMulticallAddress(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{{"", true}, {"0x0000000000000000000000000000000000000005", true}, {"0x0000000000000000000000000000000000000000", false}, {"not-address", false}} {
+		t.Run(tc.value, func(t *testing.T) {
+			text := validConfig
+			if tc.value != "" {
+				text = strings.Replace(text, "  chainId: 1", "  chainId: 1\n  multicall3: '"+tc.value+"'", 1)
+			}
+			_, err := Load(writeConfig(t, text))
+			if (err == nil) != tc.valid {
+				t.Fatalf("multicall address validation: %v", err)
+			}
+		})
+	}
+}

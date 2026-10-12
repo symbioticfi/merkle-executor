@@ -27,7 +27,11 @@ No schema or endpoint is fetched automatically during a normal build.
   `Call3` is `(target, allowFailure, callData)`; `Result` is `(success, returnData)`.
   The payable entry point uses ordinary EVM calls and reverts if a failed call has
   `allowFailure: false`. Merkl uses zero value and only its distributor's read-only,
-  caller-independent getters. No other Multicall3 methods are exposed by this binding.
+  caller-independent getters. The host also uses `allowFailure: true` for verified
+  independent getter groups, retaining per-member errors until validation consumes
+  them. [Read aggregation sources and limitations](READ_BATCHING.md) record every
+  supported scope; arbitrary calls remain isolated JSON-RPC members. No other
+  Multicall3 methods are exposed by this binding.
   The pinned [deployment list](https://github.com/mds1/multicall3/blob/b667d67ecfa5361a81e8f110234ce242613b0012/deployments.json)
   is reference material; operators must verify their configured chain and deployment.
   There is no automatic address discovery or assumption of universal deployment.

@@ -25,6 +25,67 @@ credential, `timeoutSeconds` defaults to 10 (1..120), and `maxResponseBytes` def
 2097152 (maximum 16777216). Credentials, response bodies and complete URLs are omitted
 from request errors. Redirects are never followed. No literal API key belongs in YAML.
 
+## Read batching
+
+The production read client sends independent stages as JSON-RPC arrays, bounded
+at 256 members and 32 MiB of response data. Responses are matched by ID; missing,
+duplicate or unknown IDs, malformed aggregates and transport failures fail closed.
+There is no individual-call retry after a batch fails. Ordinary member errors stay
+attached to their getter and are consumed in the original validation order. For
+example, a paused ramp remains idle despite a speculative minimum-read failure.
+
+Optional `chain.multicall3` must name a verified nonzero deployment on the configured
+chain. With it, compatible source-reviewed getters at the same pinned block become
+one `aggregate3` call with `allowFailure: true`. An independent stage containing both
+safe and unknown getters uses one JSON array containing the aggregate plus isolated
+calls. Without the field, the same stages use JSON arrays alone. An invalid configured
+address or failed aggregate never silently falls back. Configuration remains compatible
+with existing global chain settings and does not change strategy fingerprints. Merkl's
+required provider-local `multicall3` and its migration instructions below still apply.
+
+[Source revisions, hashes and supported implementations](../api/schemas/READ_BATCHING.md)
+cover core metadata/roles, Liquid Lane, CoW, Midas, OpenEden, Figure, Noon, Pareto and
+Securitize ramp-local getters. Operators must verify custom deployments and proxy
+upgrades retain those semantics. Securitize token decimals aggregate only for the
+explicit reviewed mainnet VBILL, ARKVX, USDC and USDtb addresses. Its discovered
+liquidity-token getter and legacy settlement liquidity remain isolated. Centrifuge
+vault reads remain isolated because their implementations are not sufficiently
+verified. Arbitrary `rpc` inputs preserve `From: account`; arbitrary ERC-1271 checks
+preserve zero From. Neither executes inside Multicall or shares transient EVM state.
+
+| Read stage | Getters / RPC methods per stage | Network requests |
+| --- | --- | --- |
+| Expected-account recipe metadata | 5 safe getters | 1 |
+| Unique account leaf roles | up to 256 safe getters | 1 per chunk, then canonical fence |
+| Liquid Lane | 3 safe getters, then 6 safe getters | 2; unresolved ERC-1271 checks add 1 JSON array |
+| CoW Advance | domain, fill, account approval (3 safe getters) | 1, with later canonical fences |
+| Midas / OpenEden / Figure | 4 safe getters | 1 |
+| Centrifuge request / claim | 2 / 3 isolated getters | 1 JSON array |
+| Noon request / claim | 3 / 4 safe getters | request adds dependent role check; claim uses 1 |
+| Pareto request / queue claim / direct claim / instant claim | 12 / 12 / 14 / 11 safe getters | 1; direct claim may add dependent APR0 rate |
+| Securitize modern / legacy | 4 then 3 / 6 then 1 | 2; mixed safe and isolated calls share each stage |
+| Generic RPC provider | up to 256 isolated calls | 1 JSON array |
+| Merkl | 2 + 2N strict getters, up to 66 | 1 dedicated aggregate call |
+| Account telemetry / fee context | 3 / 2 isolated RPC methods | 1 JSON array each |
+
+Wallet-only Securitize decimals, CoW Prepare domain, full simulations, dependent
+arguments, hash-linked ancestry and final canonical checks remain individual reads.
+No signing, transaction mutation, nonce admission or broadcast is batched. Complete
+telemetry is required before any account gauge changes; fee context makes no atomic
+head/history guarantee. Receipt sweeps retain every signed attempt, can accept a later
+owned receipt despite an earlier member error, and keep final canonical fences.
+
+Local HTTP fixtures measure a Merkl-only successful `Planner.Prepare` with one active
+leaf and a distinct recipe-event block at **11 network requests**: discovery 4,
+Merkl 1, roles and their fence 2, simulation 1, revalidation 3. These comprise five
+JSON arrays and six single requests, carrying 13 outer RPC methods with global
+Multicall enabled. `Planner.Validate` uses **4 requests**, including two arrays and
+five outer methods. The local Anvil fixture measures the provider-free two-leaf
+case at 10 requests and executes metadata/roles through the official Multicall3
+artifact. It also proves three caller-sensitive data reads share one HTTP array
+while retaining their caller and isolated temporary state. These are local fixture
+measurements, not claims about external deployment availability or provider latency.
+
 ## Liquid Lane signed connector inventory swap
 
 ```yaml

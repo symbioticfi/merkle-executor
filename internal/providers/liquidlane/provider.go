@@ -154,8 +154,14 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 		return provider.Output{}, e
 	}
 	a := binding.NewLiquidConnector()
-	call := func(data []byte) ([]byte, error) { return protocolio.CallData(ctx, p.deps.Chain, s, p.connector, data) }
-	raw, e := call(a.PackAccount())
+	first, e := protocolio.ReadGroup(ctx, p.deps.Chain,
+		protocolio.ContractRead(p.connector, a.PackAccount(), s.BlockNumber, true),
+		protocolio.ContractRead(p.connector, a.PackOutputAsset(), s.BlockNumber, true),
+		protocolio.ContractRead(p.connector, a.PackEip712Domain(), s.BlockNumber, true))
+	if e != nil {
+		return provider.Output{}, e
+	}
+	raw, e := first.At(0).CallData()
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -166,7 +172,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if account != s.Account {
 		return provider.Output{}, errors.New("LL connector account mismatch")
 	}
-	raw, e = call(a.PackOutputAsset())
+	raw, e = first.At(1).CallData()
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -177,7 +183,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if outputAsset != p.asset {
 		return provider.Output{}, errors.New("LL connector output asset mismatch")
 	}
-	raw, e = call(a.PackEip712Domain())
+	raw, e = first.At(2).CallData()
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -200,7 +206,17 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if e != nil {
 		return provider.Output{}, e
 	}
-	raw, e = call(a.PackOwner())
+	second, e := protocolio.ReadGroup(ctx, p.deps.Chain,
+		protocolio.ContractRead(p.connector, a.PackOwner(), s.BlockNumber, true),
+		protocolio.ContractRead(p.connector, a.PackSigner(), s.BlockNumber, true),
+		protocolio.ContractRead(p.connector, a.PackIsUsedNonce(p.token, d.Nonce), s.BlockNumber, true),
+		protocolio.ContractRead(p.connector, a.PackMinDiscount(p.token), s.BlockNumber, true),
+		protocolio.ContractRead(p.connector, a.PackGetAmountOut(p.token, p.amount), s.BlockNumber, true),
+		protocolio.ContractRead(p.connector, a.PackRemainingAssets(p.token), s.BlockNumber, true))
+	if e != nil {
+		return provider.Output{}, e
+	}
+	raw, e = second.At(0).CallData()
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -208,7 +224,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if e != nil {
 		return provider.Output{}, errors.New("invalid LL owner response")
 	}
-	raw, e = call(a.PackSigner())
+	raw, e = second.At(1).CallData()
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -219,7 +235,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if d.Signer != owner && d.Signer != signer {
 		return provider.Output{}, errors.New("LL discount signer is no longer authorized")
 	}
-	raw, e = call(a.PackIsUsedNonce(p.token, d.Nonce))
+	raw, e = second.At(2).CallData()
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -230,7 +246,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if used {
 		return provider.Output{}, errors.New("LL discount nonce invalidated")
 	}
-	raw, e = call(a.PackMinDiscount(p.token))
+	raw, e = second.At(3).CallData()
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -246,10 +262,10 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if dh != p.discountID {
 		return provider.Output{}, errors.New("LL discount ID/domain mismatch: legacy LiquidLaneAdapter terms are unsupported")
 	}
-	if !validSignature(ctx, p.deps.Chain, s, d.Signer, dh, signerSig) || !validSignature(ctx, p.deps.Chain, s, d.Protocol, wh, protocolSig) {
+	if !validSignatures(ctx, p.deps.Chain, s, signatureCheck{d.Signer, dh, signerSig}, signatureCheck{d.Protocol, wh, protocolSig}) {
 		return provider.Output{}, errors.New("LL signatures do not validate for connector domain; legacy adapter signatures are unsupported")
 	}
-	raw, e = call(a.PackGetAmountOut(p.token, p.amount))
+	raw, e = second.At(4).CallData()
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -265,7 +281,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if out.Sign() == 0 || out.Cmp(p.maxOut) > 0 {
 		return provider.Output{}, errors.New("LL current quote outside configured payment bound")
 	}
-	raw, e = call(a.PackRemainingAssets(p.token))
+	raw, e = second.At(5).CallData()
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -348,29 +364,59 @@ func Hashes(domain common.Hash, d binding.ILiquidLaneConnectorDiscount, signatur
 	wh := crypto.Keccak256Hash(crypto.Keccak256([]byte("DiscountSwap(Discount discount,bytes signerSignature,uint48 protocolDeadline)Discount(address tokenToRedeem,uint256 discount,address signer,address protocol,uint256 nonce,uint48 deadline)")), h.Bytes(), crypto.Keccak256(signature), protocolio.Word(deadline))
 	return protocolio.Digest(domain, h), protocolio.Digest(domain, wh)
 }
+
+type signatureCheck struct {
+	who       common.Address
+	digest    common.Hash
+	signature []byte
+}
+
 func validSignature(ctx context.Context, r provider.Reader, s provider.Snapshot, who common.Address, digest common.Hash, sig []byte) bool {
-	if len(sig) == 65 {
-		v := append([]byte(nil), sig...)
-		if v[64] >= 27 {
-			v[64] -= 27
-		}
-		rr := new(big.Int).SetBytes(v[:32])
-		ss := new(big.Int).SetBytes(v[32:64])
-		if crypto.ValidateSignatureValues(v[64], rr, ss, true) {
-			pub, e := crypto.SigToPub(digest.Bytes(), v)
-			if e == nil && crypto.PubkeyToAddress(*pub) == who {
-				return true
-			}
-		}
-	}
+	return validSignatures(ctx, r, s, signatureCheck{who, digest, sig})
+}
+func validSignatures(ctx context.Context, r provider.Reader, s provider.Snapshot, checks ...signatureCheck) bool {
 	a := accountbinding.NewMerkleAccount()
-	raw, e := protocolio.CallData(ctx, r, s, who, a.PackIsValidSignature(digest, sig))
-	if e != nil {
+	requests := make([]protocolio.ReadRequest, 0, len(checks))
+	for _, check := range checks {
+		if locallyValidSignature(check) {
+			continue
+		}
+		// Arbitrary ERC-1271 implementations retain their original isolated call context.
+		requests = append(requests, protocolio.ContractRead(check.who, a.PackIsValidSignature(check.digest, check.signature), s.BlockNumber, false))
+	}
+	group, err := protocolio.ReadGroup(ctx, r, requests...)
+	if err != nil {
 		return false
 	}
-	magic, e := a.UnpackIsValidSignature(raw)
-	return e == nil && magic == [4]byte{0x16, 0x26, 0xba, 0x7e}
+	for i := range requests {
+		raw, err := group.At(i).CallData()
+		if err != nil {
+			return false
+		}
+		magic, err := a.UnpackIsValidSignature(raw)
+		if err != nil || magic != [4]byte{0x16, 0x26, 0xba, 0x7e} {
+			return false
+		}
+	}
+	return true
 }
+func locallyValidSignature(check signatureCheck) bool {
+	sig := check.signature
+	if len(sig) != 65 {
+		return false
+	}
+	v := append([]byte(nil), sig...)
+	if v[64] >= 27 {
+		v[64] -= 27
+	}
+	rr, ss := new(big.Int).SetBytes(v[:32]), new(big.Int).SetBytes(v[32:64])
+	if !crypto.ValidateSignatureValues(v[64], rr, ss, true) {
+		return false
+	}
+	pub, err := crypto.SigToPub(check.digest.Bytes(), v)
+	return err == nil && crypto.PubkeyToAddress(*pub) == check.who
+}
+
 func (p *Provider) Advance(_ context.Context, _ provider.Snapshot, _ provider.Output, _ json.RawMessage) (provider.Progress, error) {
 	return provider.Progress{Done: true}, nil
 }

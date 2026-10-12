@@ -47,7 +47,11 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 	defer flush()
 	chainID := new(big.Int).SetUint64(cfg.Chain.ChainID)
 	startup, cancel := context.WithTimeout(ctx, cfg.OperationTimeout)
-	client, err := chain.Dial(startup, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID)
+	var aggregate []common.Address
+	if cfg.Chain.Multicall3 != "" {
+		aggregate = append(aggregate, common.HexToAddress(cfg.Chain.Multicall3))
+	}
+	client, err := chain.Dial(startup, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID, aggregate...)
 	cancel()
 	if err != nil {
 		return err

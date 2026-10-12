@@ -20,6 +20,7 @@ import (
 
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
@@ -181,6 +182,7 @@ func (s *source) Prepare(ctx context.Context, snap provider.Snapshot) (provider.
 }
 
 func (s *source) readRPC(ctx context.Context, snap provider.Snapshot, out provider.Output) (provider.Output, error) {
+	requests := make([]protocolio.ReadRequest, 0, len(s.rpc.Reads))
 	for _, read := range s.rpc.Reads {
 		target, err := parse.Address(expand(read.Target, snap))
 		if err != nil {
@@ -190,10 +192,18 @@ func (s *source) readRPC(ctx context.Context, snap provider.Snapshot, out provid
 		if err != nil {
 			return out, errors.New("invalid RPC calldata")
 		}
-		result, err := s.deps.Chain.CallContract(ctx, ethereum.CallMsg{From: snap.Account, To: &target, Data: data}, snap.BlockNumber)
-		if err != nil {
+		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: snap.Account, To: &target, Data: data}, Block: snap.BlockNumber})
+	}
+	reads, err := protocolio.ReadGroup(ctx, s.deps.Chain, requests...)
+	if err != nil {
+		return out, errors.New("RPC data read failed")
+	}
+	for i, read := range s.rpc.Reads {
+		member := reads.At(i)
+		if member.Err != nil {
 			return out, errors.New("RPC data read failed")
 		}
+		result := member.Data
 		if read.Offset > uint(len(result)) || uint(len(result))-read.Offset < 32 {
 			return out, errors.New("RPC result word out of bounds")
 		}
