@@ -49,6 +49,9 @@ type ManagedCall struct {
 // ExecutedCalls requires the expected calls in order in the account's successful
 // Manage events. A matching event cannot be reused for another expected call.
 // Call Execution first to establish canonical confirmation of this receipt.
+// Matching is local to this invocation. Receipt-dependent providers must declare
+// provider.ExclusiveTargetProvider and use keeper composition validation to avoid
+// claiming another provider's or a static action's evidence, including on restart.
 func ExecutedCalls(s provider.Snapshot, expected []ManagedCall) error {
 	if err := s.Execution.Validate(); err != nil {
 		return err

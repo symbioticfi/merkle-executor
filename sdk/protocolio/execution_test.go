@@ -75,7 +75,7 @@ func manageEvent(t *testing.T, s provider.Snapshot, index uint, calls ...Managed
 func TestExecutedCallsRequiresExactOrderedSuccessfulActions(t *testing.T) {
 	first := ManagedCall{Target: common.HexToAddress("0x100"), Data: []byte{1, 2, 3, 4}}
 	second := ManagedCall{Target: common.HexToAddress("0x200"), Data: []byte{5, 6, 7, 8}}
-	for _, mode := range []string{"valid", "split-events", "intervening-call", "wrong-account", "wrong-target", "wrong-data", "out-of-order", "duplicate-expected", "malformed", "missing", "nonzero-value"} {
+	for _, mode := range []string{"valid", "split-events", "intervening-call", "wrong-account", "wrong-target", "wrong-data", "out-of-order", "duplicate-expected", "two-identical-calls", "malformed", "missing", "nonzero-value"} {
 		t.Run(mode, func(t *testing.T) {
 			s, _ := executionSnapshot()
 			expected := []ManagedCall{first, second}
@@ -95,6 +95,9 @@ func TestExecutedCallsRequiresExactOrderedSuccessfulActions(t *testing.T) {
 				expected[0], expected[1] = expected[1], expected[0]
 			case "duplicate-expected":
 				expected = []ManagedCall{first, first, second}
+			case "two-identical-calls":
+				expected = []ManagedCall{first, first}
+				s.Execution.Logs = []types.Log{manageEvent(t, s, 0, first, first)}
 			case "malformed":
 				s.Execution.Logs[0].Data = []byte{1}
 			case "missing":
@@ -109,7 +112,7 @@ func TestExecutedCallsRequiresExactOrderedSuccessfulActions(t *testing.T) {
 				s.Execution.Logs[0].Data = data
 			}
 			err := ExecutedCalls(s, expected)
-			valid := mode == "valid" || mode == "split-events" || mode == "intervening-call"
+			valid := mode == "valid" || mode == "split-events" || mode == "intervening-call" || mode == "two-identical-calls"
 			if (err == nil) != valid {
 				t.Fatalf("managed call correlation: %v", err)
 			}

@@ -87,6 +87,9 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 	if err != nil {
 		return plan, errors.Errorf("assemble runtime: %w", err)
 	}
+	if err := ValidateComposition(plan.Calldata, strategy.Providers); err != nil {
+		return plan, err
+	}
 	if err := recipes.VerifyRoles(ctx, p.Chain, snap, plan.Leaves); err != nil {
 		return plan, err
 	}
@@ -101,7 +104,7 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 
 func merge(inputs map[uint]string, actions map[string]hexutil.Bytes, skips *[]uint, out provider.Output) error {
 	for index, value := range out.Inputs {
-		if index > 4095 {
+		if index > recipes.MaxInputIndex {
 			return errors.New("input index exceeds limit")
 		}
 		if _, ok := inputs[index]; ok {

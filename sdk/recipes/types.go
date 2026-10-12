@@ -6,6 +6,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
 )
 
 const (
@@ -30,7 +31,7 @@ const (
 )
 
 // MaxInputIndex bounds host memory used by a recipe's sparse input vector.
-const MaxInputIndex = 65535
+const MaxInputIndex = parse.MaxInputIndex
 
 type Recipe struct {
 	Queries [][]byte

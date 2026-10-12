@@ -37,3 +37,16 @@ The SDK is an execution primitive. It does not by itself add LL or 3F auction
 feeds, pricing, signed offers, RFQ domain compatibility or order reconciliation.
 Those integrations supply bounded provider outputs and restart-safe Advance
 implementations from the host.
+
+Providers that reconcile transaction-wide receipt logs without unique protocol
+identity implement `provider.ExclusiveTargetProvider`. The keeper validates their
+action keys against all populated Manage slots before signing and during recovery,
+including completed provider claims. Static or other-provider calls to an owned
+target, and arbitrary `Call` instructions, are unsupported. Normal `Approve` and
+numerical bindings remain available. Validation reads persisted execute bytes and
+does not modify or release ambiguous durable work. Hosts bypassing the keeper must
+call `keeper.ValidateComposition` before submission and reconciliation themselves.
+
+Input indices are bounded by `parse.MaxInputIndex` (4095), also exported through
+`recipes.MaxInputIndex`. Strict provider YAML decoding rejects aliases so moving
+an anchor cannot alter a value behind an unchanged host configuration fingerprint.

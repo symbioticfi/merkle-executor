@@ -160,6 +160,9 @@ func validateJob(job Job, s Strategy) error {
 		if job.ConfigHash != s.Config.Fingerprint() {
 			return errors.Errorf("strategy %s configuration changed while work is active", s.Config.Name)
 		}
+		if err := ValidateComposition(job.Plan.Calldata, s.Providers); err != nil {
+			return err
+		}
 		if len(job.Plan.Outputs) != len(s.Providers) || len(job.Progress) != len(s.Providers) {
 			return errors.New("durable provider state count mismatch")
 		}
@@ -169,7 +172,7 @@ func validateJob(job Job, s Strategy) error {
 
 func (k *Keeper) Tick(ctx context.Context) error {
 	if err := k.CheckRecovery(); err != nil {
-		return err
+		return k.globalFailure(err)
 	}
 	// Recover the occupied nonce first, independently of configuration ordering.
 	ordered := append([]Strategy(nil), k.Strategies...)
@@ -178,7 +181,7 @@ func (k *Keeper) Tick(ctx context.Context) error {
 			var job Job
 			found, err := k.Store.Load(key(s.Config.Name), &job)
 			if err != nil {
-				return err
+				return k.globalFailure(err)
 			}
 			if found && job.ID == k.Sender.PendingID() {
 				ordered[0], ordered[i] = ordered[i], ordered[0]
@@ -267,6 +270,9 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy) error {
 		}
 		plan, err := k.Planner.Prepare(ctx, s)
 		if err != nil {
+			return err
+		}
+		if err := ValidateComposition(plan.Calldata, s.Providers); err != nil {
 			return err
 		}
 		var random [16]byte
@@ -365,4 +371,14 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy) error {
 		}
 	}
 	return nil
+}
+
+// Store and recovery errors may carry raw persisted payloads or filesystem data.
+// Keep one bounded global observation; strategy failures are observed separately.
+func (k *Keeper) globalFailure(err error) error {
+	k.Log.Error(errors.New("global recovery or state validation failed"), "keeper iteration failed")
+	if k.Observe != nil {
+		k.Observe("_global", "error")
+	}
+	return err
 }
