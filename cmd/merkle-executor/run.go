@@ -70,7 +70,7 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	}
 	targets := make([]common.Address, len(cfg.Strategies))
 	for i, sc := range cfg.Strategies {
-		targets[i] = common.HexToAddress(sc.Executor)
+		targets[i] = common.HexToAddress(sc)
 	}
 	discovery, cancel := context.WithTimeout(ctx, cfg.OperationTimeout)
 	accounts, caller, err := discoverIdentity(discovery, client, targets)
@@ -93,12 +93,12 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	}
 	strategies := make([]keeper.Strategy, 0, len(cfg.Strategies))
 	for _, sc := range cfg.Strategies {
-		s := keeper.Strategy{Config: keeper.Config{Name: sc.Name, Executor: sc.Executor, Account: accounts[common.HexToAddress(sc.Executor)].Hex(), RecipeHash: sc.RecipeHash, Interval: sc.Interval, Revision: cfg.StrategyFingerprint(sc, accounts[common.HexToAddress(sc.Executor)])}}
+		s := keeper.Strategy{Config: keeper.Config{Name: sc, Executor: sc, Account: accounts[common.HexToAddress(sc)].Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(sc, accounts[common.HexToAddress(sc)], caller)}}
 		for _, registration := range []struct {
 			name string
 			new  func(providerRegistry.Deps) (provider.Provider, error)
 		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}, {"redemptions", redemptions.NewAutomatic}, {"securitize", securitize.NewAutomatic}} {
-			p, err := registration.new(providerRegistry.Deps{Chain: client, HTTP: httpClient, Log: log.WithValues("strategy", sc.Name, "provider", registration.name), ConfigDir: configDir})
+			p, err := registration.new(providerRegistry.Deps{Chain: client, HTTP: httpClient, Log: log.WithValues("strategy", sc, "provider", registration.name), ConfigDir: configDir})
 			if err != nil {
 				return errors.Errorf("configure provider %s: %w", registration.name, err)
 			}

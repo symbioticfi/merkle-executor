@@ -1,15 +1,15 @@
 # Protocol providers
 
-Normal daemon strategies provide an executor address and an optional recipe-hash
-assertion. An optional `name` labels durable state, logs and metrics; otherwise it
-is `executor-` plus the full lowercase executor address including `0x`. Reordering
-strategies does not change this identity. Custom names stay unchanged; keep existing
-labels until active jobs drain before removing or changing them. Recovery rejects
-changed identifiers and never migrates journals. Duplicate effective names fail,
-while separately named strategies may share an executor.
+Normal daemon `strategies` entries are full nonzero executor addresses, directly
+used as lowercase state, log and metric identifiers. Duplicate normalized addresses
+fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
+assertions and provider mappings are rejected before network access.
+The address-only policy version is `address-only-v3`. Drain active work with the
+previous binary and configuration before upgrading. Old custom or prefixed keys
+remain inspectable and fence unresolved ownership; no journal migration occurs.
 The daemon always installs automatic CoW, Merkl, Liquid Lane RFQ,
-issuer-redemption, Securitize and recipe-input adapters in a fixed order. A nonempty
-`strategy.providers` list is rejected. Token pairs, amounts, minimum proceeds,
+issuer-redemption, Securitize and recipe-input adapters in a fixed order. Legacy
+`strategy.providers` configuration is rejected. Token pairs, amounts, minimum proceeds,
 action/input mappings, deployment targets and authorization shapes come from the
 authenticated recipe and its permission tree; they are not operator parameters.
 Unmatched adapters produce an empty durable output and finish normally.

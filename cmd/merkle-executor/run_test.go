@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -279,7 +280,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	directory := t.TempDir()
 	cfg := testCLIConfig(directory)
 	cfg.Mode, cfg.Chain.RPCURL, cfg.Signer.Address = "send", endpoint, caller.Hex()
-	cfg.Strategies[0].Executor = executorAddress.Hex()
+	cfg.Strategies[0] = strings.ToLower(executorAddress.Hex())
 	permission, err := json.Marshal(map[string]any{"root": leaf.Hash.Hex(), "chainId": 31337, "adapter": recipient.Hex(), "vault": owner.Hex(), "actions": []any{}, "leaves": []any{map[string]any{"hash": leaf.Hash.Hex(), "target": tokenAddress.Hex(), "value": "zero", "data": hexutil.Encode(transfer), "dataMask": hexutil.Encode(mask), "proof": []string{}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -313,7 +314,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		"caller": func(c *config.Config) { c.Signer.Address = owner.Hex() },
 	} {
 		invalid := cfg
-		invalid.Strategies = append([]config.Strategy(nil), cfg.Strategies...)
+		invalid.Strategies = append([]string(nil), cfg.Strategies...)
 		mutate(&invalid)
 		invalidPath := writeCLIConfig(t, directory, invalid)
 		if err = runBot(ctx, invalidPath, true, true, new(bytes.Buffer)); err == nil {
@@ -332,7 +333,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
 			t.Fatal(err)
 		}
-		plan, exists := plans["funding"]
+		plan, exists := plans[cfg.Strategies[0]]
 		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 6 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
 			t.Fatal("plan lost configuration, provider output or transaction")
 		}
@@ -370,7 +371,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
 			t.Fatalf("source failure submitted nonce%d: %v", nonce, e)
 		}
-		for _, key := range []string{"strategy.funding.v1", "txmanager.active.v1"} {
+		for _, key := range []string{"strategy." + cfg.Strategies[0] + ".v1", "txmanager.active.v1"} {
 			if found, e := state.Read(cfg.StateDir, key, new(any)); e != nil || found {
 				t.Fatalf("source failure persisted executable work %s: %v", key, e)
 			}
@@ -394,7 +395,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		t.Fatalf("send-once failed: %v", err)
 	}
 	var job keeper.Job
-	if found, err := state.Read(cfg.StateDir, "strategy.funding.v1", &job); err != nil || !found {
+	if found, err := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); err != nil || !found {
 		t.Fatalf("durable job missing: %v", err)
 	}
 	if job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || job.Result.Hash == (common.Hash{}) || len(job.Progress) != 6 || job.FinishedAt.IsZero() {

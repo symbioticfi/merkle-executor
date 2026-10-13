@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -206,7 +207,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	cfg.Chain.RPCURL = endpoint
 	cfg.Signer.Address = caller.Hex()
 	cfg.Curator.URL = curator.URL + "/api/v1"
-	cfg.Strategies[0].Executor = executorAddress.Hex()
+	cfg.Strategies[0] = strings.ToLower(executorAddress.Hex())
 	fixtureURL, _ := url.Parse(api.URL)
 	apiHTTP := &http.Client{Transport: serviceRewriteTransport{host: "swap.symbiotic.fi", target: fixtureURL}, Timeout: 15 * time.Second}
 	path := writeCLIConfig(t, directory, cfg)
@@ -218,7 +219,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	if err = json.Unmarshal(planOutput.Bytes(), &plans); err != nil {
 		t.Fatal(err)
 	}
-	plan := plans["funding"]
+	plan := plans[cfg.Strategies[0]]
 	if len(plan.Outputs) != 6 || !bytes.Equal(plan.Outputs[2].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
 		t.Fatal("plan did not preserve exact sign or published early")
 	}
@@ -234,7 +235,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	}
 	load := func() keeper.Job {
 		var job keeper.Job
-		if found, e := state.Read(cfg.StateDir, "strategy.funding.v1", &job); e != nil || !found {
+		if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); e != nil || !found {
 			t.Fatal("job absent", e)
 		}
 		return job

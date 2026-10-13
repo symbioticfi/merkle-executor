@@ -1,23 +1,40 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/merkle-executor/internal/config"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
+	sdktx "github.com/symbioticfi/merkle-executor/sdk/submission"
 )
 
 func TestDerivedAccountAndCuratorChangesCannotRewriteActiveWork(t *testing.T) {
-	for _, change := range []string{"account", "url", "credential reference", "response bound"} {
+	for _, change := range []string{"account", "caller", "chain", "url", "credential reference", "response bound"} {
 		t.Run(change, func(t *testing.T) {
 			cfg := testCLIConfig(t.TempDir())
 			original := cfg.Strategies[0]
 			account := common.HexToAddress("0x2222")
-			savedRevision := cfg.StrategyFingerprint(original, account)
+			caller := common.HexToAddress(cfg.Signer.Address)
+			savedRevision := cfg.StrategyFingerprint(original, account, caller)
 			switch change {
 			case "account":
 				account = common.HexToAddress("0x3333")
+			case "caller":
+				caller = common.HexToAddress("0x4444")
+			case "chain":
+				cfg.Chain.ChainID++
 			case "url":
 				cfg.Curator.URL = "http://other.invalid/api/v1"
 			case "credential reference":
@@ -25,7 +42,7 @@ func TestDerivedAccountAndCuratorChangesCannotRewriteActiveWork(t *testing.T) {
 			case "response bound":
 				cfg.Curator.MaxResponseBytes = 4096
 			}
-			current := keeper.Config{Name: original.Name, Executor: original.Executor, Account: account.Hex(), Interval: original.Interval, Revision: cfg.StrategyFingerprint(original, account)}
+			current := keeper.Config{Name: original, Executor: original, Account: account.Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(original, account, caller)}
 			old := current
 			old.Revision = savedRevision
 			store, err := state.Open(cfg.StateDir)
@@ -34,10 +51,10 @@ func TestDerivedAccountAndCuratorChangesCannotRewriteActiveWork(t *testing.T) {
 			}
 			defer store.Close()
 			job := keeper.Job{ID: "owned", ConfigHash: old.Fingerprint(), Phase: "prepared"}
-			if err = store.Save("strategies.v1", []string{original.Name}); err != nil {
+			if err = store.Save("strategies.v1", []string{original}); err != nil {
 				t.Fatal(err)
 			}
-			if err = store.Save("strategy."+original.Name+".v1", job); err != nil {
+			if err = store.Save("strategy."+original+".v1", job); err != nil {
 				t.Fatal(err)
 			}
 			k := keeper.Keeper{Store: store, Strategies: []keeper.Strategy{{Config: current}}}
@@ -45,9 +62,83 @@ func TestDerivedAccountAndCuratorChangesCannotRewriteActiveWork(t *testing.T) {
 				t.Fatal("changed source identity accepted")
 			}
 			var retained keeper.Job
-			if found, err := store.Load("strategy."+original.Name+".v1", &retained); err != nil || !found || retained.ConfigHash != job.ConfigHash || retained.Phase != job.Phase {
+			if found, err := store.Load("strategy."+original+".v1", &retained); err != nil || !found || retained.ConfigHash != job.ConfigHash || retained.Phase != job.Phase {
 				t.Fatal("recovery rewrote active identity")
 			}
 		})
+	}
+}
+
+type legacyIdentitySender struct{ pending string }
+
+func (s *legacyIdentitySender) PendingID() string { return s.pending }
+func (*legacyIdentitySender) Send(context.Context, sdktx.Request) (sdktx.Result, error) {
+	panic("recovery must not send")
+}
+func (*legacyIdentitySender) Acknowledge(context.Context, string) error {
+	panic("recovery must not acknowledge")
+}
+
+func TestAddressOnlyHostFencesLegacyOwners(t *testing.T) {
+	cfg, err := config.Load(writeCLIConfig(t, t.TempDir(), testCLIConfig(t.TempDir())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := cfg.Strategies[0]
+	strategies := []keeper.Strategy{{Config: keeper.Config{Name: executor, Executor: executor, Interval: config.DefaultStrategyInterval}}}
+	for _, legacy := range []string{"old-custom", "executor-" + executor} {
+		for _, tc := range []struct {
+			phase   string
+			pending bool
+		}{{"prepared", false}, {"authorized", true}, {"settled", true}, {"failed", true}} {
+			t.Run(legacy+"/"+tc.phase, func(t *testing.T) {
+				directory := t.TempDir()
+				store, err := state.Open(directory)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer store.Close()
+				job := keeper.Job{ID: "legacy-owned", Phase: tc.phase, ConfigHash: "old-label-policy", Plan: keeper.Plan{Outputs: []provider.Output{{Data: json.RawMessage(`{"uid":"durable-order"}`)}}}}
+				key := "strategy." + legacy + ".v1"
+				if err := store.Save("strategies.v1", []string{legacy}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.Save(key, job); err != nil {
+					t.Fatal(err)
+				}
+				sender := &legacyIdentitySender{}
+				if tc.pending {
+					sender.pending = job.ID
+					if err := store.Save("txmanager.active.v1", map[string]string{"id": job.ID, "signed": "existing-signed-bytes"}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				bytesFor := func(key string) []byte {
+					t.Helper()
+					hash := sha256.Sum256([]byte(key))
+					raw, err := os.ReadFile(filepath.Join(directory, hex.EncodeToString(hash[:])+".json"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					return raw
+				}
+				before := bytesFor(key)
+				var signed []byte
+				if tc.pending {
+					signed = bytesFor("txmanager.active.v1")
+				}
+				worker := keeper.Keeper{Store: store, Sender: sender, Strategies: strategies}
+				if err := worker.CheckRecovery(); err == nil || !strings.Contains(err.Error(), "removed from configuration") {
+					t.Fatalf("legacy owner admitted: %v", err)
+				}
+				if !bytes.Equal(before, bytesFor(key)) || tc.pending && (!bytes.Equal(signed, bytesFor("txmanager.active.v1")) || sender.pending != job.ID) {
+					t.Fatal("recovery rewrote legacy ownership")
+				}
+				var inventory []string
+				if _, err := store.Load("strategies.v1", &inventory); err != nil || !slices.Contains(inventory, legacy) {
+					t.Fatal("legacy inventory identifier removed", err)
+				}
+			})
+		}
 	}
 }

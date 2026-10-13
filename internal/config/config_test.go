@@ -1,14 +1,15 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
-	"gopkg.in/yaml.v3"
 )
 
 const validConfig = `curator:
@@ -19,8 +20,7 @@ chain:
 signer:
   address: '0x0000000000000000000000000000000000000001'
 strategies:
-  - name: example
-    executor: '0x0000000000000000000000000000000000000002'
+  - '0x0000000000000000000000000000000000000002'
 `
 
 func writeConfig(t *testing.T, text string) string {
@@ -60,20 +60,20 @@ func TestRejectMalformedConfiguration(t *testing.T) {
 	}
 }
 func TestFingerprintIgnoresCommentsAndPosition(t *testing.T) {
-	t.Parallel()
-	var a, b Config
-	if err := yaml.Unmarshal([]byte(validConfig), &a); err != nil {
+	a, err := Load(writeConfig(t, validConfig))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := yaml.Unmarshal([]byte("# documentation\n\n"+validConfig), &b); err != nil {
+	b, err := Load(writeConfig(t, "# documentation\n\n"+validConfig))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Strategies[0].Fingerprint() != b.Strategies[0].Fingerprint() {
+	account, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01")
+	if a.StrategyFingerprint(a.Strategies[0], account, caller) != b.StrategyFingerprint(b.Strategies[0], account, caller) {
 		t.Fatal("comments changed identity")
 	}
-	b.Strategies[0].Executor = "different"
-	if a.Strategies[0].Fingerprint() == b.Strategies[0].Fingerprint() {
-		t.Fatal("account did not change identity")
+	if a.StrategyFingerprint(a.Strategies[0], account, caller) == a.StrategyFingerprint(common.HexToAddress("0x04").Hex(), account, caller) {
+		t.Fatal("executor did not change identity")
 	}
 }
 
@@ -166,8 +166,8 @@ func TestExecutorOnlyStrategyUsesRequiredCurator(t *testing.T) {
 
 func TestCuratorValidationRejectsObsoleteAndUnsafeConfiguration(t *testing.T) {
 	for name, raw := range map[string]string{
-		"old account":      strings.Replace(validConfig, "    executor:", "    account: '0x0000000000000000000000000000000000000003'\n    executor:", 1),
-		"old file":         strings.Replace(validConfig, "    executor:", "    tree: permissions.json\n    executor:", 1),
+		"old account":      strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    account: '0x0000000000000000000000000000000000000003'\n"),
+		"old file":         strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    tree: permissions.json\n"),
 		"missing curator":  strings.Replace(validConfig, "curator:\n  url: http://127.0.0.1:1/api/v1\n", "", 1),
 		"credential URL":   strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "https://user:secret@example.invalid/api/v1", 1),
 		"query URL":        strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "http://example.invalid/api/v1?token=private", 1),
@@ -217,8 +217,8 @@ func TestRuntimePolicyRejectsLegacyOverrides(t *testing.T) {
 func TestRuntimeRejectsManualProviders(t *testing.T) {
 	for _, name := range []string{"static", "rpc", "http", "cowswap", "merkl", "liquidlane-rfq", "redemptions", "securitize"} {
 		t.Run(name, func(t *testing.T) {
-			raw := validConfig + "    providers:\n      - name: " + name + "\n        config: {}\n"
-			if _, err := Load(writeConfig(t, raw)); err == nil || !strings.Contains(err.Error(), "authenticated recipe") {
+			raw := strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    providers:\n      - name: " + name + "\n        config: {}\n")
+			if _, err := Load(writeConfig(t, raw)); err == nil {
 				t.Fatalf("manual provider accepted: %v", err)
 			}
 		})
@@ -248,7 +248,7 @@ func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
 			if cfg.Curator.TimeoutSeconds != permissions.HostTimeoutSeconds || cfg.Curator.MaxResponseBytes != permissions.HostMaxResponseBytes {
 				t.Fatalf("effective curator policy %+v", cfg.Curator)
 			}
-			got := cfg.StrategyFingerprint(cfg.Strategies[0], common.HexToAddress("0x0000000000000000000000000000000000000003"))
+			got := cfg.StrategyFingerprint(cfg.Strategies[0], common.HexToAddress("0x03"), common.HexToAddress("0x01"))
 			if fingerprint == "" {
 				fingerprint = got
 			} else if fingerprint != got {
@@ -258,82 +258,103 @@ func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
 	}
 }
 
-func TestExplicitStrategyIdentityRemainsStable(t *testing.T) {
-	cfg, err := Load(writeConfig(t, validConfig))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Captured before optional-name support at 9075f434ae6e.
-	if cfg.Strategies[0].Fingerprint() != "0x39b8f063a26765f1c6fef5a84af4ef9ba16b96c960c33ff66a89f34d90483e2c" || cfg.StrategyFingerprint(cfg.Strategies[0], common.HexToAddress("0x03")) != "0xe13fbcba55240945069ca4f178b0ab14e0de1c143f2d3fd56bc2e4970476089e" {
-		t.Fatal("explicit strategy identity changed")
-	}
+func strategyConfig(body string) string {
+	prefix, _, _ := strings.Cut(validConfig, "strategies:\n")
+	return prefix + "strategies:\n" + body
 }
 
-func TestOptionalStrategyNames(t *testing.T) {
-	const executor = "0xaBcDeF0000000000000000000000000000000001"
-	const derived = "executor-0xabcdef0000000000000000000000000000000001"
+func TestScalarStrategyAddressSchema(t *testing.T) {
+	const mixed = "0xaBcDeF0000000000000000000000000000000001"
+	const canonical = "0xabcdef0000000000000000000000000000000001"
 	const other = "0x0000000000000000000000000000000000000002"
-	const otherName = "executor-0x0000000000000000000000000000000000000002"
 	for _, tc := range []struct {
-		name, strategies string
-		want             []string
+		name, body string
+		want       []string
 	}{
-		{"omitted", "  - executor: '" + executor + "'\n", []string{derived}},
-		{"empty", "  - name: ''\n    executor: '" + executor + "'\n", []string{derived}},
-		{"lowercase", "  - executor: '" + strings.ToLower(executor) + "'\n", []string{derived}},
-		{"uppercase", "  - executor: '0x" + strings.ToUpper(executor[2:]) + "'\n", []string{derived}},
-		{"ordered", "  - executor: '" + executor + "'\n  - executor: '" + other + "'\n", []string{derived, otherName}},
-		{"reordered", "  - executor: '" + other + "'\n  - executor: '" + executor + "'\n", []string{otherName, derived}},
-		{"custom", "  - name: Existing_Label-1\n    executor: '" + executor + "'\n", []string{"Existing_Label-1"}},
-		{"separate named workflows", "  - name: first\n    executor: '" + executor + "'\n  - name: second\n    executor: '" + executor + "'\n", []string{"first", "second"}},
+		{"one", "  - '" + mixed + "'\n", []string{canonical}},
+		{"lowercase", "  - '" + canonical + "'\n", []string{canonical}},
+		{"uppercase", "  - '0x" + strings.ToUpper(mixed[2:]) + "'\n", []string{canonical}},
+		{"ordered", "  - '" + mixed + "'\n  - '" + other + "'\n", []string{canonical, other}},
+		{"reordered", "  - '" + other + "'\n  - '" + mixed + "'\n", []string{other, canonical}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prefix, _, _ := strings.Cut(validConfig, "strategies:\n")
-			cfg, err := Load(writeConfig(t, prefix+"strategies:\n"+tc.strategies))
+			cfg, err := Load(writeConfig(t, strategyConfig(tc.body)))
 			if err != nil {
 				t.Fatal(err)
 			}
-			for i, name := range tc.want {
-				if cfg.Strategies[i].Name != name {
-					t.Fatalf("name=%q want%q", cfg.Strategies[i].Name, name)
-				}
-			}
-			if tc.name == "custom" && cfg.Strategies[0].Executor != executor {
-				t.Fatal("explicit executor representation changed")
+			if !slices.Equal(cfg.Strategies, tc.want) {
+				t.Fatalf("strategies=%v want%v", cfg.Strategies, tc.want)
 			}
 		})
 	}
+	many := strings.Builder{}
+	for i := 1; i <= 257; i++ {
+		fmt.Fprintf(&many, "  - '0x%040x'\n", i)
+	}
 	for name, body := range map[string]string{
-		"duplicate omitted": "  - executor: '" + executor + "'\n  - executor: '" + strings.ToLower(executor) + "'\n",
-		"custom collision":  "  - executor: '" + executor + "'\n  - name: " + derived + "\n    executor: '" + other + "'\n",
-		"duplicate custom":  "  - name: existing\n    executor: '" + executor + "'\n  - name: existing\n    executor: '" + other + "'\n",
-		"invalid custom":    "  - name: '../escape'\n    executor: '" + executor + "'\n",
-		"invalid executor":  "  - executor: 'invalid'\n",
-		"zero executor":     "  - executor: '0x0000000000000000000000000000000000000000'\n",
+		"empty list": "  []\n", "too many": many.String(), "empty": "  - ''\n", "zero": "  - '0x0000000000000000000000000000000000000000'\n", "invalid": "  - invalid\n", "short": "  - '0x1'\n", "number": "  - 1\n", "null": "  - null\n", "duplicate": "  - '" + mixed + "'\n  - '" + canonical + "'\n",
+		"named object": "  - name: custom\n    executor: '" + mixed + "'\n", "unnamed object": "  - executor: '" + mixed + "'\n", "label": "  - executor-" + canonical + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			prefix, _, _ := strings.Cut(validConfig, "strategies:\n")
-			if _, err := Load(writeConfig(t, prefix+"strategies:\n"+body)); err == nil {
-				t.Fatal("invalid strategy identity accepted")
+			if _, err := Load(writeConfig(t, strategyConfig(body))); err == nil {
+				t.Fatal("invalid strategy accepted")
 			}
 		})
 	}
 }
 
-func TestValidateStoresDerivedStrategyName(t *testing.T) {
+func TestAddressIdentityIgnoresCaseAndOrder(t *testing.T) {
+	account, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01")
+	a, err := Load(writeConfig(t, strategyConfig("  - '0xaBcDeF0000000000000000000000000000000001'\n  - '0x0000000000000000000000000000000000000002'\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(writeConfig(t, strategyConfig("  - '0x0000000000000000000000000000000000000002'\n  - '0xabcdef0000000000000000000000000000000001'\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, executor := range a.Strategies {
+		if a.StrategyFingerprint(executor, account, caller) != b.StrategyFingerprint(executor, account, caller) {
+			t.Fatal("case/order changed identity")
+		}
+	}
+	original := a.StrategyFingerprint(a.Strategies[0], account, caller)
+	for name, change := range map[string]func(*Config, *common.Address, *common.Address){
+		"account":       func(_ *Config, a, _ *common.Address) { *a = common.HexToAddress("0x04") },
+		"caller":        func(_ *Config, _, c *common.Address) { *c = common.HexToAddress("0x05") },
+		"chain":         func(c *Config, _, _ *common.Address) { c.Chain.ChainID++ },
+		"source":        func(c *Config, _, _ *common.Address) { c.Curator.URL = "http://other.invalid/api/v1" },
+		"credential":    func(c *Config, _, _ *common.Address) { c.Curator.APIKeyEnv = "OTHER_CURATOR_KEY" },
+		"sender policy": func(c *Config, _, _ *common.Address) { c.TxManager.MaxFeeGwei++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, a1, c1 := *a, account, caller
+			change(&c, &a1, &c1)
+			if c.StrategyFingerprint(c.Strategies[0], a1, c1) == original {
+				t.Fatal("changed identity invisible")
+			}
+		})
+	}
+}
+
+func TestValidateStoresCanonicalAddresses(t *testing.T) {
 	cfg, err := Load(writeConfig(t, validConfig))
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Strategies[0].Name = ""
+	cfg.Strategies = []string{"0xaBcDeF0000000000000000000000000000000001"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Strategies[0].Name != "executor-0x0000000000000000000000000000000000000002" {
-		t.Fatal("direct validation failed to store effective state identity")
+	if cfg.Strategies[0] != "0xabcdef0000000000000000000000000000000001" {
+		t.Fatal("direct validation did not canonicalize")
 	}
-	cfg.Strategies[0].Name, cfg.Strategies[0].Executor = "", "invalid"
-	if err := cfg.Validate(); err == nil || cfg.Strategies[0].Name != "" {
-		t.Fatal("invalid executor acquired a derived identity")
+	cfg.Strategies = append(cfg.Strategies, "0xABCDEF0000000000000000000000000000000001")
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("direct validation accepted duplicate")
+	}
+	cfg.Strategies = []string{"invalid"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("invalid executor accepted")
 	}
 }

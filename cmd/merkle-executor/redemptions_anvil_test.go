@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,16 +179,10 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	}))
 	defer permissionServer.Close()
 	cfg.Curator.URL = permissionServer.URL + "/api/v1"
-	requestStrategy := cfg.Strategies[0]
-	requestStrategy.Name, requestStrategy.Executor = "request", requestExecutor.Hex()
 	requestConfig := redemptions.Config{Family: "centrifuge", Mode: "request", ChainID: 31337, Token: share.Hex(), OutputAsset: asset.Hex(), Target: issuer.Hex(), Amount: "100", Action: "1:0"}
-	requestStrategy.Providers = nil
-	claimStrategy := requestStrategy
-	claimStrategy.Name, claimStrategy.Executor = "claim", claimExecutor.Hex()
 	claimConfig := requestConfig
 	claimConfig.Mode, claimConfig.Action, claimConfig.Amount = "claim", "0:0", "100"
-	claimStrategy.Providers = nil
-	cfg.Strategies = []config.Strategy{requestStrategy, claimStrategy}
+	cfg.Strategies = []string{strings.ToLower(requestExecutor.Hex()), strings.ToLower(claimExecutor.Hex())}
 	path := writeCLIConfig(t, directory, cfg)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 
@@ -216,14 +211,14 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 		return job
 	}
 	run()
-	requested := load("request")
+	requested := load(cfg.Strategies[0])
 	if requested.Phase != "settled" || len(requested.Progress) != 1 || !requested.Progress[0].Done || requested.Progress[0].Outcome != "requested" || requested.Result.Execution == nil {
 		t.Fatal("confirmed request did not release account ownership with correlated execution evidence")
 	}
 	if read(issuer, issuerArtifact, "pendingShares", account).Int64() != 100 || read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(share, shareArtifact, "allowance", account, issuer).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Sign() != 0 {
 		t.Fatal("request did not consume exact allowance and retain issuer-owned pending shares")
 	}
-	if found, err := state.Read(cfg.StateDir, "strategy.claim.v1", new(keeper.Job)); err != nil || found {
+	if found, err := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[1]+".v1", new(keeper.Job)); err != nil || found {
 		t.Fatalf("unready claim became durable work: %v", err)
 	}
 	run() // Restart while the issuer is still pending must not submit another request.
@@ -232,7 +227,7 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &issuer, servicePack(t, issuerArtifact, "finalize", account))
 	run() // Separate claim strategy may now own the same account and nonce lane.
-	claimed := load("claim")
+	claimed := load(cfg.Strategies[1])
 	if claimed.Phase != "settled" || !claimed.Progress[0].Done || claimed.Progress[0].Outcome != "claimed" || claimed.Result.Execution == nil || claimed.Result.Hash == requested.Result.Hash {
 		t.Fatal("matured issuer claim did not finish as its own confirmed execution")
 	}
@@ -268,7 +263,7 @@ func runIssuerFixture(ctx context.Context, path string, policies []redemptions.C
 	}
 	targets := make([]common.Address, len(cfg.Strategies))
 	for i, strategy := range cfg.Strategies {
-		targets[i] = common.HexToAddress(strategy.Executor)
+		targets[i] = common.HexToAddress(strategy)
 	}
 	accounts, caller, err := discoverIdentity(ctx, client, targets)
 	if err != nil {
@@ -281,7 +276,7 @@ func runIssuerFixture(ctx context.Context, path string, policies []redemptions.C
 			return err
 		}
 		revision, _ := json.Marshal(policies[i])
-		strategies[i] = keeper.Strategy{Config: keeper.Config{Name: strategy.Name, Executor: strategy.Executor, Account: accounts[targets[i]].Hex(), Interval: strategy.Interval, Revision: string(revision)}, Providers: []provider.Provider{runtime}}
+		strategies[i] = keeper.Strategy{Config: keeper.Config{Name: strategy, Executor: strategy, Account: accounts[targets[i]].Hex(), Interval: config.DefaultStrategyInterval, Revision: string(revision)}, Providers: []provider.Provider{runtime}}
 	}
 	store, err := state.Open(cfg.StateDir)
 	if err != nil {

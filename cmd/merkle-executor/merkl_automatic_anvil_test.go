@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -144,7 +145,7 @@ func TestAnvilAutomaticMerklClaimFeedsRecipeBalance(t *testing.T) {
 	cfg.Mode = "simulate"
 	cfg.Chain.RPCURL = rpc.URL
 	cfg.Curator.URL = curator.URL
-	cfg.Strategies[0].Executor = target.Hex()
+	cfg.Strategies[0] = strings.ToLower(target.Hex())
 	cfg.Signer.Address = ""
 	path := writeCLIConfig(t, t.TempDir(), cfg)
 	httpClient := &http.Client{Transport: serviceRewriteTransport{host: "api.merkl.xyz", target: rewrite}}
@@ -156,7 +157,7 @@ func TestAnvilAutomaticMerklClaimFeedsRecipeBalance(t *testing.T) {
 	if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
 		t.Fatal(err)
 	}
-	plan := plans["funding"]
+	plan := plans[cfg.Strategies[0]]
 	if len(plan.Outputs) != 6 || plan.Results[1] != "100" || plan.Results[2] != "17" || plan.Outputs[1].Inputs[0] != "100" || len(plan.Outputs[1].Actions) != 1 || lenses.Load() != 1 || rewardsHTTP.Load() != 1 {
 		t.Fatalf("incorrect staged preparation: results=%v lens=%d rewardHTTP=%d", plan.Results, lenses.Load(), rewardsHTTP.Load())
 	}

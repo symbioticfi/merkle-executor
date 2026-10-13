@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/symbioticfi/merkle-executor/internal/config"
+	"os"
 )
 
 func TestDaemonRejectsManualRuntimeSources(t *testing.T) {
@@ -19,9 +19,18 @@ func TestDaemonRejectsManualRuntimeSources(t *testing.T) {
 			defer server.Close()
 			cfg := testCLIConfig(t.TempDir())
 			cfg.Chain.RPCURL = server.URL
-			cfg.Strategies[0].Providers = []config.Provider{{Name: name, Config: serviceNode(t, map[string]any{})}}
-			err := runBot(t.Context(), writeCLIConfig(t, t.TempDir(), cfg), true, true, new(bytes.Buffer))
-			if err == nil || !strings.Contains(err.Error(), "strategy.providers is obsolete") || calls.Load() != 0 {
+			path := writeCLIConfig(t, t.TempDir(), cfg)
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefix, _, _ := strings.Cut(string(raw), "strategies:")
+			raw = []byte(prefix + "strategies:\n  - executor: '" + cfg.Strategies[0] + "'\n    providers:\n      - name: " + name + "\n        config: {}\n")
+			if err = os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			err = runBot(t.Context(), path, true, true, new(bytes.Buffer))
+			if err == nil || calls.Load() != 0 {
 				t.Fatalf("manual runtime source reached network: %v calls=%d", err, calls.Load())
 			}
 		})

@@ -70,13 +70,17 @@ private key. The required `curator.url` identifies the curator-backend deploymen
 including `/api/v1`; RPC endpoints and the expected chain ID also remain deployment
 inputs. No global endpoint or universal safe fee ceiling can be inferred.
 
-`strategies[].name` is an optional label. Omitted or empty names become
-`executor-` followed by the full lowercase executor address, including `0x`.
-This identifier stays stable when strategies are reordered and identifies durable
-state, logs and metrics. Custom names retain their existing identity. Keep a current
-custom name until its active jobs drain: removing it changes the state identifier,
-and recovery rejects that change without migrating journals. Separately named
-strategies may still share an executor; duplicate effective names are rejected.
+`strategies` is a list of full, nonzero executor addresses. Each address is
+normalized to lowercase, including `0x`, and directly identifies durable state,
+logs and metrics. Reordering does not change identity; duplicate addresses are
+rejected, including different checksum spellings. Strategy objects, labels and
+per-strategy options are rejected before network access.
+
+The address-only schema uses policy version `address-only-v3`. Finish active jobs
+with the previous binary and configuration before upgrading, including terminal
+jobs whose transaction journal remains occupied. Existing custom or prefixed keys
+stay visible in `status` and block admission while unresolved. Journals are never
+migrated or aliased to the new address identifiers.
 
 The runtime uses fixed cache, timeout, polling, confirmation and fee-horizon
 policies. Legacy fields are accepted only when they match the fixed policy; remove
@@ -120,8 +124,8 @@ active jobs using the old binary and configuration, including combined workflows
 with some completed providers. Then add `curator` and remove those strategy fields.
 Remove every `strategy.providers` entry when adopting recipe-derived runtime providers;
 manual mappings and economic values are rejected. Finish active jobs using the old
-binary and configuration before this migration. Derived accounts, curator settings,
-the fixed runtime policy version and transaction
+binary and configuration before this migration. Derived accounts and callers,
+chain identity, curator settings, the fixed runtime policy version and transaction
 fee policy are part of the recovery fingerprint. Before adopting a new policy
 version, finish active jobs with the previous binary and configuration. Existing
 journals are never rewritten to accept a configuration change. Curator access is
@@ -189,11 +193,12 @@ Status reads atomic snapshots while the daemon runs. Stop the daemon before rese
 
 ```sh
 bin/merkle-executor status --config config/operator.local.yaml
-bin/merkle-executor reset-strategy --config config/operator.local.yaml --name example
+bin/merkle-executor reset-strategy --config config/operator.local.yaml --executor 0x0000000000000000000000000000000000000002
 ```
 
-For a strategy without a custom name, use the identifier shown by `status` in
-`reset-strategy --name`.
+Use the executor address shown by `status` with `reset-strategy --executor`.
+Legacy custom or prefixed identifiers require the previous binary and configuration.
+Invalid or zero addresses fail before state opens.
 
 Reset is permitted only for terminal jobs after the transaction journal is clear.
 Confirmed reverts halt the strategy until inspected/reset. Preserve the state

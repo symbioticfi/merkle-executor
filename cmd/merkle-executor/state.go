@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
@@ -29,13 +31,13 @@ func stateCommands() []*cobra.Command {
 			return err
 		}
 		for _, s := range cfg.Strategies {
-			if !slices.Contains(names, s.Name) {
-				names = append(names, s.Name)
+			if !slices.Contains(names, s) {
+				names = append(names, s)
 			}
 		}
 		type row struct {
-			Name, ID, Phase, Transaction string
-			Outcomes                     []string
+			Identifier, ID, Phase, Transaction string
+			Outcomes                           []string
 		}
 		rows := make([]row, 0, len(names))
 		for _, name := range names {
@@ -47,7 +49,7 @@ func stateCommands() []*cobra.Command {
 			if !found {
 				continue
 			}
-			r := row{Name: name, ID: job.ID, Phase: job.Phase, Transaction: job.Result.Hash.Hex()}
+			r := row{Identifier: name, ID: job.ID, Phase: job.Phase, Transaction: job.Result.Hash.Hex()}
 			for _, p := range job.Progress {
 				r.Outcomes = append(r.Outcomes, p.Outcome)
 			}
@@ -59,8 +61,13 @@ func stateCommands() []*cobra.Command {
 	}}
 	status.Flags().StringVar(&statusPath, "config", "", "configuration path")
 	_ = status.MarkFlagRequired("config")
-	var resetPath, name string
+	var resetPath, executor string
 	reset := &cobra.Command{Use: "reset-strategy", Short: "Clear a terminal strategy checkpoint after inspection", Args: cobra.NoArgs, RunE: func(_ *cobra.Command, _ []string) error {
+		address, err := parse.Address(executor)
+		if err != nil {
+			return errors.New("--executor requires a full nonzero address")
+		}
+		identifier := strings.ToLower(address.Hex())
 		cfg, err := config.Load(resetPath)
 		if err != nil {
 			return err
@@ -85,11 +92,11 @@ func stateCommands() []*cobra.Command {
 		if _, err := store.Load("strategies.v1", &names); err != nil {
 			return err
 		}
-		if !slices.Contains(names, name) {
+		if !slices.Contains(names, identifier) {
 			return errors.New("unknown strategy")
 		}
 		var job keeper.Job
-		found, err = store.Load("strategy."+name+".v1", &job)
+		found, err = store.Load("strategy."+identifier+".v1", &job)
 		if err != nil {
 			return err
 		}
@@ -99,12 +106,12 @@ func stateCommands() []*cobra.Command {
 		if job.Phase != "settled" && job.Phase != "failed" {
 			return errors.New("cannot reset unfinished work; reconcile it first")
 		}
-		return store.Delete("strategy." + name + ".v1")
+		return store.Delete("strategy." + identifier + ".v1")
 	}}
 	reset.Flags().StringVar(&resetPath, "config", "", "configuration path")
-	reset.Flags().StringVar(&name, "name", "", "strategy name")
+	reset.Flags().StringVar(&executor, "executor", "", "executor address")
 	_ = reset.MarkFlagRequired("config")
-	_ = reset.MarkFlagRequired("name")
+	_ = reset.MarkFlagRequired("executor")
 	return []*cobra.Command{status, reset}
 }
 

@@ -1,46 +1,25 @@
 package cowswap
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"math/big"
+	hostconfig "github.com/symbioticfi/merkle-executor/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-
-	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	hostconfig "github.com/symbioticfi/merkle-executor/internal/config"
-	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 )
 
 func TestInternalHTTPAliasCannotMoveDurableCoWOrder(t *testing.T) {
 	hits := [2]int{}
-	var identity prepared
 	servers := make([]*httptest.Server, 2)
 	for i := range servers {
 		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hits[i]++
-			switch r.URL.Path {
-			case "/api/v1/quote":
-				q := sampleQuote()
-				q.BuyAmount = "2000"
-				q.FeeAmount = "10"
-				_ = json.NewEncoder(w).Encode(wire.CowQuoteResponse{Quote: q, ID: 1, Verified: true})
-			case "/api/v1/orders":
-				_ = json.NewEncoder(w).Encode(identity.UID)
-			default:
-				http.NotFound(w, r)
-			}
+			w.WriteHeader(http.StatusNoContent)
 		}))
 		defer servers[i].Close()
 	}
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	var oldFingerprint string
-	var durable []byte
 	for i := range servers {
 		anchor0, anchor1 := "&route ", ""
 		if i == 1 {
@@ -50,39 +29,11 @@ func TestInternalHTTPAliasCannotMoveDurableCoWOrder(t *testing.T) {
 		if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 			t.Fatal(err)
 		}
-		cfg, err := hostconfig.Load(path)
-		if err != nil {
-			if !strings.Contains(err.Error(), "aliases") && !strings.Contains(err.Error(), "strategy.providers is obsolete") {
-				t.Fatal(err)
-			}
-			continue
-		}
-		p, err := fixtureFactory(cfg.Strategies[0].Providers[0].Config, registry.Deps{Chain: &negativeChain{}, HTTP: servers[i].Client()})
-		if err != nil {
-			t.Fatal(err)
-		}
-		snap := negativeSnapshot()
-		out, err := p.Prepare(context.Background(), snap)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if i == 0 {
-			oldFingerprint = cfg.Strategies[0].Fingerprint()
-			durable = bytes.Clone(out.Data)
-		} else if oldFingerprint != cfg.Strategies[0].Fingerprint() || !bytes.Equal(durable, out.Data) {
-			t.Fatal("fixture did not preserve config fingerprint and durable order identity")
-		}
-		if err = json.Unmarshal(out.Data, &identity); err != nil {
-			t.Fatal(err)
-		}
-		snap.BlockNumber = big.NewInt(13)
-		snap.BlockHash = testHeader(snap.BlockNumber).Hash()
-		result, err := p.Advance(context.Background(), snap, out, nil)
-		if err != nil || result.Reference != identity.UID {
-			t.Fatalf("advance: %+v %v", result, err)
+		if _, err := hostconfig.Load(path); err == nil {
+			t.Fatal("obsolete aliased provider reached the address-only daemon")
 		}
 	}
 	if hits[0] != 0 || hits[1] != 0 {
-		t.Fatalf("anchor relocation moved an identical durable order between endpoints: hits=%v fingerprint=%s uid=%s", hits, oldFingerprint, identity.UID)
+		t.Fatalf("obsolete aliased provider reached HTTP endpoints: hits=%v", hits)
 	}
 }

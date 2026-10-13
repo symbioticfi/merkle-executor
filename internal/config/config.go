@@ -1,4 +1,4 @@
-// Package config decodes file-driven configuration and opaque provider settings.
+// Package config decodes strict file-driven runtime configuration.
 package config
 
 import (
@@ -8,12 +8,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
@@ -35,7 +33,7 @@ type Config struct {
 	OperationTimeout time.Duration         `yaml:"operationTimeout"`
 	HTTPTimeout      time.Duration         `yaml:"httpTimeout"`
 	Observability    Observability         `yaml:"observability"`
-	Strategies       []Strategy            `yaml:"strategies"`
+	Strategies       []string              `yaml:"strategies"`
 }
 
 type Chain struct {
@@ -52,21 +50,10 @@ type Observability struct {
 	Addr  string `yaml:"addr"`
 	Debug bool   `yaml:"debug"`
 }
-type Provider struct {
-	Name   string    `yaml:"name"`
-	Config yaml.Node `yaml:"config"`
-}
-type Strategy struct {
-	Name       string        `yaml:"name"`
-	Executor   string        `yaml:"executor"`
-	RecipeHash string        `yaml:"recipeHash"`
-	Interval   time.Duration `yaml:"interval"`
-	Providers  []Provider    `yaml:"providers"`
-}
 
 const (
 	// RuntimePolicyVersion changes when built-in preparation or timing semantics change.
-	RuntimePolicyVersion                  = "recipe-derived-v2"
+	RuntimePolicyVersion                  = "address-only-v3"
 	DefaultKeyEnv                         = "MERKLE_EXECUTOR_PRIVATE_KEY"
 	DefaultRecipeCacheBytes        int64  = 16 << 20
 	DefaultPollInterval                   = 15 * time.Second
@@ -77,8 +64,6 @@ const (
 	DefaultTransactionPollInterval        = 2 * time.Second
 	StandardMulticall3                    = protocolio.StandardMulticall3
 )
-
-var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
@@ -132,11 +117,6 @@ func Load(path string) (*Config, error) {
 	}
 	if !filepath.IsAbs(cfg.StateDir) {
 		cfg.StateDir = filepath.Join(base, cfg.StateDir)
-	}
-	for i := range cfg.Strategies {
-		if cfg.Strategies[i].Interval == 0 {
-			cfg.Strategies[i].Interval = DefaultStrategyInterval
-		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -205,84 +185,33 @@ func (c *Config) Validate() error {
 	if err := c.TxManager.validateRuntimePolicy(); err != nil {
 		return err
 	}
-	names := make(map[string]bool)
-	for i := range c.Strategies {
-		s := &c.Strategies[i]
-		executor, err := parse.Address(s.Executor)
+	seen := make(map[string]bool, len(c.Strategies))
+	for i, value := range c.Strategies {
+		executor, err := parse.Address(value)
 		if err != nil {
-			return errors.Errorf("strategy %s: invalid executor", s.Name)
+			return errors.Errorf("strategy %d: invalid executor address", i+1)
 		}
-		if s.Name == "" {
-			s.Name = "executor-" + strings.ToLower(executor.Hex())
+		canonical := strings.ToLower(executor.Hex())
+		if seen[canonical] {
+			return errors.Errorf("duplicate executor address %s", canonical)
 		}
-		if !validName.MatchString(s.Name) || names[s.Name] {
-			return errors.New("strategy names must be unique filesystem-safe identifiers")
-		}
-		names[s.Name] = true
-		if s.Interval != DefaultStrategyInterval {
-			return errors.Errorf("strategy %s: interval is fixed to one minute; remove the legacy override", s.Name)
-		}
-		if s.RecipeHash != "" {
-			b, err := hexutil.Decode(s.RecipeHash)
-			if err != nil || len(b) != 32 {
-				return errors.New("recipeHash must be bytes32")
-			}
-		}
-		if len(s.Providers) != 0 {
-			return errors.New("strategy.providers is obsolete; runtime values must be derived from the authenticated recipe")
-		}
-		for _, p := range s.Providers {
-			if err := parse.RejectAliases(p.Config); err != nil {
-				return err
-			}
-			if p.Name == "" {
-				return errors.New("provider name required")
-			}
-		}
+		seen[canonical] = true
+		c.Strategies[i] = canonical
 	}
 	return nil
 }
 
-// Fingerprint binds durable work to semantic configuration. Addresses, provider
-// mappings and endpoint selection cannot silently change during an active job.
-func (s Strategy) Fingerprint() string {
-	type semanticProvider struct {
-		Name string
-		Node any
-	}
-	ps := make([]semanticProvider, 0, len(s.Providers))
-	for _, p := range s.Providers {
-		ps = append(ps, semanticProvider{p.Name, nodeIdentity(p.Config)})
-	}
-	raw, _ := json.Marshal(struct {
-		Name, Executor, RecipeHash string
-		Interval                   time.Duration
-		Providers                  []semanticProvider
-	}{s.Name, s.Executor, s.RecipeHash, s.Interval, ps})
-	return crypto.Keccak256Hash(raw).Hex()
-}
-
-// StrategyFingerprint binds immutable derived identity and source settings to
-// durable work. Migration never rewrites an existing journal's fingerprint.
-func (c *Config) StrategyFingerprint(s Strategy, account common.Address) string {
+// StrategyFingerprint binds the canonical executor, derived deployment identity
+// and effective runtime policy to durable work. Existing journals are never migrated.
+func (c *Config) StrategyFingerprint(executor string, account, caller common.Address) string {
 	raw, _ := json.Marshal(struct {
 		Policy    string
-		Strategy  string
+		Executor  common.Address
 		Account   common.Address
+		Caller    common.Address
+		ChainID   uint64
 		Curator   protocolio.HTTPConfig
 		TxManager TxManager
-	}{RuntimePolicyVersion, s.Fingerprint(), account, c.Curator, c.TxManager})
+	}{RuntimePolicyVersion, common.HexToAddress(executor), account, caller, c.Chain.ChainID, c.Curator, c.TxManager})
 	return crypto.Keccak256Hash(raw).Hex()
-}
-
-func nodeIdentity(n yaml.Node) any {
-	children := make([]any, len(n.Content))
-	for i, c := range n.Content {
-		children[i] = nodeIdentity(*c)
-	}
-	return struct {
-		Kind       yaml.Kind
-		Tag, Value string
-		Children   []any
-	}{n.Kind, n.Tag, n.Value, children}
 }

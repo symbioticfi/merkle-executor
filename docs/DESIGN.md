@@ -49,8 +49,14 @@ use later claim recipes, configured independently from the request recipe.
 
 ## Account and permission ownership
 
-The daemon requires executors and explicit provider policies in YAML. At startup it
-pins a valid head, batches deduplicated account getters, rejects any invalid member,
+The daemon accepts a YAML list of executor addresses and registers fixed automatic
+providers at startup. Canonical lowercase executor addresses are the durable and
+log identifiers; duplicate addresses and old strategy objects are rejected. The
+`address-only-v3` policy binds chain, discovered account/caller, curator source and
+sender policy. Old custom or prefixed journals remain inspectable and block new
+admission while unresolved; drain them with the previous binary and configuration.
+At startup it pins a valid head, batches deduplicated account and caller getters,
+rejects any invalid member,
 and closes the same-number/hash guard before publishing the complete account map.
 The configured executor's account is immutable in the supported contract, but the SDK
 still rereads and compares it during every preparation and presend validation.
