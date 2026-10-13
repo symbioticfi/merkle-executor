@@ -10,7 +10,7 @@ for spec in LiquidLaneReactor:liquidlanereactor LiquidConnector:liquidconnector 
     MidasRedemption:midasredemption CentrifugeShare:centrifugeshare AsyncRedeemVault:asyncredeemvault \
     FigureYieldVault:figureyieldvault OpenEdenExpress:openedenexpress ParetoQueue:paretoqueue \
     ParetoCDO:paretocdo ParetoStrategy:paretostrategy ERC4626:erc4626 \
-    NoonWithdrawalHandler:noonwithdrawalhandler \
+    NoonWithdrawalHandler:noonwithdrawalhandler NoonRedeemHandlerV2:noonredeemhandlerv2 \
     SecuritizeOffRamp:securitizeofframp SecuritizeLegacyOffRamp:securitizelegacyofframp \
     SecuritizeToken:securitizetoken SecuritizeTopology:securitizetopology; do
     contract=${spec%:*}

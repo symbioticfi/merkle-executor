@@ -218,21 +218,22 @@ func assertIssuerAction(t *testing.T, data []byte, contract abi.ABI, method stri
 	}
 }
 
-func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRequest(t *testing.T) {
+func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRoute(t *testing.T) {
 	data, err := os.ReadFile("../../../config/assets/liquid-lane.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var catalogue struct {
 		Assets []struct {
-			Config `yaml:",inline"`
-			Symbol string `yaml:"symbol"`
+			Config       `yaml:",inline"`
+			Symbol       string   `yaml:"symbol"`
+			RequestModes []string `yaml:"requestModes"`
 		} `yaml:"assets"`
 	}
 	if err = yaml.Unmarshal(data, &catalogue); err != nil {
 		t.Fatal(err)
 	}
-	wanted := strings.Fields("mF-ONE mROX mHYPER CarryTradeUSDTRYLeverage StockMarketTRBasisTrade mM1-USD JAAA JTRSY HYB deJAAA deJTRSY HYBOND PRIME mGLOBAL AA_FalconXUSDC sUSN")
+	wanted := strings.Fields("mF-ONE mROX mHYPER CarryTradeUSDTRYLeverage StockMarketTRBasisTrade mM1-USD JAAA JTRSY HYB deJAAA deJTRSY HYBOND PRIME mGLOBAL AA_FalconXUSDC sUSN USN")
 	if len(catalogue.Assets) != len(wanted) {
 		t.Fatalf("catalogue asset coverage: got %d, expected %d", len(catalogue.Assets), len(wanted))
 	}
@@ -243,6 +244,18 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRequest(t *testing.T) 
 				t.Fatal("duplicate catalogue asset")
 			}
 			seen[entry.Symbol] = true
+			if entry.Symbol == "USN" {
+				cfg, s, r := nativeNoonFixture(t)
+				if len(entry.RequestModes) != 1 || entry.RequestModes[0] != "redeem-usn" {
+					t.Fatal("native catalogue mode changed")
+				}
+				cfg.ChainID, cfg.Token, cfg.OutputAsset, cfg.Target, cfg.Mode = entry.ChainID, entry.Token, entry.OutputAsset, entry.Target, entry.RequestModes[0]
+				out, err := issuerProvider(t, cfg, r).Prepare(t.Context(), s)
+				if err != nil || len(out.Actions) != 1 || out.Inputs[3] != cfg.Amount {
+					t.Fatalf("native USN catalogue route is not executable: %+v %v", out, err)
+				}
+				return
+			}
 			cfg := issuerConfig(entry.Family)
 			cfg.ChainID, cfg.Token, cfg.OutputAsset, cfg.Target = entry.ChainID, entry.Token, entry.OutputAsset, entry.Target
 			cfg.CDO, cfg.Strategy = entry.CDO, entry.Strategy

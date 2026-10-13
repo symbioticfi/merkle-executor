@@ -1,6 +1,6 @@
 # Read aggregation source provenance
 
-Read-only source inspection on 2026-10-12 established the getter scopes below. No live transactions were used. These are the supported implementation assumptions when `chain.multicall3` is enabled. Operators must verify that configured deployments, custom targets and proxy upgrades retain the reviewed behavior. Source discovery is never performed automatically at runtime. ABI view annotations alone do not establish safety.
+Read-only source inspection on 2026-10-12 established the getter scopes below. No live transactions were used. The normal daemon uses the standard Multicall3 address. These are the reviewed implementation assumptions for getters that opt into aggregation. Operators must verify that deployments and proxy upgrades retain the reviewed behavior. Source discovery is never performed automatically at runtime. ABI view annotations alone do not establish safety.
 
 Sourcify source URL template: `https://sourcify.dev/server/v2/contract/1/<implementation>?fields=sources`. Proxy mapping metadata used `?fields=proxyResolution`; it establishes mappings at retrieval, not code verification at a runtime pinned block.
 
@@ -47,6 +47,18 @@ Handler `0x0DaBc0D9B270c9B0C4C77AaCeAa712b56D0F9178`: `contracts/WithdrawalHandl
 
 sUSN impl `0xebbcbc6672683e1956125e7c5e89e14ceac8cd3d`: inherited `@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol` SHA256 `8c65f46c961932ab4113c4758fbc96aaf350e812b040a201603131be59ada737`; asset storage. All Noon stage getters safe; returned-role hasRole remains a dependent second request on request route.
 
+Native USN redeemer `0x9F8D0a683871125083170F65430F8A15aFfa0086`:
+`contracts/RedeemHandlerV2.sol` SHA256
+`095557c6fdedf7647fe76268b3bf7af132507ca9afd9473947f9d23cf30aa9ec`.
+The nine native preparation getters (`usnToken`, `redeemableCollaterals`,
+`isWhitelisted` with explicit account, `treasury`, `redeemLimitPerBlock`,
+`currentBlockRedeemAmount`, `lastRedeemBlock`, `collateralDecimals`, and
+`calculateCollateralAmount` with explicit collateral/full amount) read storage
+or invoke the configured oracle from the handler in either calling context.
+They may aggregate. Treasury token `balanceOf` and `allowance` remain isolated
+inside the dependent JSON stage; native preparation never generalizes ERC20
+safety by selector. Full simulations and canonical receipt checks remain ordered.
+
 ## Pareto
 
 Queue target `0x5cC24f44cCAa80DD2c079156753fc1e908F495DC` -> impl `0x492af7fd7759897db2BE8992e497Cce6cc10EB02`: `contracts/IdleCDOEpochQueue.sol` SHA256 `487911f25919caeda4dbfbf55c3568d5a462be7c81402b4be830474f63780534`; all consumed queue getters public storage/mappings.
@@ -79,7 +91,7 @@ Known share vault(asset) getters are public maps: JAAA `0x5a0F93D040De44e78F251b
 
 ## Exclusions
 
-Arbitrary configured data RPC reads (`From=snapshot.Account`), arbitrary ERC1271 signatures, full execution simulations and unknown external getter implementations retain original isolated eth_call context. JSON batching still eliminates independent network round trips. All final canonical fences and hash-linked ancestry walks remain ordered singles; writes/signing/nonce admission are excluded.
+SDK direct data RPC reads (`From=snapshot.Account`), arbitrary ERC1271 signatures, full execution simulations and unknown external getter implementations retain original isolated eth_call context. JSON batching still eliminates independent network round trips. All final canonical fences and hash-linked ancestry walks remain ordered singles; writes/signing/nonce admission are excluded.
 
 ## Liquid Lane RFQ consumer
 
@@ -89,7 +101,7 @@ RFQ Reactor `22b04a850ca3680103e797bfae0e1a3b997fac83` exposes caller-independen
 adapters revision above is also a direct mapping read. These are the only three
 safe getters used by the consumer's Advance stage. Domain can be staged into initial
 recipe metadata before quote acquisition. Token `balanceOf` and `allowance` targets
-are arbitrary operator configuration and remain isolated eth_call members sharing
-the JSON array; no caller-independence is inferred from their ABI. Fill and indexed
+come from the authenticated recipe and can have arbitrary implementations. They
+remain isolated eth_call members sharing the JSON array; no caller-independence is inferred from their ABI. Fill and indexed
 account cancellation logs share a separate array with the range header. A matching
 event header and receipt share a later batch; canonical closure follows those reads. [Full source hashes and semantics](LIQUID_LANE_RFQ.md).

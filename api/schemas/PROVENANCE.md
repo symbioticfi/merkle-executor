@@ -77,3 +77,11 @@ The public Liquid Lane RFQ consumer uses a distinct Reactor ABI and public quote
 wire subset. [LIQUID_LANE_RFQ.md](LIQUID_LANE_RFQ.md) records exact contract/backend
 revisions, ABI source hash, account interface, EIP712 layout, cursor semantics and
 unsupported boundaries. These do not change the older signed discount subset.
+
+- Native Noon `NoonRedeemHandlerV2.json` is the reviewed subset of the verified
+  Ethereum deployment `0x9F8D0a683871125083170F65430F8A15aFfa0086`, retrieved
+  2026-10-12 from Blockscout. Its full source closure, SHA-256 hashes, exact
+  Solidity 0.8.28/Paris/optimizer-200 settings and generated local artifacts live
+  in `internal/providers/redemptions/testdata/noon/provenance.json`. Only USN→USDC
+  preparation, `redeemOnchain`, and its `Redeemed` receipt event are included;
+  signed orders, USDT, USN minting and administrative methods are excluded.

@@ -17,6 +17,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
 	figure "github.com/symbioticfi/merkle-executor/api/bindings/figureyieldvault"
 	midas "github.com/symbioticfi/merkle-executor/api/bindings/midasredemption"
+	native "github.com/symbioticfi/merkle-executor/api/bindings/noonredeemhandlerv2"
 	"github.com/symbioticfi/merkle-executor/api/bindings/noonwithdrawalhandler"
 	openeden "github.com/symbioticfi/merkle-executor/api/bindings/openedenexpress"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretocdo"
@@ -30,7 +31,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const CatalogueSHA256 = "d29862ea24a7968ca7161780d272f70cfe314418c603839fb884985aaebd95f2"
+const CatalogueSHA256 = "be54e202c2a12fd0cf4fc5d67a0aea9a3b56b8c51ce894cd526c43d9662f2348"
 const PolicyVersion = "issuer-recipes-v1-" + CatalogueSHA256
 
 //go:embed catalogue/liquid-lane.yaml
@@ -222,14 +223,18 @@ func (p *automatic) selectRoutes(s provider.Snapshot, r recipes.Recipe, t *recip
 					data = erc4626.NewERC4626().PackRedeem(new(big.Int), s.Account, s.Account)
 					at = 4
 				case "noon":
-					if mode == "request" {
+					switch mode {
+					case "request":
 						destination = token
 						data = erc4626.NewERC4626().PackRedeem(new(big.Int), target, s.Account)
 						at = 4
-					} else {
+					case "claim":
 						data = noonwithdrawalhandler.NewNoonWithdrawalHandler().PackClaimWithdrawal(new(big.Int))
 						at = 4
 						index = true
+					case "redeem-usn":
+						data = native.NewNoonRedeemHandlerV2().PackRedeemOnchain(output, new(big.Int))
+						at = 36
 					}
 				case "pareto":
 					switch mode {
@@ -562,6 +567,7 @@ func (p *automatic) Advance(ctx context.Context, s provider.Snapshot, out provid
 		return provider.Progress{Done: true, Outcome: "not-applicable"}, nil
 	}
 	outcome := "requested"
+	nativeOnly := true
 	for i, runtime := range runtimes {
 		if err := runtime.validatePersisted(outputs[i], s.Account); err != nil {
 			return provider.Progress{}, err
@@ -573,9 +579,15 @@ func (p *automatic) Advance(ctx context.Context, s provider.Snapshot, out provid
 		if !progress.Done {
 			return provider.Progress{}, errors.New("issuer route remains unresolved")
 		}
+		if progress.Outcome != "redeemed" {
+			nativeOnly = false
+		}
 		if strings.HasSuffix(runtime.cfg.Mode, "claim") {
 			outcome = "claimed"
 		}
+	}
+	if nativeOnly {
+		outcome = "redeemed"
 	}
 	return provider.Progress{Done: true, Outcome: outcome, Reference: s.Execution.TxHash.Hex()}, nil
 }

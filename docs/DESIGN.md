@@ -52,8 +52,10 @@ use later claim recipes, configured independently from the request recipe.
 The daemon accepts a YAML list of executor addresses and registers fixed automatic
 providers at startup. Canonical lowercase executor addresses are the durable and
 log identifiers; duplicate addresses and old strategy objects are rejected. The
-`address-only-v3` policy binds chain, discovered account/caller, curator source and
-sender policy. Old custom or prefixed journals remain inspectable and block new
+`address-only-v4` policy binds chain, discovered account/caller, curator source and
+sender policy. Version 4 adds authenticated native Noon USN redemption; its embedded
+issuer policy also binds the reviewed catalogue digest. Old custom or prefixed
+journals remain inspectable and block new
 admission while unresolved; drain them with the previous binary and configuration.
 At startup it pins a valid head, batches deduplicated account and caller getters,
 rejects any invalid member,

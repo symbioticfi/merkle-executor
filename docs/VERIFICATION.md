@@ -158,3 +158,49 @@ Independent review prompted the adaptive dense-range regression and corrected th
 wire cursor schema to string-or-null; regenerated Go output was unchanged.
 No live RFQ order, chain mutation, production deployment or hosted CI result is
 established by these local checks.
+
+## Automatic native Noon USN redemption (2026-10-13)
+
+The authenticated `redeem-usn` route completes the separate USN→USDC leg while leaving
+sUSN request/claim behavior unchanged. Deterministic tests cover canonical route
+configuration, full-amount quote units, whitelist/collateral readiness, malformed
+and unavailable reads, treasury balance and allowance, block-budget boundaries,
+prior-block counter reset, exact managed calldata and burn/payout receipt identity.
+Automatic-provider regressions failed before this adaptation: native selection
+returned no route, and recovery attempted to pack the claim ABI with a missing
+request ID. They now pass alongside bounded-amount, pure invalid-identity,
+policy/calldata/input/account tampering and missing terminal-evidence tests.
+The normal host test uses address-only YAML, curator HTTP permissions, discovered
+account/caller, one shared numerical lens, fixed automatic registrations and
+read-bounded USN amount. It confirms the native transaction through the existing
+sender, persists `redeemed` under the canonical address and does not resend after
+restart.
+
+The source-pinned local test compiles the unmodified verified RedeemHandlerV2
+with native solc **0.8.28+commit.7893614a**, **Paris**, optimizer **200**, and the
+original literal-content metadata settings. The existing real RecipeExecutor
+and permission-enforcing account fixture execute exact approval, redemption,
+allowance cleanup and minimum-output checks. Local token/oracle fixtures prove
+a 1.234567890123456789-USN burn produces 1.233332 USDC at a 99.9% peg. Tests also
+reject whitelist removal, an empty treasury, missing treasury allowance,
+exhausted block budget, stale oracle data and a changed quote below the recipe's
+minimum. Mined reverting executions prove both the post-burn allowance failure
+and the post-payout minimum-output failure roll back balances, approvals and
+logs. The real full-amount quote for 2,999,999,999,999 wei USN at a 99.99% peg
+is one USDC base unit, where scaling the one-token rate would produce two.
+Below-$1 collateral also preserves the handler's $1 quote clamp and differs
+from its collateral `getRate` view.
+
+```sh
+python3 internal/providers/redemptions/testdata/noon/generate.py --check
+make check
+make integration
+```
+
+`make integration` starts owned ephemeral Anvil processes; the native test sets
+its local chain ID to 1 and installs locally compiled runtime at the reviewed
+route addresses. It uses no mainnet fork, live keys or external chain writes.
+The handler runtime/source is real; USN/USDC token behavior, oracle and account
+are local fixtures. These tests do not verify live account enrollment, production
+USN/USDC pause, blacklist or whitelist restrictions, deployment liquidity,
+future upgrades or issuer availability.

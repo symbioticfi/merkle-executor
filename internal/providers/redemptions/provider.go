@@ -65,7 +65,7 @@ func New(cfg Config, deps providerRegistry.Deps) (*Provider, error) {
 	}
 	allowed := map[string][]string{
 		"midas": {"request"}, "centrifuge": {"request", "claim"},
-		"openeden": {"request"}, "figure": {"request"}, "noon": {"request", "claim"},
+		"openeden": {"request"}, "figure": {"request"}, "noon": {"request", "claim", "redeem-usn"},
 		"pareto": {"queue-request", "direct-request", "queue-claim", "direct-claim", "instant-claim"},
 	}
 	valid := false
@@ -91,6 +91,11 @@ func New(cfg Config, deps providerRegistry.Deps) (*Provider, error) {
 	}
 	if p.token == p.asset {
 		return nil, errors.New("redemption token and output asset must differ")
+	}
+	if cfg.Family == "noon" && cfg.Mode == "redeem-usn" {
+		if cfg.ChainID != 1 || p.token != noonUSN || p.asset != noonUSDC || p.target != noonRedeemer {
+			return nil, errors.New("native Noon redemption requires the reviewed Ethereum USN, USDC and RedeemHandlerV2 deployment")
+		}
 	}
 	if cfg.Family == "pareto" {
 		var err error
@@ -120,7 +125,7 @@ func New(cfg Config, deps providerRegistry.Deps) (*Provider, error) {
 	} else if cfg.SecondAction != "" || cfg.IntermediateInput != nil || cfg.IntermediateAmount != "" {
 		return nil, errors.New("second action and intermediate input apply only to Figure")
 	}
-	if (cfg.Family != "pareto" && cfg.Family != "noon") || strings.HasSuffix(cfg.Mode, "request") {
+	if (cfg.Family != "pareto" && cfg.Family != "noon") || strings.HasSuffix(cfg.Mode, "request") || cfg.Mode == "redeem-usn" {
 		var err error
 		p.amount, err = parse.Uint256(cfg.Amount)
 		if err != nil || p.amount.Sign() == 0 {
@@ -193,7 +198,11 @@ func (p *Provider) Prepare(ctx context.Context, snapshot provider.Snapshot) (pro
 	case "pareto":
 		amount, err = p.pareto(ctx, snapshot, &out)
 	case "noon":
-		amount, err = p.noon(ctx, snapshot, &out)
+		if p.cfg.Mode == "redeem-usn" {
+			amount, err = p.noonRedeemUSN(ctx, snapshot, &out)
+		} else {
+			amount, err = p.noon(ctx, snapshot, &out)
+		}
 	}
 	if err != nil {
 		return provider.Output{}, err
@@ -225,7 +234,11 @@ func (p *Provider) Advance(ctx context.Context, snapshot provider.Snapshot, outp
 		return provider.Progress{}, err
 	}
 	target := p.target
-	if p.cfg.Family == "figure" {
+	if p.cfg.Family == "noon" && p.cfg.Mode == "redeem-usn" {
+		if err := p.noonRedeemExecuted(snapshot, output); err != nil {
+			return provider.Progress{}, err
+		}
+	} else if p.cfg.Family == "figure" {
 		if err := p.figureExecuted(snapshot, output); err != nil {
 			return provider.Progress{}, err
 		}
@@ -243,6 +256,8 @@ func (p *Provider) Advance(ctx context.Context, snapshot provider.Snapshot, outp
 	outcome := "requested"
 	if strings.HasSuffix(p.cfg.Mode, "claim") {
 		outcome = "claimed"
+	} else if p.cfg.Mode == "redeem-usn" {
+		outcome = "redeemed"
 	}
 	return provider.Progress{Done: true, Outcome: outcome, Reference: snapshot.Execution.TxHash.Hex()}, nil
 }

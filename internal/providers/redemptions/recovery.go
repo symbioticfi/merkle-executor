@@ -11,6 +11,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
 	figure "github.com/symbioticfi/merkle-executor/api/bindings/figureyieldvault"
 	midas "github.com/symbioticfi/merkle-executor/api/bindings/midasredemption"
+	native "github.com/symbioticfi/merkle-executor/api/bindings/noonredeemhandlerv2"
 	"github.com/symbioticfi/merkle-executor/api/bindings/noonwithdrawalhandler"
 	openeden "github.com/symbioticfi/merkle-executor/api/bindings/openedenexpress"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretocdo"
@@ -62,10 +63,13 @@ func (p *Provider) expectedActions(account common.Address) (map[string][]byte, e
 		out[p.cfg.Action] = erc4626.NewERC4626().PackRedeem(p.amount, account, account)
 		out[p.cfg.SecondAction] = figure.NewFigureYieldVault().PackRequestRedeem(p.intermediate)
 	case "noon":
-		if p.cfg.Mode == "request" {
+		switch p.cfg.Mode {
+		case "request":
 			out[p.cfg.Action] = erc4626.NewERC4626().PackRedeem(p.amount, p.target, account)
-		} else {
+		case "claim":
 			out[p.cfg.Action] = noonwithdrawalhandler.NewNoonWithdrawalHandler().PackClaimWithdrawal(p.requestID)
+		case "redeem-usn":
+			out[p.cfg.Action] = native.NewNoonRedeemHandlerV2().PackRedeemOnchain(p.asset, p.amount)
 		}
 	case "pareto":
 		switch p.cfg.Mode {
@@ -138,7 +142,7 @@ func (p *automatic) unsupportedIssuer(action recipes.ManagedAction, account comm
 	if !known {
 		return false
 	}
-	unique := [][]byte{midas.NewMidasRedemption().PackRedeemRequest(common.BigToAddress(big.NewInt(1)), new(big.Int)), async.NewAsyncRedeemVault().PackRequestRedeem(new(big.Int), account, account), openeden.NewOpenEdenExpress().PackRequestRedeem(account, new(big.Int)), figure.NewFigureYieldVault().PackRequestRedeem(new(big.Int)), noonwithdrawalhandler.NewNoonWithdrawalHandler().PackClaimWithdrawal(new(big.Int)), paretoqueue.NewParetoQueue().PackRequestWithdraw(new(big.Int)), paretocdo.NewParetoCDO().PackRequestWithdraw(new(big.Int), common.BigToAddress(big.NewInt(1))), paretoqueue.NewParetoQueue().PackClaimWithdrawRequest(new(big.Int)), paretocdo.NewParetoCDO().PackClaimWithdrawRequest(), paretocdo.NewParetoCDO().PackClaimInstantWithdrawRequest()}
+	unique := [][]byte{native.NewNoonRedeemHandlerV2().PackRedeemOnchain(common.BigToAddress(big.NewInt(1)), new(big.Int)), midas.NewMidasRedemption().PackRedeemRequest(common.BigToAddress(big.NewInt(1)), new(big.Int)), async.NewAsyncRedeemVault().PackRequestRedeem(new(big.Int), account, account), openeden.NewOpenEdenExpress().PackRequestRedeem(account, new(big.Int)), figure.NewFigureYieldVault().PackRequestRedeem(new(big.Int)), noonwithdrawalhandler.NewNoonWithdrawalHandler().PackClaimWithdrawal(new(big.Int)), paretoqueue.NewParetoQueue().PackRequestWithdraw(new(big.Int)), paretocdo.NewParetoCDO().PackRequestWithdraw(new(big.Int), common.BigToAddress(big.NewInt(1))), paretoqueue.NewParetoQueue().PackClaimWithdrawRequest(new(big.Int)), paretocdo.NewParetoCDO().PackClaimWithdrawRequest(), paretocdo.NewParetoCDO().PackClaimInstantWithdrawRequest()}
 	for _, data := range unique {
 		if bytes.Equal(action.Leaf.Data[:4], data[:4]) {
 			return true

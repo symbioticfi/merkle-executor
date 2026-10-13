@@ -17,7 +17,7 @@ one serialized transaction sender. [Design and comparison](docs/DESIGN.md).
 | Flow | Implementation |
 | --- | --- |
 | Ordered Morpho/Aave funding, caps and overflow deposits | Execute the committed on-chain recipe. Read-derived values resolve through the shared lens, including authenticated preceding effects. |
-| All 15 documented LL assets plus sUSN | `redemptions` provider prepares Midas, Centrifuge, OpenEden, Figure, Pareto and Noon requests and eligible claims. [Catalogue and lifecycle](docs/LIQUID-LANE-ASSETS.md). |
+| All 15 documented LL assets plus sUSN and USN | `redemptions` provider prepares Midas, Centrifuge, OpenEden, Figure, Pareto and Noon requests, eligible claims and native USN → USDC redemption. [Catalogue and lifecycle](docs/LIQUID-LANE-ASSETS.md). |
 | Securitize EVM assets | `securitize` provider prepares wallet requests and legacy/modern atomic offramps for all 10 symbols in the public feed. [Deployment coverage and limits](docs/SECURITIZE-ASSETS.md). |
 | CoW Swap | Quote, build account ERC-1271 authorization, wait for its confirmed transaction, submit/reconcile deterministic order UID, verify full fill on-chain. |
 | Merkl reward claims | Read V4 rewards, use cumulative amounts, verify effective distributor root/proof and recipient, encode an approved bounded claim. |
@@ -76,7 +76,8 @@ logs and metrics. Reordering does not change identity; duplicate addresses are
 rejected, including different checksum spellings. Strategy objects, labels and
 per-strategy options are rejected before network access.
 
-The address-only schema uses policy version `address-only-v3`. Finish active jobs
+The runtime uses policy version `address-only-v4`, including automatic native Noon
+redemption and its updated issuer catalogue. Finish active jobs
 with the previous binary and configuration before upgrading, including terminal
 jobs whose transaction journal remains occupied. Existing custom or prefixed keys
 stay visible in `status` and block admission while unresolved. Journals are never
@@ -180,7 +181,11 @@ prepared calls, so a skipped recipe group cannot count as a request. Request job
 finish as `requested` and release the account for later claim recipes. This records
 submission, not issuer payout. Receipt evidence survives restarts. Securitize wallet
 requests additionally require exact token delivery; atomic offramps require payment
-evidence. Issuer enrollment and external settlement remain issuer-controlled.
+evidence. Native Noon redemption requires the account's separate USN whitelist,
+fresh full-amount quote, remaining block budget, and treasury USDC balance plus
+allowance. Its receipt must prove the exact managed redemption, USN burn and
+account USDC payment before finishing as `redeemed`. Issuer enrollment and
+external settlement remain issuer-controlled.
 
 After authorization confirms, external progress is checkpointed separately.
 CoW API status alone is insufficient to finish a trade. Full on-chain fill or

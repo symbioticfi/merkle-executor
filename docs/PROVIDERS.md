@@ -4,7 +4,7 @@ Normal daemon `strategies` entries are full nonzero executor addresses, directly
 used as lowercase state, log and metric identifiers. Duplicate normalized addresses
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
-The address-only policy version is `address-only-v3`. Drain active work with the
+The address-only policy version is `address-only-v4`. Drain active work with the
 previous binary and configuration before upgrading. Old custom or prefixed keys
 remain inspectable and fence unresolved ownership; no journal migration occurs.
 The daemon always installs automatic CoW, Merkl, Liquid Lane RFQ,
@@ -133,7 +133,8 @@ ambiguous or overly dense evidence. No new quote is obtained for an existing job
 ## Liquid Lane issuer requests and claims
 
 Issuer support is registered automatically. The embedded catalogue covers the 15
-published Liquid Lane assets and Noon sUSN. The authenticated recipe determines
+published Liquid Lane assets, Noon sUSN and native USN. The authenticated recipe
+determines
 the family, mode, action keys, exact addresses and recipients; no provider YAML or
 runtime catalogue path is accepted. [Issuer catalogue and lifecycle guide](LIQUID-LANE-ASSETS.md)
 records the fixed routes, catalogue digest and verified ABI subsets.
@@ -256,3 +257,38 @@ lens fixtures verify caller/origin, constrained preview Inputs, stateful effects
 allowance reset/zero short-circuit, overflow/division errors and original-code
 introspection divergence. These are local/API-fixture results; no deployment,
 external chain, hosted quote/order or live signing verification is implied.
+
+## Native Noon USN redemption
+
+The authenticated Ethereum route selects `redeemOnchain(USDC, amount)` at the
+reviewed RedeemHandlerV2. Its positive USN amount uses the recipe-derived budget
+policy above. USDT, minting and privileged instant sUSN exits are outside this
+route. Native USN whitelist membership is separate from staking withdrawals;
+the executor does not grant it.
+
+Preparation batches USN identity, collateral enablement, account whitelist,
+treasury, block counters, collateral decimals and the **full-amount**
+`calculateCollateralAmount(USDC, amount)` quote at one pinned block. The getter
+checks the collateral oracle's freshness and returns native 6-decimal USDC with
+Noon's peg and floor rounding. A one-token `getRate` cannot substitute for it.
+The counter resets when `lastRedeemBlock` precedes the pinned block. Dependent
+treasury USDC balance **and allowance to the handler** are checked together in
+isolated token reads; a funded treasury without allowance remains idle.
+
+The provider fills only the committed `redeemOnchain(USDC, amount)` action and
+read-constrained USN input. The recipe must supply exact USN approval, allowance
+cleanup
+and a USDC output postcondition. Account balance and allowance can be established
+earlier in that recipe, including after an existing sUSN claim. Full simulation
+remains the execution gate; a readable quote alone does not prove redeemability.
+Production token pause, blacklist and whitelist restrictions can still prevent
+the USN burn or USDC transfer; local token fixtures do not attest those policies.
+The native protocol readiness stage uses one aggregate for nine handler getters,
+then one JSON batch for two dependent token getters. Shared metadata, numerical
+lens, original full simulation and canonical fences remain separate ordered
+stages; these two readiness requests are not a total planning call count.
+
+Native completion requires canonical exact Manage-call identity, one matching
+handler `Redeemed` event, the USN burn and the matching account USDC transfer.
+It finishes as `redeemed`. The execution payout may differ from the old preview;
+minimum proceeds are enforced by the committed recipe.
