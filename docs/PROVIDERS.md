@@ -1,7 +1,13 @@
 # Protocol providers
 
-Normal daemon strategies provide an executor address and optional name/recipe-hash
-assertions. The daemon always installs automatic CoW, Merkl, Liquid Lane RFQ,
+Normal daemon strategies provide an executor address and an optional recipe-hash
+assertion. An optional `name` labels durable state, logs and metrics; otherwise it
+is `executor-` plus the full lowercase executor address including `0x`. Reordering
+strategies does not change this identity. Custom names stay unchanged; keep existing
+labels until active jobs drain before removing or changing them. Recovery rejects
+changed identifiers and never migrates journals. Duplicate effective names fail,
+while separately named strategies may share an executor.
+The daemon always installs automatic CoW, Merkl, Liquid Lane RFQ,
 issuer-redemption, Securitize and recipe-input adapters in a fixed order. A nonempty
 `strategy.providers` list is rejected. Token pairs, amounts, minimum proceeds,
 action/input mappings, deployment targets and authorization shapes come from the

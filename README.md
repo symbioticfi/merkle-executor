@@ -70,6 +70,14 @@ private key. The required `curator.url` identifies the curator-backend deploymen
 including `/api/v1`; RPC endpoints and the expected chain ID also remain deployment
 inputs. No global endpoint or universal safe fee ceiling can be inferred.
 
+`strategies[].name` is an optional label. Omitted or empty names become
+`executor-` followed by the full lowercase executor address, including `0x`.
+This identifier stays stable when strategies are reordered and identifies durable
+state, logs and metrics. Custom names retain their existing identity. Keep a current
+custom name until its active jobs drain: removing it changes the state identifier,
+and recovery rejects that change without migrating journals. Separately named
+strategies may still share an executor; duplicate effective names are rejected.
+
 The runtime uses fixed cache, timeout, polling, confirmation and fee-horizon
 policies. Legacy fields are accepted only when they match the fixed policy; remove
 custom overrides when migrating. Optional `signer.address` is an identity assertion,
@@ -183,6 +191,9 @@ Status reads atomic snapshots while the daemon runs. Stop the daemon before rese
 bin/merkle-executor status --config config/operator.local.yaml
 bin/merkle-executor reset-strategy --config config/operator.local.yaml --name example
 ```
+
+For a strategy without a custom name, use the identifier shown by `status` in
+`reset-strategy --name`.
 
 Reset is permitted only for terminal jobs after the transaction journal is clear.
 Confirmed reverts halt the strategy until inspected/reset. Preserve the state

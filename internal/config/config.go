@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -205,14 +206,19 @@ func (c *Config) Validate() error {
 		return err
 	}
 	names := make(map[string]bool)
-	for _, s := range c.Strategies {
+	for i := range c.Strategies {
+		s := &c.Strategies[i]
+		executor, err := parse.Address(s.Executor)
+		if err != nil {
+			return errors.Errorf("strategy %s: invalid executor", s.Name)
+		}
+		if s.Name == "" {
+			s.Name = "executor-" + strings.ToLower(executor.Hex())
+		}
 		if !validName.MatchString(s.Name) || names[s.Name] {
 			return errors.New("strategy names must be unique filesystem-safe identifiers")
 		}
 		names[s.Name] = true
-		if _, err := parse.Address(s.Executor); err != nil {
-			return errors.Errorf("strategy %s: invalid executor", s.Name)
-		}
 		if s.Interval != DefaultStrategyInterval {
 			return errors.Errorf("strategy %s: interval is fixed to one minute; remove the legacy override", s.Name)
 		}

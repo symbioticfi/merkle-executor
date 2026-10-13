@@ -257,3 +257,83 @@ func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestExplicitStrategyIdentityRemainsStable(t *testing.T) {
+	cfg, err := Load(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Captured before optional-name support at 9075f434ae6e.
+	if cfg.Strategies[0].Fingerprint() != "0x39b8f063a26765f1c6fef5a84af4ef9ba16b96c960c33ff66a89f34d90483e2c" || cfg.StrategyFingerprint(cfg.Strategies[0], common.HexToAddress("0x03")) != "0xe13fbcba55240945069ca4f178b0ab14e0de1c143f2d3fd56bc2e4970476089e" {
+		t.Fatal("explicit strategy identity changed")
+	}
+}
+
+func TestOptionalStrategyNames(t *testing.T) {
+	const executor = "0xaBcDeF0000000000000000000000000000000001"
+	const derived = "executor-0xabcdef0000000000000000000000000000000001"
+	const other = "0x0000000000000000000000000000000000000002"
+	const otherName = "executor-0x0000000000000000000000000000000000000002"
+	for _, tc := range []struct {
+		name, strategies string
+		want             []string
+	}{
+		{"omitted", "  - executor: '" + executor + "'\n", []string{derived}},
+		{"empty", "  - name: ''\n    executor: '" + executor + "'\n", []string{derived}},
+		{"lowercase", "  - executor: '" + strings.ToLower(executor) + "'\n", []string{derived}},
+		{"uppercase", "  - executor: '0x" + strings.ToUpper(executor[2:]) + "'\n", []string{derived}},
+		{"ordered", "  - executor: '" + executor + "'\n  - executor: '" + other + "'\n", []string{derived, otherName}},
+		{"reordered", "  - executor: '" + other + "'\n  - executor: '" + executor + "'\n", []string{otherName, derived}},
+		{"custom", "  - name: Existing_Label-1\n    executor: '" + executor + "'\n", []string{"Existing_Label-1"}},
+		{"separate named workflows", "  - name: first\n    executor: '" + executor + "'\n  - name: second\n    executor: '" + executor + "'\n", []string{"first", "second"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefix, _, _ := strings.Cut(validConfig, "strategies:\n")
+			cfg, err := Load(writeConfig(t, prefix+"strategies:\n"+tc.strategies))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, name := range tc.want {
+				if cfg.Strategies[i].Name != name {
+					t.Fatalf("name=%q want%q", cfg.Strategies[i].Name, name)
+				}
+			}
+			if tc.name == "custom" && cfg.Strategies[0].Executor != executor {
+				t.Fatal("explicit executor representation changed")
+			}
+		})
+	}
+	for name, body := range map[string]string{
+		"duplicate omitted": "  - executor: '" + executor + "'\n  - executor: '" + strings.ToLower(executor) + "'\n",
+		"custom collision":  "  - executor: '" + executor + "'\n  - name: " + derived + "\n    executor: '" + other + "'\n",
+		"duplicate custom":  "  - name: existing\n    executor: '" + executor + "'\n  - name: existing\n    executor: '" + other + "'\n",
+		"invalid custom":    "  - name: '../escape'\n    executor: '" + executor + "'\n",
+		"invalid executor":  "  - executor: 'invalid'\n",
+		"zero executor":     "  - executor: '0x0000000000000000000000000000000000000000'\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			prefix, _, _ := strings.Cut(validConfig, "strategies:\n")
+			if _, err := Load(writeConfig(t, prefix+"strategies:\n"+body)); err == nil {
+				t.Fatal("invalid strategy identity accepted")
+			}
+		})
+	}
+}
+
+func TestValidateStoresDerivedStrategyName(t *testing.T) {
+	cfg, err := Load(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Strategies[0].Name = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Strategies[0].Name != "executor-0x0000000000000000000000000000000000000002" {
+		t.Fatal("direct validation failed to store effective state identity")
+	}
+	cfg.Strategies[0].Name, cfg.Strategies[0].Executor = "", "invalid"
+	if err := cfg.Validate(); err == nil || cfg.Strategies[0].Name != "" {
+		t.Fatal("invalid executor acquired a derived identity")
+	}
+}

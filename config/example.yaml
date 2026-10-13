@@ -14,5 +14,4 @@ stateDir: ../state
 observability:
   addr: 127.0.0.1:9090
 strategies:
-  - name: ordered-funding
-    executor: '0x0000000000000000000000000000000000000002'
+  - executor: '0x0000000000000000000000000000000000000002'
