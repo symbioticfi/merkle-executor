@@ -21,15 +21,16 @@ import (
 	share "github.com/symbioticfi/merkle-executor/api/bindings/centrifugeshare"
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
 	figure "github.com/symbioticfi/merkle-executor/api/bindings/figureyieldvault"
-	account "github.com/symbioticfi/merkle-executor/api/bindings/merkleaccount"
 	midas "github.com/symbioticfi/merkle-executor/api/bindings/midasredemption"
 	"github.com/symbioticfi/merkle-executor/api/bindings/noonwithdrawalhandler"
 	openeden "github.com/symbioticfi/merkle-executor/api/bindings/openedenexpress"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretocdo"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretoqueue"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretostrategy"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 type issuerReader struct {
@@ -135,7 +136,7 @@ func issuerFixture(t *testing.T, cfg Config) (provider.Snapshot, *issuerReader) 
 		r.reply(token, share.NewCentrifugeShare().GetABI(), "vault", []any{asset}, target)
 		a := async.NewAsyncRedeemVault().GetABI()
 		r.reply(target, a, "asset", nil, asset)
-		r.reply(target, a, "maxRedeem", []any{s.Account}, big.NewInt(80))
+		r.reply(target, a, "maxRedeem", []any{s.Account}, big.NewInt(100))
 	case "openeden":
 		a := openeden.NewOpenEdenExpress().GetABI()
 		r.reply(target, a, "token", nil, token)
@@ -189,7 +190,7 @@ func issuerFixture(t *testing.T, cfg Config) (provider.Snapshot, *issuerReader) 
 
 func issuerProvider(t *testing.T, cfg Config, r provider.Reader) provider.Provider {
 	t.Helper()
-	p, err := Factory(issuerNode(t, cfg), provider.Deps{Chain: r})
+	p, err := Factory(issuerNode(t, cfg), providerRegistry.Deps{Chain: r})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +288,7 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRequest(t *testing.T) 
 	}
 }
 
-func TestCentrifugeClaimCapsSharesAndRetainsConfiguredLimit(t *testing.T) {
+func TestCentrifugeClaimRequiresExactSharesAndRetainsConfiguredAmount(t *testing.T) {
 	for _, available := range []int64{0, 20, 100, 150} {
 		t.Run(big.NewInt(available).String(), func(t *testing.T) {
 			cfg := issuerConfig("centrifuge")
@@ -297,7 +298,7 @@ func TestCentrifugeClaimCapsSharesAndRetainsConfiguredLimit(t *testing.T) {
 			r.reply(common.HexToAddress(cfg.Target), a.GetABI(), "maxRedeem", []any{s.Account}, big.NewInt(available))
 			p := issuerProvider(t, cfg, r)
 			out, err := p.Prepare(context.Background(), s)
-			if available == 0 {
+			if available < 100 {
 				if !errors.Is(err, provider.ErrNotReady) {
 					t.Fatalf("empty claim must idle: %v", err)
 				}
@@ -572,16 +573,16 @@ func TestRedemptionFactoryRejectsInvalidConfiguration(t *testing.T) {
 			cfg := issuerConfig("midas")
 			change(&cfg)
 			_, r := issuerFixture(t, issuerConfig("midas"))
-			if _, err := Factory(issuerNode(t, cfg), provider.Deps{Chain: r}); err == nil {
+			if _, err := Factory(issuerNode(t, cfg), providerRegistry.Deps{Chain: r}); err == nil {
 				t.Fatal("invalid configuration accepted")
 			}
 		})
 	}
 	_, r := issuerFixture(t, issuerConfig("midas"))
-	if _, err := Factory(issuerNode(t, issuerConfig("midas")), provider.Deps{}); err == nil {
+	if _, err := Factory(issuerNode(t, issuerConfig("midas")), providerRegistry.Deps{}); err == nil {
 		t.Fatal("missing chain reader accepted")
 	}
-	if _, err := Factory(issuerNode(t, map[string]any{"unexpected": true}), provider.Deps{Chain: r}); err == nil {
+	if _, err := Factory(issuerNode(t, map[string]any{"unexpected": true}), providerRegistry.Deps{Chain: r}); err == nil {
 		t.Fatal("unknown configuration field accepted")
 	}
 }
@@ -591,14 +592,14 @@ func TestRegistryAndFullWidthRequestAmount(t *testing.T) {
 	amount := new(big.Int).Lsh(big.NewInt(1), 255)
 	cfg.Amount = amount.String()
 	s, r := issuerFixture(t, cfg)
-	registry := provider.NewRegistry()
+	registry := providerRegistry.NewRegistry()
 	if err := Register(registry); err != nil {
 		t.Fatal(err)
 	}
 	if err := Register(registry); err == nil {
 		t.Fatal("duplicate provider registration accepted")
 	}
-	p, err := registry.New("redemptions", issuerNode(t, cfg), provider.Deps{Chain: r})
+	p, err := registry.New("redemptions", issuerNode(t, cfg), providerRegistry.Deps{Chain: r})
 	if err != nil {
 		t.Fatal(err)
 	}

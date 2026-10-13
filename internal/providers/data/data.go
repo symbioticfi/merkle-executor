@@ -18,8 +18,10 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/merkle-executor/internal/parse"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 type StaticConfig struct {
@@ -67,11 +69,11 @@ type source struct {
 	static *StaticConfig
 	rpc    *RPCConfig
 	http   *HTTPConfig
-	deps   provider.Deps
+	deps   providerRegistry.Deps
 }
 
-func Register(r *provider.Registry) error {
-	for name, f := range map[string]provider.Factory{"static": staticFactory, "rpc": rpcFactory, "http": httpFactory} {
+func Register(r *providerRegistry.Registry) error {
+	for name, f := range map[string]providerRegistry.Factory{"static": staticFactory, "rpc": rpcFactory, "http": httpFactory} {
 		if err := r.Register(name, f); err != nil {
 			return err
 		}
@@ -79,12 +81,15 @@ func Register(r *provider.Registry) error {
 	return nil
 }
 
-func staticFactory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func staticFactory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var cfg StaticConfig
 	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
 	}
-	for _, value := range cfg.Inputs {
+	for index, value := range cfg.Inputs {
+		if err := parse.InputIndex(index); err != nil {
+			return nil, err
+		}
 		if _, err := parse.Uint256(value); err != nil {
 			return nil, err
 		}
@@ -92,7 +97,7 @@ func staticFactory(raw yaml.Node, deps provider.Deps) (provider.Provider, error)
 	return &source{static: &cfg, deps: deps}, nil
 }
 
-func rpcFactory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func rpcFactory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var cfg RPCConfig
 	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
@@ -102,15 +107,23 @@ func rpcFactory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
 	}
 	seen := make(map[uint]bool)
 	for _, read := range cfg.Reads {
-		if seen[read.Input] || read.Input > 4095 {
+		if seen[read.Input] || read.Input > parse.MaxInputIndex {
 			return nil, errors.New("duplicate or excessive RPC input index")
 		}
 		seen[read.Input] = true
 	}
+
+	for _, action := range cfg.Actions {
+		for _, word := range action.Words {
+			if err := parse.InputIndex(word.Input); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return &source{rpc: &cfg, deps: deps}, nil
 }
 
-func httpFactory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func httpFactory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var cfg HTTPConfig
 	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
@@ -136,6 +149,12 @@ func httpFactory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
 	}
 	if len(cfg.Inputs) == 0 && len(cfg.Actions) == 0 {
 		return nil, errors.New("HTTP output mappings required")
+	}
+
+	for index := range cfg.Inputs {
+		if err := parse.InputIndex(index); err != nil {
+			return nil, err
+		}
 	}
 	return &source{http: &cfg, deps: deps}, nil
 }
@@ -163,6 +182,7 @@ func (s *source) Prepare(ctx context.Context, snap provider.Snapshot) (provider.
 }
 
 func (s *source) readRPC(ctx context.Context, snap provider.Snapshot, out provider.Output) (provider.Output, error) {
+	requests := make([]protocolio.ReadRequest, 0, len(s.rpc.Reads))
 	for _, read := range s.rpc.Reads {
 		target, err := parse.Address(expand(read.Target, snap))
 		if err != nil {
@@ -172,10 +192,18 @@ func (s *source) readRPC(ctx context.Context, snap provider.Snapshot, out provid
 		if err != nil {
 			return out, errors.New("invalid RPC calldata")
 		}
-		result, err := s.deps.Chain.CallContract(ctx, ethereum.CallMsg{From: snap.Account, To: &target, Data: data}, snap.BlockNumber)
-		if err != nil {
+		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: snap.Account, To: &target, Data: data}, Block: snap.BlockNumber})
+	}
+	reads, err := protocolio.ReadGroup(ctx, s.deps.Chain, requests...)
+	if err != nil {
+		return out, errors.New("RPC data read failed")
+	}
+	for i, read := range s.rpc.Reads {
+		member := reads.At(i)
+		if member.Err != nil {
 			return out, errors.New("RPC data read failed")
 		}
+		result := member.Data
 		if read.Offset > uint(len(result)) || uint(len(result))-read.Offset < 32 {
 			return out, errors.New("RPC result word out of bounds")
 		}

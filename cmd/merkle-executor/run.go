@@ -14,22 +14,29 @@ import (
 
 	"github.com/symbioticfi/merkle-executor/internal/chain"
 	"github.com/symbioticfi/merkle-executor/internal/config"
-	"github.com/symbioticfi/merkle-executor/internal/keeper"
+	"github.com/symbioticfi/merkle-executor/internal/curator"
 	"github.com/symbioticfi/merkle-executor/internal/observability"
-	"github.com/symbioticfi/merkle-executor/internal/parse"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
-	"github.com/symbioticfi/merkle-executor/internal/providers/data"
-	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlane"
+	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlanerfq"
 	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
 	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
 	"github.com/symbioticfi/merkle-executor/internal/providers/securitize"
 	"github.com/symbioticfi/merkle-executor/internal/signer"
-	"github.com/symbioticfi/merkle-executor/internal/state"
 	"github.com/symbioticfi/merkle-executor/internal/txmanager"
+	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer) error {
+	return runBotWithHTTP(ctx, path, once, planOnly, out, nil)
+}
+
+// runBotWithHTTP permits a bounded transport to serve official API fixtures
+// while preserving the production endpoints and all recipe validation.
+func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out io.Writer, httpClient *http.Client) error {
 	cfg, err := config.Load(path)
 	if err != nil {
 		return err
@@ -48,32 +55,59 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 	defer flush()
 	chainID := new(big.Int).SetUint64(cfg.Chain.ChainID)
 	startup, cancel := context.WithTimeout(ctx, cfg.OperationTimeout)
-	client, err := chain.Dial(startup, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID)
+	client, err := chain.Dial(startup, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID, common.HexToAddress(config.StandardMulticall3))
 	cancel()
 	if err != nil {
 		return err
 	}
 	defer client.Close()
-	httpClient := &http.Client{Timeout: cfg.HTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	registry := provider.NewRegistry()
-	for _, register := range []func(*provider.Registry) error{data.Register, liquidlane.Register, merkl.Register, cowswap.Register, redemptions.Register, securitize.Register} {
-		if err := register(registry); err != nil {
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: cfg.HTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	source, err := curator.New(cfg.Curator, httpClient)
+	if err != nil {
+		return err
+	}
+	targets := make([]common.Address, len(cfg.Strategies))
+	for i, sc := range cfg.Strategies {
+		targets[i] = common.HexToAddress(sc)
+	}
+	discovery, cancel := context.WithTimeout(ctx, cfg.OperationTimeout)
+	accounts, caller, err := discoverIdentity(discovery, client, targets)
+	cancel()
+	if err != nil {
+		return err
+	}
+	if cfg.Signer.Address != "" && common.HexToAddress(cfg.Signer.Address) != caller {
+		return errors.New("signer.address assertion does not match executor caller")
+	}
+	var txSigner signer.Signer
+	if cfg.Mode == "send" {
+		txSigner, err = signer.FromEnv(cfg.Signer.KeyEnv)
+		if err != nil {
 			return err
+		}
+		if txSigner.Address() != caller {
+			return errors.New("signer key does not match executor caller")
 		}
 	}
 	strategies := make([]keeper.Strategy, 0, len(cfg.Strategies))
 	for _, sc := range cfg.Strategies {
-		s := keeper.Strategy{Config: sc}
-		for _, pc := range sc.Providers {
-			p, err := registry.New(pc.Name, pc.Config, provider.Deps{Chain: client, HTTP: httpClient, Log: log.WithValues("strategy", sc.Name, "provider", pc.Name), ConfigDir: configDir})
+		s := keeper.Strategy{Config: keeper.Config{Name: sc, Executor: sc, Account: accounts[common.HexToAddress(sc)].Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(sc, accounts[common.HexToAddress(sc)], caller)}}
+		for _, registration := range []struct {
+			name string
+			new  func(providerRegistry.Deps) (provider.Provider, error)
+		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}, {"redemptions", redemptions.NewAutomatic}, {"securitize", securitize.NewAutomatic}} {
+			p, err := registration.new(providerRegistry.Deps{Chain: client, HTTP: httpClient, Log: log.WithValues("strategy", sc, "provider", registration.name), ConfigDir: configDir})
 			if err != nil {
-				return errors.Errorf("configure provider %s: %w", pc.Name, err)
+				return errors.Errorf("configure provider %s: %w", registration.name, err)
 			}
 			s.Providers = append(s.Providers, p)
 		}
+		s.Providers = append(s.Providers, keeper.NewRecipeInputs())
 		strategies = append(strategies, s)
 	}
-	planner := &keeper.Planner{Chain: client, ChainID: chainID, Caller: common.HexToAddress(cfg.Signer.Address), Confirmations: cfg.TxManager.Confirmations}
+	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: cfg.TxManager.Confirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), cfg.RecipeCacheBytes)}
 	if planOnly {
 		plans := make(map[string]keeper.Plan)
 		for _, s := range strategies {
@@ -94,30 +128,25 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 		return err
 	}
 	defer store.Close()
-	if err := bindState(store, cfg.Chain.ChainID, cfg.Signer.Address); err != nil {
+	if err := bindState(store, cfg.Chain.ChainID, caller.Hex()); err != nil {
 		return err
 	}
+	metrics := observability.NewMetrics()
 	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: strategies, Mode: cfg.Mode, OperationTimeout: cfg.OperationTimeout, Log: log}
 	if cfg.Mode == "send" {
-		s, err := signer.FromEnv(cfg.Signer.KeyEnv)
+		txm, err := txmanager.NewWithMetrics(client, txSigner, chainID, store, cfg.TxManager.EngineConfig(), log, metrics.Registerer())
 		if err != nil {
 			return err
 		}
-		if s.Address() != planner.Caller {
-			return errors.New("signer key does not match configured address")
-		}
-		fee, _ := parse.Uint256(cfg.TxManager.MaxFeePerGas)
-		tip, _ := parse.Uint256(cfg.TxManager.MaxPriorityFeePerGas)
-		txm, err := txmanager.New(client, s, chainID, store, txmanager.Config{Confirmations: cfg.TxManager.Confirmations, PollInterval: cfg.TxManager.PollInterval, MaxFeePerGas: fee, MaxPriorityFeePerGas: tip, GasLimit: cfg.TxManager.GasLimit}, log)
-		if err != nil {
+		if err := txm.Start(ctx); err != nil {
 			return err
 		}
+		defer txm.Close()
 		k.Sender = txm
 	}
 	if err := k.CheckRecovery(); err != nil {
 		return err
 	}
-	metrics := observability.NewMetrics()
 	k.Observe = metrics.Observe
 	metrics.Ready(true)
 	defer metrics.Ready(false)

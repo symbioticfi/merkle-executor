@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -34,8 +35,21 @@ func newRPCFixture(t *testing.T, chainID string) *rpcFixture {
 	t.Helper()
 	f := &rpcFixture{chainID: chainID}
 	f.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Error(err)
+			return
+		}
+		f.mu.Lock()
+		failEarly := f.fail
+		f.mu.Unlock()
+		if failEarly {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte("upstream-error-body-test-secret"))
+			return
+		}
 		var request rpcRequest
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		if err := json.Unmarshal(raw, &request); err != nil {
 			t.Error("invalid JSON-RPC request")
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -171,14 +185,22 @@ func TestRPCFailuresRedactCredentialsAndBodiesButPreserveErrorIdentity(t *testin
 			_, e := client.CallContract(ctx, ethereum.CallMsg{To: &a}, nil)
 			return e
 		},
-		"header-number": func(ctx context.Context) error { _, e := client.HeaderByNumber(ctx, nil); return e },
-		"header-hash":   func(ctx context.Context) error { _, e := client.HeaderByHash(ctx, common.Hash{}); return e },
-		"logs":          func(ctx context.Context) error { _, e := client.FilterLogs(ctx, ethereum.FilterQuery{}); return e },
-		"estimate":      func(ctx context.Context) error { _, e := client.EstimateGas(ctx, ethereum.CallMsg{To: &a}); return e },
-		"receipt":       func(ctx context.Context) error { _, e := client.TransactionReceipt(ctx, common.Hash{}); return e },
-		"nonce":         func(ctx context.Context) error { _, e := client.NonceAt(ctx, a, nil); return e },
-		"pending-nonce": func(ctx context.Context) error { _, e := client.PendingNonceAt(ctx, a); return e },
-		"send":          func(ctx context.Context) error { return client.SendTransaction(ctx, testTransaction()) },
+		"header-number":     func(ctx context.Context) error { _, e := client.HeaderByNumber(ctx, nil); return e },
+		"header-hash":       func(ctx context.Context) error { _, e := client.HeaderByHash(ctx, common.Hash{}); return e },
+		"logs":              func(ctx context.Context) error { _, e := client.FilterLogs(ctx, ethereum.FilterQuery{}); return e },
+		"estimate":          func(ctx context.Context) error { _, e := client.EstimateGas(ctx, ethereum.CallMsg{To: &a}); return e },
+		"receipt":           func(ctx context.Context) error { _, e := client.TransactionReceipt(ctx, common.Hash{}); return e },
+		"nonce":             func(ctx context.Context) error { _, e := client.NonceAt(ctx, a, nil); return e },
+		"pending-nonce":     func(ctx context.Context) error { _, e := client.PendingNonceAt(ctx, a); return e },
+		"send":              func(ctx context.Context) error { return client.SendTransaction(ctx, testTransaction()) },
+		"balance":           func(ctx context.Context) error { _, e := client.BalanceAt(ctx, a, nil); return e },
+		"telemetry-balance": func(ctx context.Context) error { _, e := client.ReadBalanceAt(ctx, a); return e },
+		"telemetry-nonces":  func(ctx context.Context) error { _, _, e := client.ReadNonces(ctx, a); return e },
+		"fee-history":       func(ctx context.Context) error { _, e := client.FeeHistory(ctx, 3, nil, []float64{50}); return e },
+		"next-block-gas": func(ctx context.Context) error {
+			_, e := client.EstimateGasNextBlock(ctx, ethereum.CallMsg{To: &a}, &types.Header{Number: big.NewInt(1)}, time.Second)
+			return e
+		},
 	}
 	for name, operation := range operations {
 		t.Run(name, func(t *testing.T) {
@@ -219,5 +241,61 @@ func TestRPCStartupCancellationRetainsIdentityWithoutEndpointDetails(t *testing.
 	_, err := Dial(ctx, fixture.server.URL+"/startup-test-secret", "", big.NewInt(1))
 	if !errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "test-secret") {
 		t.Fatalf("startup cancellation was not safely preserved: %v", err)
+	}
+}
+
+func TestRPCNeverFollowsReadOrSubmissionRedirects(t *testing.T) {
+	for _, mode := range []string{"read identity", "write identity", "read call", "submission"} {
+		t.Run(mode, func(t *testing.T) {
+			target := newRPCFixture(t, "0x1")
+			source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request rpcRequest
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					return
+				}
+				redirect := mode == "read identity" || mode == "write identity" || mode == "read call" && request.Method == "eth_call" || mode == "submission" && request.Method == "eth_sendRawTransaction"
+				if redirect {
+					http.Redirect(w, r, target.server.URL+"/private-redirect-path", http.StatusTemporaryRedirect)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": "0x1"})
+			}))
+			defer source.Close()
+			readURL, writeURL := source.URL, ""
+			if mode == "write identity" || mode == "submission" {
+				readURL = newRPCFixture(t, "0x1").server.URL
+				writeURL = source.URL
+			}
+			client, err := Dial(context.Background(), readURL, writeURL, big.NewInt(1))
+			if mode == "read identity" || mode == "write identity" {
+				if err == nil {
+					client.Close()
+					t.Error("redirected chain identity accepted")
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer client.Close()
+				if mode == "submission" {
+					err = client.SendTransaction(context.Background(), testTransaction())
+				} else {
+					a := common.HexToAddress("0x123")
+					_, err = client.CallContract(context.Background(), ethereum.CallMsg{To: &a}, nil)
+				}
+				if err == nil {
+					t.Error("RPC followed redirect")
+				}
+			}
+			if err != nil && strings.Contains(err.Error(), "private-redirect-path") {
+				t.Fatal("redirect URL leaked")
+			}
+			target.mu.Lock()
+			defer target.mu.Unlock()
+			if len(target.requests) != 0 {
+				t.Fatalf("redirect target received %d requests", len(target.requests))
+			}
+		})
 	}
 }

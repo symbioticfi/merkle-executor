@@ -14,9 +14,10 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	binding "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"gopkg.in/yaml.v3"
 )
 
@@ -104,11 +105,11 @@ func TestPrepareCumulativeSelfClaim(t *testing.T) {
 			if len(payload) != 452 {
 				t.Fatalf("claim ABI layout changed: %d", len(payload))
 			}
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: len(payload), AmountInputs: []uint{0}, ClaimableInputs: []uint{1}}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: len(payload), AmountInputs: []uint{0}, ClaimableInputs: []uint{1}}
 			if test == "proof-layout" {
 				cfg.ProofLengths[0] = 2
 			}
-			p, e := Factory(node(t, cfg), provider.Deps{Chain: chain, HTTP: srv.Client()})
+			p, e := Factory(node(t, cfg), providerRegistry.Deps{Chain: multicallReader(t, []common.Address{addr(1)}, chain), HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -178,12 +179,12 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 				t.Fatalf("unexpected method %s", method.Name)
 				return nil, nil
 			})
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "7:0", CalldataBytes: 452, MinClaimable: "10", AmountInputs: []uint{2}, ClaimableInputs: []uint{4}, SkipIfEmpty: true, DedicatedClaimGroup: true}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "7:0", CalldataBytes: 452, MinClaimable: "10", AmountInputs: []uint{2}, ClaimableInputs: []uint{4}, SkipIfEmpty: true, DedicatedClaimGroup: true}
 			if test == "idle-no-skip" {
 				cfg.SkipIfEmpty = false
 				cfg.DedicatedClaimGroup = false
 			}
-			p, e := Factory(node(t, cfg), provider.Deps{Chain: chain, HTTP: srv.Client()})
+			p, e := Factory(node(t, cfg), providerRegistry.Deps{Chain: multicallReader(t, []common.Address{addr(1)}, chain), HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -222,7 +223,7 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 func TestOptionalClaimRequiresDedicatedSingleActionLayout(t *testing.T) {
 	for _, test := range []string{"missing-ack", "batch", "nonzero-action", "wrong-layout", "step-overflow"} {
 		t.Run(test, func(t *testing.T) {
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: "https://example.invalid"}, Distributor: addr(4).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "7:0", CalldataBytes: 452, SkipIfEmpty: true, DedicatedClaimGroup: true}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: "https://example.invalid"}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "7:0", CalldataBytes: 452, SkipIfEmpty: true, DedicatedClaimGroup: true}
 			switch test {
 			case "missing-ack":
 				cfg.DedicatedClaimGroup = false
@@ -236,7 +237,7 @@ func TestOptionalClaimRequiresDedicatedSingleActionLayout(t *testing.T) {
 			case "step-overflow":
 				cfg.Action = "999999999999999999999999999999:0"
 			}
-			_, e := Factory(node(t, cfg), provider.Deps{Chain: reader(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+			_, e := Factory(node(t, cfg), providerRegistry.Deps{Chain: reader(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 				t.Fatal("factory made RPC call")
 				return nil, nil
 			})})

@@ -14,10 +14,11 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	sb "github.com/symbioticfi/merkle-executor/api/bindings/cowsettlement"
-	ab "github.com/symbioticfi/merkle-executor/api/bindings/merkleaccount"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	ab "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"gopkg.in/yaml.v3"
 )
 
@@ -52,6 +53,20 @@ func node(t *testing.T, c any) yaml.Node {
 func sampleOrder() wire.CowOrder {
 	return wire.CowOrder{SellToken: addr(1).Hex(), BuyToken: addr(2).Hex(), Receiver: addr(3).Hex(), From: addr(3).Hex(), SellAmount: "990", BuyAmount: "1980", FeeAmount: "0", ValidTo: 1600, AppData: (common.Hash{}).Hex(), Kind: "sell", PartiallyFillable: false, SellTokenBalance: "erc20", BuyTokenBalance: "erc20", SigningScheme: "eip1271", Signature: "0x"}
 }
+func sampleQuote() wire.CowOrder {
+	q := sampleOrder()
+	_, hash := appData(defaultSlippageBPS)
+	q.AppData = hash.Hex()
+	return q
+}
+func fixtureFactory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
+	p, err := Factory(raw, deps)
+	if err != nil {
+		return nil, err
+	}
+	p.(*Provider).volumeBPS = func(context.Context, *big.Int, common.Address, common.Address) (uint64, error) { return 0, nil }
+	return p, nil
+}
 func TestCoWViemDigestAndUIDGolden(t *testing.T) {
 	o := sampleOrder()
 	buffer, e := EncodeOrder(o)
@@ -72,7 +87,7 @@ func TestCoWViemDigestAndUIDGolden(t *testing.T) {
 func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	account := addr(3)
 	domain := protocolio.Domain("Gnosis Protocol", "v2", big.NewInt(1), addr(4))
-	posts, gets := 0, 0
+	posts, gets, quotes := 0, 0, 0
 	exists := false
 	status := "open"
 	approved := false
@@ -82,6 +97,7 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/v1/quote":
+			quotes++
 			if r.Method != http.MethodPost {
 				t.Error("quote method")
 			}
@@ -90,10 +106,10 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 			if request.SigningScheme != "eip1271" || request.From != account.Hex() || request.SellAmountBeforeFee != "1000" || request.ValidTo != 1600 {
 				t.Error("wrong quote request")
 			}
-			q := sampleOrder()
+			q := sampleQuote()
 			q.BuyAmount = "2000"
 			q.FeeAmount = "10"
-			_ = json.NewEncoder(w).Encode(wire.CowQuoteResponse{Quote: q, ID: 1})
+			_ = json.NewEncoder(w).Encode(wire.CowQuoteResponse{Quote: q, ID: 1, Verified: true})
 		case r.URL.Path == "/api/v1/orders":
 			posts++
 			if r.Method != http.MethodPost {
@@ -102,8 +118,11 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 			if e := json.NewDecoder(r.Body).Decode(&submitted); e != nil {
 				t.Error(e)
 			}
-			if submitted.SigningScheme != "eip1271" || submitted.Signature != "0x" || submitted.FeeAmount != "0" || submitted.PartiallyFillable || submitted.SellAmount != "990" {
+			if submitted.SigningScheme != "eip1271" || submitted.Signature != "0x" || submitted.FeeAmount != "0" || submitted.PartiallyFillable || submitted.SellAmount != "1000" {
 				t.Error("wrong account order")
+			}
+			if crypto.Keccak256Hash([]byte(submitted.AppData)).Hex() != submitted.AppDataHash || submitted.QuoteID != 1 {
+				t.Error("POST omitted persisted full appData/hash/quote identity")
 			}
 			exists = true
 			w.WriteHeader(502)
@@ -117,7 +136,7 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 			if r.URL.Path != "/api/v1/orders/"+uid {
 				t.Error("UID changed after restart")
 			}
-			_ = json.NewEncoder(w).Encode(wire.CowOrderStatus{UID: uid, Owner: account.Hex(), Status: status, SellAmount: "990", BuyAmount: "1980", ValidTo: 1600})
+			_ = json.NewEncoder(w).Encode(wire.CowOrderStatus{UID: uid, Owner: account.Hex(), Status: status, SellAmount: "1000", BuyAmount: "1980", ValidTo: 1600})
 		default:
 			t.Errorf("unexpected HTTP path %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -157,8 +176,8 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	})
 	sellInput, buyInput := uint(0), uint(1)
 	cfg := Config{SellAmountInput: &sellInput, BuyAmountInput: &buyInput, HTTP: protocolio.HTTPConfig{URL: srv.URL}, Settlement: addr(4).Hex(), SellToken: addr(1).Hex(), BuyToken: addr(2).Hex(), SellAmount: "1000", MinBuyAmount: "1800", SlippageBPS: 100, ValiditySeconds: 600, AppData: (common.Hash{}).Hex(), Action: "1:0"}
-	deps := provider.Deps{Chain: chain, HTTP: srv.Client()}
-	p, e := Factory(node(t, cfg), deps)
+	deps := providerRegistry.Deps{Chain: chain, HTTP: srv.Client()}
+	p, e := fixtureFactory(node(t, cfg), deps)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -167,8 +186,8 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if out.Inputs[0] != "990" || out.Inputs[1] != "1980" {
-		t.Fatal("recipe inputs differ from net authorized order")
+	if out.Inputs[0] != "1000" || out.Inputs[1] != "1980" {
+		t.Fatal("recipe inputs differ from gross authorized order")
 	}
 	if posts != 0 || gets != 0 {
 		t.Fatal("Prepare submitted or polled external order")
@@ -199,7 +218,7 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	encoded, _ := json.Marshal(out)
 	var restored provider.Output
 	_ = json.Unmarshal(encoded, &restored)
-	p, e = Factory(node(t, cfg), deps)
+	p, e = fixtureFactory(node(t, cfg), deps)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -207,12 +226,15 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	if e != nil || result.Done || posts != 1 || gets != 2 {
 		t.Fatalf("restart duplicated or lost order: %+v %v, posts=%d gets=%d", result, e, posts, gets)
 	}
+	if quotes != 1 {
+		t.Fatal("recovery obtained a fresh quote")
+	}
 	status = "fulfilled"
 	result, e = p.Advance(context.Background(), snap, restored, result.State)
 	if e != nil || result.Done {
 		t.Fatal("API fulfilled accepted without confirmed on-chain fill")
 	}
-	filled = big.NewInt(990)
+	filled = big.NewInt(1000)
 	result, e = p.Advance(context.Background(), snap, restored, result.State)
 	if e != nil || !result.Done || result.Outcome != "settled" {
 		t.Fatalf("confirmed full fill not complete: %+v %v", result, e)
@@ -240,14 +262,20 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 		t.Fatal("calldata drift accepted")
 	}
 	restored.Actions[cfg.Action] = savedPayload
-	restored.Inputs[0] = "1000"
+	restored.Inputs[0] = "990"
 	if _, e = p.Advance(context.Background(), snap, restored, nil); e == nil {
 		t.Fatal("gross/net numerical input drift accepted")
 	}
-	restored.Inputs[0] = "990"
+	restored.Inputs[0] = "1000"
 	d.UID = "0x00"
 	restored.Data, _ = json.Marshal(d)
 	if _, e = p.Advance(context.Background(), snap, restored, nil); e == nil {
 		t.Fatal("tampered persisted UID accepted")
+	}
+	d.UID = uid
+	d.FullAppData += " "
+	restored.Data, _ = json.Marshal(d)
+	if _, e = p.Advance(context.Background(), snap, restored, nil); e == nil {
+		t.Fatal("tampered full appData accepted")
 	}
 }

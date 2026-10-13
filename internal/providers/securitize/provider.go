@@ -2,7 +2,6 @@
 package securitize
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"math/big"
@@ -13,34 +12,36 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/merkle-executor/api/bindings/erc20"
 	legacy "github.com/symbioticfi/merkle-executor/api/bindings/securitizelegacyofframp"
 	modern "github.com/symbioticfi/merkle-executor/api/bindings/securitizeofframp"
 	"github.com/symbioticfi/merkle-executor/api/bindings/securitizetoken"
 	"github.com/symbioticfi/merkle-executor/api/bindings/securitizetopology"
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
-	"github.com/symbioticfi/merkle-executor/internal/parse"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 type Config struct {
-	Catalog        string `yaml:"catalog"`
-	Symbol         string `yaml:"symbol"`
-	ChainID        uint64 `yaml:"chainId"`
-	Mode           string `yaml:"mode"`
-	Token          string `yaml:"token"`
-	Target         string `yaml:"target"`
-	PaymentToken   string `yaml:"paymentToken"`
-	Amount         string `yaml:"amount"`
-	MinOutput      string `yaml:"minOutput"`
-	Action         string `yaml:"action"`
-	AmountInput    *uint  `yaml:"amountInput"`
-	MinOutputInput *uint  `yaml:"minOutputInput"`
+	Catalog           string `yaml:"catalog"`
+	Symbol            string `yaml:"symbol"`
+	ChainID           uint64 `yaml:"chainId"`
+	Mode              string `yaml:"mode"`
+	Token             string `yaml:"token"`
+	Target            string `yaml:"target"`
+	PaymentToken      string `yaml:"paymentToken"`
+	Amount            string `yaml:"amount"`
+	MinOutput         string `yaml:"minOutput"`
+	Action            string `yaml:"action"`
+	AmountInput       *uint  `yaml:"amountInput"`
+	MinOutputInput    *uint  `yaml:"minOutputInput"`
+	GuardMinimumInput *uint  `yaml:"guardMinimumInput"`
 }
 
 type Provider struct {
 	cfg                    Config
-	deps                   provider.Deps
+	deps                   providerRegistry.Deps
 	token, target, payment common.Address
 	amount, minimum        *big.Int
 	decimals               *uint8
@@ -58,13 +59,18 @@ type prepared struct {
 	Expected string         `json:"expected"`
 }
 
-func Register(r *provider.Registry) error { return r.Register("securitize", Factory) }
+func Register(r *providerRegistry.Registry) error { return r.Register("securitize", Factory) }
 
-func Factory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var c Config
 	if err := parse.DecodeStrict(raw, &c); err != nil {
 		return nil, err
 	}
+	return New(c, deps)
+}
+
+// New consumes authenticated recipe values or explicit local fixture policy.
+func New(c Config, deps providerRegistry.Deps) (*Provider, error) {
 	if c.ChainID == 0 || deps.Chain == nil {
 		return nil, errors.New("Securitize chainId and chain reader are required")
 	}
@@ -102,8 +108,21 @@ func Factory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
 			return nil, errors.New("Securitize minOutput must be positive uint256")
 		}
 	}
+	for _, index := range []*uint{c.AmountInput, c.MinOutputInput, c.GuardMinimumInput} {
+		if index != nil {
+			if err := parse.InputIndex(*index); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if c.AmountInput != nil && c.MinOutputInput != nil && *c.AmountInput == *c.MinOutputInput {
 		return nil, errors.New("duplicate Securitize input assignment")
+	}
+	if c.GuardMinimumInput != nil && c.Mode != "legacy" {
+		return nil, errors.New("guard minimum input applies only to legacy Securitize")
+	}
+	if c.GuardMinimumInput != nil && (c.MinOutputInput != nil || (c.AmountInput != nil && *c.AmountInput == *c.GuardMinimumInput)) {
+		return nil, errors.New("duplicate Securitize guard assignment")
 	}
 	if err = p.validateCatalog(); err != nil {
 		return nil, err
@@ -115,7 +134,20 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if err := p.snapshot(s); err != nil {
 		return provider.Output{}, err
 	}
-	decimals, err := p.tokenDecimals(ctx, s, p.token)
+	var first *protocolio.ReadResults
+	var err error
+	if p.cfg.Mode != "wallet" {
+		first, err = p.initialReads(ctx, s)
+		if err != nil {
+			return provider.Output{}, err
+		}
+	}
+	var decimals uint8
+	if first == nil {
+		decimals, err = p.tokenDecimals(ctx, s, p.token)
+	} else {
+		decimals, err = decodeRead(first.At(0), securitizetoken.NewSecuritizeToken().UnpackDecimals, "decimals")
+	}
 	if err != nil {
 		return provider.Output{}, err
 	}
@@ -124,7 +156,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	}
 	expected := new(big.Int)
 	if p.cfg.Mode != "wallet" {
-		expected, err = p.quote(ctx, s, decimals)
+		expected, err = p.quote(ctx, s, decimals, first)
 		if err != nil {
 			return provider.Output{}, err
 		}
@@ -142,6 +174,9 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	}
 	if p.cfg.MinOutputInput != nil {
 		inputs[*p.cfg.MinOutputInput] = p.minimum.String()
+	}
+	if p.cfg.GuardMinimumInput != nil {
+		inputs[*p.cfg.GuardMinimumInput] = p.minimum.String()
 	}
 	data, err := json.Marshal(prepared{ChainID: p.cfg.ChainID, Account: s.Account, Token: p.token, Target: p.target, Payment: p.payment, Mode: p.cfg.Mode, Amount: p.amount.String(), Minimum: p.minimum.String(), Expected: expected.String()})
 	if err != nil {
@@ -195,60 +230,110 @@ func (p *Provider) tokenDecimals(ctx context.Context, s provider.Snapshot, token
 	return v[0].(uint8), nil
 }
 
-func (p *Provider) quote(ctx context.Context, s provider.Snapshot, decimals uint8) (*big.Int, error) {
-	a := modern.NewSecuritizeOffRamp().GetABI()
-	assetMethod, liquidityMethod := "assetAddress", "liquidityProvider"
-	if p.cfg.Mode == "legacy" {
-		a = legacy.NewSecuritizeLegacyOffRamp().GetABI()
-		assetMethod, liquidityMethod = "asset", "liquidity"
+// Only these source-reviewed token deployments have caller-independent decimals.
+// Other configured tokens remain isolated even when the ramp reads aggregate.
+func (p *Provider) safeDecimals(token common.Address) bool {
+	if p.cfg.ChainID != 1 {
+		return false
 	}
-	v, err := p.call(ctx, s, p.target, a, "paused")
+	switch token {
+	case common.HexToAddress("0x2255718832bC9fD3bE1CaF75084F4803DA14FF01"),
+		common.HexToAddress("0xDf1c8e71CbDF48af50B36F96AD2eb6F5094Ba72a"),
+		common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
+		common.HexToAddress("0xC139190F447e929f090Edeb554D95AbB8b18aC1C"):
+		return true
+	}
+	return false
+}
+func (p *Provider) initialReads(ctx context.Context, s provider.Snapshot) (*protocolio.ReadResults, error) {
+	token := securitizetoken.NewSecuritizeToken()
+	req := []protocolio.ReadRequest{protocolio.ContractRead(p.token, token.PackDecimals(), s.BlockNumber, p.safeDecimals(p.token))}
+	if p.cfg.Mode == "modern" {
+		a := modern.NewSecuritizeOffRamp()
+		for _, data := range [][]byte{a.PackPaused(), a.PackAssetAddress(), a.PackLiquidityProvider()} {
+			req = append(req, protocolio.ContractRead(p.target, data, s.BlockNumber, true))
+		}
+	} else {
+		a := legacy.NewSecuritizeLegacyOffRamp()
+		for _, data := range [][]byte{a.PackPaused(), a.PackAsset(), a.PackLiquidity(), a.PackSettlement()} {
+			req = append(req, protocolio.ContractRead(p.target, data, s.BlockNumber, true))
+		}
+		req = append(req, protocolio.ContractRead(p.payment, token.PackDecimals(), s.BlockNumber, p.safeDecimals(p.payment)))
+	}
+	return protocolio.ReadGroup(ctx, p.deps.Chain, req...)
+}
+func decodeRead[T any](result protocolio.ReadResult, unpack func([]byte) (T, error), name string) (T, error) {
+	var zero T
+	raw, err := result.CallData()
+	if err != nil {
+		return zero, err
+	}
+	v, err := unpack(raw)
+	if err != nil {
+		return zero, errors.Errorf("invalid Securitize %s response", name)
+	}
+	return v, nil
+}
+func (p *Provider) quote(ctx context.Context, s provider.Snapshot, decimals uint8, first *protocolio.ReadResults) (*big.Int, error) {
+	a := modern.NewSecuritizeOffRamp()
+	old := legacy.NewSecuritizeLegacyOffRamp()
+	// paused has the same ABI in both supported ramp implementations.
+	paused, err := decodeRead(first.At(1), a.UnpackPaused, "paused")
 	if err != nil {
 		return nil, err
 	}
-	if v[0].(bool) {
+	if paused {
 		return nil, errors.Errorf("%w: Securitize offramp is paused", provider.ErrNotReady)
 	}
-	v, err = p.call(ctx, s, p.target, a, assetMethod)
+	asset, err := decodeRead(first.At(2), a.UnpackAssetAddress, "asset")
 	if err != nil {
 		return nil, err
 	}
-	if v[0].(common.Address) != p.token {
+	if asset != p.token {
 		return nil, errors.New("Securitize offramp asset mismatch")
 	}
-	v, err = p.call(ctx, s, p.target, a, liquidityMethod)
+	payment, err := decodeRead(first.At(3), a.UnpackLiquidityProvider, "liquidity")
 	if err != nil {
 		return nil, err
 	}
-	payment := v[0].(common.Address)
-	liquidityTarget := p.target
-	liquidityABI := a
 	expected := new(big.Int)
+	var liquidity *big.Int
 	if p.cfg.Mode == "modern" {
 		if payment == (common.Address{}) {
 			return nil, errors.New("Securitize liquidity provider is zero")
 		}
-		v, err = p.call(ctx, s, payment, securitizetopology.NewSecuritizeTopology().GetABI(), "liquidityToken")
+		topology := securitizetopology.NewSecuritizeTopology()
+		reads, err := protocolio.ReadGroup(ctx, p.deps.Chain,
+			protocolio.ContractRead(payment, topology.PackLiquidityToken(), s.BlockNumber, false),
+			protocolio.ContractRead(p.target, a.PackCalculateLiquidityTokenAmount(p.amount), s.BlockNumber, true),
+			protocolio.ContractRead(p.target, a.PackAvailableLiquidity(), s.BlockNumber, true))
 		if err != nil {
 			return nil, err
 		}
-		payment = v[0].(common.Address)
-		v, err = p.call(ctx, s, p.target, a, "calculateLiquidityTokenAmount", p.amount)
+		payment, err = decodeRead(reads.At(0), topology.UnpackLiquidityToken, "liquidityToken")
 		if err != nil {
 			return nil, err
 		}
-		expected = v[0].(*big.Int)
+		expected, err = decodeRead(reads.At(1), a.UnpackCalculateLiquidityTokenAmount, "calculateLiquidityTokenAmount")
+		if err != nil {
+			return nil, err
+		}
+		if payment != p.payment {
+			return nil, errors.New("Securitize offramp payment token mismatch")
+		}
+		liquidity, err = decodeRead(reads.At(2), a.UnpackAvailableLiquidity, "availableLiquidity")
+		if err != nil {
+			return nil, err
+		}
 	} else {
-		v, err = p.call(ctx, s, p.target, a, "settlement")
+		settlement, err := decodeRead(first.At(4), old.UnpackSettlement, "settlement")
 		if err != nil {
 			return nil, err
 		}
-		liquidityTarget = v[0].(common.Address)
-		liquidityABI = securitizetopology.NewSecuritizeTopology().GetABI()
-		if liquidityTarget == (common.Address{}) {
+		if settlement == (common.Address{}) {
 			return nil, errors.New("Securitize settlement is zero")
 		}
-		outDecimals, err := p.tokenDecimals(ctx, s, p.payment)
+		outDecimals, err := decodeRead(first.At(5), securitizetoken.NewSecuritizeToken().UnpackDecimals, "decimals")
 		if err != nil {
 			return nil, err
 		}
@@ -259,15 +344,16 @@ func (p *Provider) quote(ctx context.Context, s provider.Snapshot, decimals uint
 		if expected.BitLen() > 256 {
 			return nil, errors.New("Securitize normalized output overflows uint256")
 		}
+		if payment != p.payment {
+			return nil, errors.New("Securitize offramp payment token mismatch")
+		}
+		values, err := p.call(ctx, s, settlement, securitizetopology.NewSecuritizeTopology().GetABI(), "availableLiquidity")
+		if err != nil {
+			return nil, err
+		}
+		liquidity = values[0].(*big.Int)
 	}
-	if payment != p.payment {
-		return nil, errors.New("Securitize offramp payment token mismatch")
-	}
-	v, err = p.call(ctx, s, liquidityTarget, liquidityABI, "availableLiquidity")
-	if err != nil {
-		return nil, err
-	}
-	if v[0].(*big.Int).Cmp(expected) < 0 {
+	if liquidity.Cmp(expected) < 0 {
 		return nil, errors.Errorf("%w: Securitize offramp liquidity is insufficient", provider.ErrNotReady)
 	}
 	return expected, nil
@@ -277,20 +363,13 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, output prov
 	if err := p.snapshot(s); err != nil {
 		return provider.Progress{}, err
 	}
-	var data prepared
-	if err := json.Unmarshal(output.Data, &data); err != nil {
-		return provider.Progress{}, errors.New("invalid persisted Securitize identity")
-	}
-	if data.ChainID != p.cfg.ChainID || data.Account != s.Account || data.Token != p.token || data.Target != p.target || data.Payment != p.payment || data.Mode != p.cfg.Mode || data.Amount != p.amount.String() || data.Minimum != p.minimum.String() {
-		return provider.Progress{}, errors.New("persisted Securitize identity mismatch")
-	}
-	expected, err := parse.Uint256(data.Expected)
-	if err != nil || (p.cfg.Mode == "wallet" && expected.Sign() != 0) || (p.cfg.Mode != "wallet" && expected.Cmp(p.minimum) < 0) {
-		return provider.Progress{}, errors.New("invalid persisted Securitize quote")
+	expected, err := p.validatePersisted(output, s.Account)
+	if err != nil {
+		return provider.Progress{}, err
 	}
 	payload, err := p.payload()
-	if err != nil || !bytes.Equal(output.Actions[p.cfg.Action], payload) {
-		return provider.Progress{}, errors.New("persisted Securitize action mismatch")
+	if err != nil {
+		return provider.Progress{}, err
 	}
 	if err = protocolio.Execution(ctx, p.deps.Chain, s); err != nil {
 		return provider.Progress{}, err
@@ -371,4 +450,14 @@ func (p *Provider) redemptionEvent(s provider.Snapshot) (*big.Int, error) {
 		return nil, errors.New("Securitize redemption completion event missing")
 	}
 	return received, nil
+}
+
+// ExclusiveTargets rejects repeated wallet token / offramp routes, including
+// static and other-provider actions, before their receipts become ambiguous.
+func (p *Provider) ExclusiveTargets() map[string]common.Address {
+	target := p.target
+	if p.cfg.Mode == "wallet" {
+		target = p.token
+	}
+	return map[string]common.Address{p.cfg.Action: target}
 }

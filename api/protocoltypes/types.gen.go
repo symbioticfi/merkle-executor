@@ -2,6 +2,8 @@
 // Source: api/schemas/protocols.json (manual upstream consumer subset).
 package protocoltypes
 
+import "encoding/json"
+
 type LLDiscount struct {
 	Adapter       string `json:"adapter"`
 	TokenToRedeem string `json:"tokenToRedeem"`
@@ -77,6 +79,10 @@ type CowQuoteRequest struct {
 	ValidTo             int64  `json:"validTo"`
 	AppData             string `json:"appData"`
 	PartiallyFillable   bool   `json:"partiallyFillable"`
+	AppDataHash         string `json:"appDataHash,omitempty"`
+	PriceQuality        string `json:"priceQuality"`
+	SellTokenBalance    string `json:"sellTokenBalance"`
+	BuyTokenBalance     string `json:"buyTokenBalance"`
 }
 
 type CowOrder struct {
@@ -95,12 +101,15 @@ type CowOrder struct {
 	SigningScheme     string `json:"signingScheme"`
 	Signature         string `json:"signature"`
 	From              string `json:"from"`
+	AppDataHash       string `json:"appDataHash,omitempty"`
+	QuoteID           int64  `json:"quoteId,omitempty"`
 }
 
 type CowQuoteResponse struct {
 	Quote      CowOrder `json:"quote"`
 	ID         int64    `json:"id"`
 	Expiration string   `json:"expiration"`
+	Verified   bool     `json:"verified"`
 }
 
 type CowOrderStatus struct {
@@ -111,4 +120,99 @@ type CowOrderStatus struct {
 	SellAmount                   string `json:"sellAmount"`
 	BuyAmount                    string `json:"buyAmount"`
 	ValidTo                      int64  `json:"validTo"`
+}
+
+type RfqOutput struct {
+	Token     string `json:"token"`
+	Amount    string `json:"amount"`
+	Recipient string `json:"recipient"`
+}
+
+type RfqAmount struct {
+	Token  string `json:"token"`
+	Amount string `json:"amount"`
+}
+
+type RfqQuoteOutput struct {
+	Token     string `json:"token"`
+	Recipient string `json:"recipient"`
+}
+
+type RfqQuoteRequest struct {
+	TokenInChainID    int64            `json:"tokenInChainId"`
+	TokenOutChainID   int64            `json:"tokenOutChainId"`
+	TokenIn           string           `json:"tokenIn"`
+	TokenOut          string           `json:"tokenOut"`
+	Type              string           `json:"type"`
+	Amount            string           `json:"amount"`
+	Swapper           string           `json:"swapper"`
+	RoutingPreference string           `json:"routingPreference"`
+	SolverIDs         []string         `json:"solverIds,omitempty"`
+	Outputs           []RfqQuoteOutput `json:"outputs"`
+}
+
+type RfqQuoteInfo struct {
+	TokenIn  string      `json:"tokenIn"`
+	AmountIn string      `json:"amountIn"`
+	Outputs  []RfqOutput `json:"outputs"`
+	Deadline int64       `json:"deadline"`
+	Nonce    string      `json:"nonce"`
+}
+
+type RfqQuote struct {
+	QuoteID           string       `json:"quoteId"`
+	AggregatedOutputs []RfqAmount  `json:"aggregatedOutputs"`
+	OrderInfo         RfqQuoteInfo `json:"orderInfo"`
+}
+
+type RfqSignatureData struct {
+	Domain      json.RawMessage `json:"domain"`
+	Types       json.RawMessage `json:"types"`
+	PrimaryType string          `json:"primaryType"`
+	Value       json.RawMessage `json:"value"`
+}
+
+type RfqSolver struct {
+	ID     string `json:"id"`
+	Filler string `json:"filler"`
+}
+
+type RfqOption struct {
+	Solver        RfqSolver        `json:"solver"`
+	Quote         json.RawMessage  `json:"quote"`
+	SignatureData RfqSignatureData `json:"signatureData"`
+}
+
+type RfqQuoteResponse struct {
+	Quotes []RfqOption `json:"quotes"`
+}
+
+type RfqOrderRequest struct {
+	Quote     json.RawMessage `json:"quote"`
+	Signature string          `json:"signature"`
+}
+
+type RfqOrderResponse struct {
+	OrderID     string `json:"orderId"`
+	OrderStatus string `json:"orderStatus"`
+}
+
+type RfqOrder struct {
+	Type        string      `json:"type"`
+	OrderID     string      `json:"orderId"`
+	OrderStatus string      `json:"orderStatus"`
+	QuoteID     string      `json:"quoteId"`
+	Swapper     string      `json:"swapper"`
+	Nonce       string      `json:"nonce"`
+	Input       RfqAmount   `json:"input"`
+	Outputs     []RfqOutput `json:"outputs"`
+}
+
+type RfqOrdersResponse struct {
+	Orders []RfqOrder      `json:"orders"`
+	Cursor json.RawMessage `json:"cursor"`
+}
+
+type CowSlippageResponse struct {
+	SlippageBPS int64 `json:"slippageBps"`
 }

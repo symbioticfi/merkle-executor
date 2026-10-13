@@ -8,3 +8,7 @@ state
 *.key
 *.pem
 coverage.out
+
+go.work
+go.work.sum
+.superpowers

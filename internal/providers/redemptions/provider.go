@@ -12,43 +12,54 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/merkle-executor/api/protocolio"
-	"github.com/symbioticfi/merkle-executor/internal/parse"
-	"github.com/symbioticfi/merkle-executor/internal/provider"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 type Config struct {
-	Family            string `yaml:"family"`
-	Mode              string `yaml:"mode"`
-	ChainID           uint64 `yaml:"chainId"`
-	Token             string `yaml:"token"`
-	OutputAsset       string `yaml:"outputAsset"`
-	Target            string `yaml:"target"`
-	Amount            string `yaml:"amount"`
-	Action            string `yaml:"action"`
-	SecondAction      string `yaml:"secondAction"`
-	CDO               string `yaml:"cdo"`
-	Strategy          string `yaml:"strategy"`
-	Epoch             string `yaml:"epoch"`
-	RequestID         string `yaml:"requestId"`
-	AmountInput       *uint  `yaml:"amountInput"`
-	IntermediateInput *uint  `yaml:"intermediateInput"`
+	Family             string `yaml:"family"`
+	Mode               string `yaml:"mode"`
+	ChainID            uint64 `yaml:"chainId"`
+	Token              string `yaml:"token"`
+	OutputAsset        string `yaml:"outputAsset"`
+	Target             string `yaml:"target"`
+	Amount             string `yaml:"amount"`
+	Action             string `yaml:"action"`
+	SecondAction       string `yaml:"secondAction"`
+	CDO                string `yaml:"cdo"`
+	Strategy           string `yaml:"strategy"`
+	Epoch              string `yaml:"epoch"`
+	RequestID          string `yaml:"requestId"`
+	AmountInput        *uint  `yaml:"amountInput"`
+	IntermediateInput  *uint  `yaml:"intermediateInput"`
+	IntermediateAmount string `yaml:"intermediateAmount"`
+	EpochInput         *uint  `yaml:"epochInput"`
+	RequestIDInput     *uint  `yaml:"requestIdInput"`
 }
 
 type Provider struct {
-	cfg                                 Config
-	deps                                provider.Deps
-	token, asset, target, cdo, strategy common.Address
-	amount, epoch, requestID            *big.Int
+	cfg                                    Config
+	deps                                   providerRegistry.Deps
+	token, asset, target, cdo, strategy    common.Address
+	amount, epoch, requestID, intermediate *big.Int
 }
 
-func Register(registry *provider.Registry) error { return registry.Register("redemptions", Factory) }
+func Register(registry *providerRegistry.Registry) error {
+	return registry.Register("redemptions", Factory)
+}
 
-func Factory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
+func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
 	var cfg Config
 	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
 	}
+	return New(cfg, deps)
+}
+
+// New consumes authenticated recipe values or explicit local fixture policy.
+func New(cfg Config, deps providerRegistry.Deps) (*Provider, error) {
 	if cfg.ChainID == 0 || deps.Chain == nil {
 		return nil, errors.New("redemption chainId and chain reader required")
 	}
@@ -99,7 +110,14 @@ func Factory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
 		if cfg.SecondAction == cfg.Action {
 			return nil, errors.New("Figure unwrap and request actions must differ")
 		}
-	} else if cfg.SecondAction != "" || cfg.IntermediateInput != nil {
+		if cfg.IntermediateAmount != "" {
+			var err error
+			p.intermediate, err = parse.Uint256(cfg.IntermediateAmount)
+			if err != nil || p.intermediate.Sign() == 0 {
+				return nil, errors.New("Figure intermediate amount must be positive uint256")
+			}
+		}
+	} else if cfg.SecondAction != "" || cfg.IntermediateInput != nil || cfg.IntermediateAmount != "" {
 		return nil, errors.New("second action and intermediate input apply only to Figure")
 	}
 	if (cfg.Family != "pareto" && cfg.Family != "noon") || strings.HasSuffix(cfg.Mode, "request") {
@@ -120,6 +138,9 @@ func Factory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
 	} else if cfg.Epoch != "" {
 		return nil, errors.New("epoch applies only to Pareto queue claims")
 	}
+	if cfg.EpochInput != nil && cfg.Mode != "queue-claim" {
+		return nil, errors.New("epoch input applies only to Pareto queue claims")
+	}
 	if cfg.Family == "noon" && cfg.Mode == "claim" {
 		var err error
 		p.requestID, err = parse.Uint256(cfg.RequestID)
@@ -129,9 +150,19 @@ func Factory(raw yaml.Node, deps provider.Deps) (provider.Provider, error) {
 	} else if cfg.RequestID != "" {
 		return nil, errors.New("requestId applies only to Noon claims")
 	}
-	for _, index := range []*uint{cfg.AmountInput, cfg.IntermediateInput} {
-		if index != nil && *index > 4095 {
+	if cfg.RequestIDInput != nil && (cfg.Family != "noon" || cfg.Mode != "claim") {
+		return nil, errors.New("request ID input applies only to Noon claims")
+	}
+	seenInputs := map[uint]bool{}
+	for _, index := range []*uint{cfg.AmountInput, cfg.IntermediateInput, cfg.EpochInput, cfg.RequestIDInput} {
+		if index != nil && *index > parse.MaxInputIndex {
 			return nil, errors.New("redemption input index exceeds limit")
+		}
+		if index != nil {
+			if seenInputs[*index] {
+				return nil, errors.New("redemption input indices must differ")
+			}
+			seenInputs[*index] = true
 		}
 	}
 	if cfg.AmountInput != nil && cfg.IntermediateInput != nil && *cfg.AmountInput == *cfg.IntermediateInput {
@@ -173,6 +204,12 @@ func (p *Provider) Prepare(ctx context.Context, snapshot provider.Snapshot) (pro
 	if p.cfg.IntermediateInput != nil {
 		out.Inputs[*p.cfg.IntermediateInput] = intermediate.String()
 	}
+	if p.cfg.EpochInput != nil {
+		out.Inputs[*p.cfg.EpochInput] = p.epoch.String()
+	}
+	if p.cfg.RequestIDInput != nil {
+		out.Inputs[*p.cfg.RequestIDInput] = p.requestID.String()
+	}
 	out.Data, err = json.Marshal(snapshot.Account)
 	return out, err
 }
@@ -180,12 +217,12 @@ func (p *Provider) Prepare(ctx context.Context, snapshot provider.Snapshot) (pro
 // Requests finish at their confirmed submission. Issuer-owned queues retain the
 // pending claim; a separate claim recipe can run without an account-lock deadlock.
 func (p *Provider) Advance(ctx context.Context, snapshot provider.Snapshot, output provider.Output, _ json.RawMessage) (provider.Progress, error) {
+	var account common.Address
+	if err := json.Unmarshal(output.Data, &account); err != nil || account != snapshot.Account || snapshot.ChainID == nil || snapshot.ChainID.Cmp(new(big.Int).SetUint64(p.cfg.ChainID)) != 0 {
+		return provider.Progress{}, errors.New("redemption execution identity mismatch")
+	}
 	if err := protocolio.Execution(ctx, p.deps.Chain, snapshot); err != nil {
 		return provider.Progress{}, err
-	}
-	var account common.Address
-	if err := json.Unmarshal(output.Data, &account); err != nil || account != snapshot.Account || snapshot.ChainID.Cmp(new(big.Int).SetUint64(p.cfg.ChainID)) != 0 {
-		return provider.Progress{}, errors.New("redemption execution identity mismatch")
 	}
 	target := p.target
 	if p.cfg.Family == "figure" {
@@ -223,8 +260,20 @@ func read[T any](ctx context.Context, p *Provider, s provider.Snapshot, target c
 	return value, nil
 }
 
-func (p *Provider) checkAddress(ctx context.Context, s provider.Snapshot, target common.Address, data []byte, unpack func([]byte) (common.Address, error), expected common.Address) error {
-	actual, err := read(ctx, p, s, target, data, unpack)
+func readResult[T any](result protocolio.ReadResult, unpack func([]byte) (T, error)) (T, error) {
+	var zero T
+	raw, err := result.CallData()
+	if err != nil {
+		return zero, err
+	}
+	value, err := unpack(raw)
+	if err != nil {
+		return zero, errors.Errorf("decode issuer response: %w", err)
+	}
+	return value, nil
+}
+func checkRead(result protocolio.ReadResult, unpack func([]byte) (common.Address, error), expected common.Address) error {
+	actual, err := readResult(result, unpack)
 	if err != nil {
 		return err
 	}
@@ -235,3 +284,19 @@ func (p *Provider) checkAddress(ctx context.Context, s provider.Snapshot, target
 }
 
 func idle(reason string) error { return errors.Errorf("%w: %s", provider.ErrNotReady, reason) }
+
+// ExclusiveTargets preserves each issuer action's receipt identity across
+// providers and restarts. Figure owns both calls, including its bound output.
+func (p *Provider) ExclusiveTargets() map[string]common.Address {
+	if p.cfg.Family == "figure" {
+		return map[string]common.Address{p.cfg.Action: p.token, p.cfg.SecondAction: p.target}
+	}
+	target := p.target
+	if p.cfg.Family == "pareto" && !strings.HasPrefix(p.cfg.Mode, "queue-") {
+		target = p.cdo
+	}
+	if p.cfg.Family == "noon" && p.cfg.Mode == "request" {
+		target = p.token
+	}
+	return map[string]common.Address{p.cfg.Action: target}
+}

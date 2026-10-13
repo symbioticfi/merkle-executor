@@ -1,0 +1,178 @@
+# Issuer discovery snapshot; operator-reviewed authority, never refreshed at runtime.
+version: 1
+source: https://public-feed.securitize.io/asset-info
+observedAt: "2026-09-28"
+assets:
+  - symbol: BUIDL
+    chainId: 1
+    token: "0x7712c34205737192402172409a8F7ccef8aA2AEc"
+    decimals: 6
+    redemptionWallet: "0x8780Dd016171B91E4Df47075dA0a947959C34200"
+    offramps:
+      - mode: legacy
+        target: "0x31D3F59Ad4aAC0eeE2247c65EBE8Bf6E9E470a53"
+        paymentToken: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+        paymentSymbol: USDC
+      - mode: legacy
+        target: "0x4580D3c5fFF079BDe60Af9e98B62d4FB031eE0a0"
+        paymentToken: "0xC139190F447e929f090Edeb554D95AbB8b18aC1C"
+        paymentSymbol: USDtb
+      - mode: modern
+        target: "0x04FB23ef3cb3eB559D0ba096FbFda90241fF8e66"
+        paymentToken: "0x8292Bb45bf1Ee4d140127049757C2E0fF06317eD"
+        paymentSymbol: RLUSD
+  - symbol: BUIDL
+    chainId: 10
+    token: "0xa1CDAb15bBA75a80dF4089CaFbA013e376957cF5"
+    decimals: 6
+    redemptionWallet: "0x8780Dd016171B91E4Df47075dA0a947959C34200"
+    offramps: []
+  - symbol: BUIDL
+    chainId: 137
+    token: "0x2893Ef551B6dD69F661Ac00F11D93E5Dc5Dc0e99"
+    decimals: 6
+    redemptionWallet: "0x8780Dd016171B91E4Df47075dA0a947959C34200"
+    offramps: []
+  - symbol: BUIDL
+    chainId: 42161
+    token: "0xA6525Ae43eDCd03dC08E775774dCAbd3bb925872"
+    decimals: 6
+    redemptionWallet: "0x8780Dd016171B91E4Df47075dA0a947959C34200"
+    offramps: []
+  - symbol: BUIDL
+    chainId: 4217
+    token: "0xb5FF12Bd8010BaEf823D1BfA2Ce6bdc0109CBb24"
+    decimals: 6
+    redemptionWallet: "0x8780Dd016171B91E4Df47075dA0a947959C34200"
+    offramps: []
+  - symbol: BUIDL
+    chainId: 43114
+    token: "0x53FC82f14F009009b440a706e31c9021E1196A2F"
+    decimals: 6
+    redemptionWallet: "0x8780Dd016171B91E4Df47075dA0a947959C34200"
+    offramps: []
+  - symbol: BUIDL
+    chainId: 56
+    token: "0x2D5BdC96D9C8AabBDB38c9A27398513e7E5ef84F"
+    decimals: 6
+    redemptionWallet: "0x8780Dd016171B91E4Df47075dA0a947959C34200"
+    offramps: []
+  - symbol: ACRED
+    chainId: 1
+    token: "0x17418038ecF73BA4026c4f428547BF099706F27B"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: ACRED
+    chainId: 1329
+    token: "0xF7FA6725183e603059fc23D95735BF67f72b2d78"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: ACRED
+    chainId: 137
+    token: "0xFCe60bBc52a5705CeC5B445501FBAf3274Dc43D0"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: ACRED
+    chainId: 43114
+    token: "0x7C64925002BFA705834B118a923E9911BeE32875"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: ACRED
+    chainId: 57073
+    token: "0x53Ad50D3B6FCaCB8965d3A49cB722917C7DAE1F3"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: VBILL
+    chainId: 1
+    token: "0x2255718832bC9fD3bE1CaF75084F4803DA14FF01"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps:
+      - mode: modern
+        target: "0x1ed617529d80ae87e6611f11d8de8532eced42bc"
+        paymentToken: "0x8292Bb45bf1Ee4d140127049757C2E0fF06317eD"
+        paymentSymbol: RLUSD
+  - symbol: VBILL
+    chainId: 43114
+    token: "0x7F4546eF315Efc65336187Fe3765ea779Ac90183"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: VBILL
+    chainId: 56
+    token: "0x14d72634328C4D03bBA184A48081Df65F1911279"
+    decimals: 6
+    redemptionWallet: ""
+    offramps: []
+    unavailable: "Issuer feed publishes neither a redemption wallet nor an offramp for this deployment."
+  - symbol: STAC
+    chainId: 1
+    token: "0x51C2d74017390CbBd30550179A16A1c28F7210fc"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: HLSCOPE
+    chainId: 1
+    token: "0xDa2fFA104356688E74D9340519B8C17f00d7752E"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: HLSCOPE
+    chainId: 10
+    token: "0x720f86f4B5b5d5d0ea3E5718EC43071d4d05134b"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: HLSCOPE
+    chainId: 137
+    token: "0x4C5cA366e26409845624E29B62C388a06961A792"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: CURR
+    chainId: 1
+    token: "0x0885f310222F3C8d237B36861d1a84E551CD4aa3"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: SECZ
+    chainId: 43114
+    token: "0x5954fF4099ac47C4d6D098A9216f3278BB8C9506"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: BRSRV
+    chainId: 1
+    token: "0x3078BCf707E457d3Af2f938a2a478bbeea50a942"
+    decimals: 6
+    redemptionWallet: "0x8780Dd016171B91E4Df47075dA0a947959C34200"
+    offramps: []
+  - symbol: BRSRV
+    chainId: 4217
+    token: "0xE36E2e79bEB1b7F618201eEAd6106A7d737695e3"
+    decimals: 6
+    redemptionWallet: "0x8780Dd016171B91E4Df47075dA0a947959C34200"
+    offramps: []
+  - symbol: HINC
+    chainId: 1
+    token: "0x015C477A4E2881C4B3bB8999f59ee4A04e812344"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: HINC
+    chainId: 43114
+    token: "0xf5fA39A16449B1ee07AA52Ae79C6b00567c59f83"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
+  - symbol: ARKVX
+    chainId: 1
+    token: "0xDf1c8e71CbDF48af50B36F96AD2eb6F5094Ba72a"
+    decimals: 6
+    redemptionWallet: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
+    offramps: []
