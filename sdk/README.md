@@ -15,8 +15,9 @@ standalone daemon and vault-solver consume this same implementation.
 - `state`: optional exclusive local file store with atomic replacement and fsync.
 - `bindings`, `abi`: generated core interfaces and vendored provenance.
 
-The SDK creates no signer, nonce manager, fee engine, HTTP client, metrics server
-or daemon. A host implements `submission.Transport` over its existing sender.
+The SDK creates no signer, nonce manager, fee engine, metrics server or daemon.
+Permission sources and protocol I/O wrap a host-supplied HTTP transport; pinned
+read batching wraps a host-supplied RPC transport and generated aggregate codec. A host implements `submission.Transport` over its existing sender.
 `Hold` fences every other job using that signer; `SendAsync` calls `Persist` on
 each signed original and replacement **before** broadcasting; `Release` follows
 SDK acknowledgement after durable business progress. Signed records retain

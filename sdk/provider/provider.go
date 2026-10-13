@@ -18,6 +18,14 @@ type Reader interface {
 	CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error)
 }
 
+// CodeOverrideReader executes a read with replacement code at the call target.
+// The original sender, target, storage and block are preserved. Hosts must fail
+// when their RPC does not implement state overrides; changing the call sender or
+// evaluating the queries through Multicall is not equivalent.
+type CodeOverrideReader interface {
+	CallContractWithCode(context.Context, ethereum.CallMsg, *big.Int, []byte) ([]byte, error)
+}
+
 // LogReader discovers issuer-owned requests at the pinned snapshot. Providers
 // that need event discovery require this interface in addition to Reader.
 type LogReader interface {
@@ -115,4 +123,10 @@ type Provider interface {
 // providers or confused with static calls when the protocol has no action ID.
 type ExclusiveTargetProvider interface {
 	ExclusiveTargets() map[string]common.Address
+}
+
+// ExclusiveOutputTargetProvider reconstructs ownership from immutable persisted
+// preparation data, including after restart and after its progress is done.
+type ExclusiveOutputTargetProvider interface {
+	ExclusiveOutputTargets(Output) (map[string]common.Address, error)
 }

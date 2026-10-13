@@ -1,5 +1,5 @@
-// Package recipes discovers and assembles committed programs. It does not execute
-// their arithmetic or protocol calls; full execute simulation remains authoritative.
+// Package recipes discovers and assembles committed programs. It resolves numeric
+// dependencies through an EVM prefix lens; full original execute is authoritative.
 package recipes
 
 import (

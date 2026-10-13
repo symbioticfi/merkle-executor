@@ -30,6 +30,8 @@ type PreparationOptions struct {
 	ChainID *big.Int
 	Cache   *RecipeCache
 	Stage   func(protocolio.PreparationPin) []protocolio.ReadRequest
+	// VerifySimulation checks returned values from the original executor code.
+	VerifySimulation func([]byte) error
 }
 
 // PrepareExecutionWithOptions retains every execution guard while allowing
@@ -74,6 +76,15 @@ func PrepareExecutionWithOptions(ctx context.Context, reader Reader, executor, a
 	if reads.At(len(requests)-1).Err != nil {
 		return errors.New("full recipe simulation failed")
 	}
+	if options.VerifySimulation != nil {
+		raw, err := reads.At(len(requests) - 1).CallData()
+		if err != nil {
+			return err
+		}
+		if err := options.VerifySimulation(raw); err != nil {
+			return err
+		}
+	}
 	if err = validateCurrent(snapshot, current, reads, caller); err != nil {
 		return err
 	}
@@ -88,6 +99,10 @@ func PrepareExecutionWithOptions(ctx context.Context, reader Reader, executor, a
 // a persisted snapshot. The exact caller-bound calldata executes at nil/latest,
 // isolated from metadata getters; both captured block pins are checked afterward.
 func ValidateExecution(ctx context.Context, reader Reader, snapshot Snapshot, caller common.Address, calldata []byte) error {
+	return ValidateExecutionWithResults(ctx, reader, snapshot, caller, calldata, nil)
+}
+
+func ValidateExecutionWithResults(ctx context.Context, reader Reader, snapshot Snapshot, caller common.Address, calldata []byte, results map[uint]string) error {
 	current, err := openExecution(ctx, reader, snapshot, caller)
 	if err != nil {
 		return err
@@ -103,6 +118,15 @@ func ValidateExecution(ctx context.Context, reader Reader, snapshot Snapshot, ca
 	}
 	if reads.At(len(requests)-1).Err != nil {
 		return errors.New("prepared recipe no longer simulates")
+	}
+	if len(results) != 0 {
+		raw, err := reads.At(len(requests) - 1).CallData()
+		if err != nil {
+			return err
+		}
+		if err = VerifyResults(calldata, raw, results); err != nil {
+			return err
+		}
 	}
 	return closeExecution(ctx, reader, snapshot, current)
 }
