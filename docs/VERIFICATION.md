@@ -112,3 +112,49 @@ all ten top-level local Anvil tests with no skips, and `make generate` passed.
 `git diff --exit-code -- api sdk/bindings` confirmed no generated drift;
 `git diff --check` also passed. Independent full review found no actionable issue.
 These standalone checks do not establish hosted CI or deployment availability.
+
+
+## Liquid Lane RFQ consumer — 2026-10-13
+
+The daemon registration regression first failed with unknown provider
+`liquidlane-rfq`; it passes after registration. A cancellation-before-Fill fixture
+also failed before contradictory evidence was rejected. The dense-history regression
+first failed with a range-log limit error for 1,025 unrelated Fill events. It now
+checkpoints a complete subdivided range and finds the later matching Fill after
+restart, including when the head nonce is already used. Single-block overflow fails
+explicitly; indexed account cancellation filtering ignores unrelated cancellations.
+
+Focused provider tests pass for the independent cast EIP712 vector and go-ethereum
+apitypes parity, exact 804-byte authorization, typed schema/domain/policy rejection,
+leading-zero numeric identity, staged/direct parity and pin mismatch, failed-batch
+no-fallback, three safe plus two isolated Advance getters, HTTP cancellation/bounds/
+redaction, persisted authority tampering, incomplete/complete pagination, ambiguous
+publication, canonical receipt membership, cancellation/Fill ordering, deadline
+equality, post-fill signature/budget changes, corrupt cursors and orphan rewind.
+
+`TestAnvilLiquidLaneRFQConsumerRestartAndFill` passes with deployed local Multicall3,
+the real RecipeExecutor artifact and test account/token/Reactor contracts. Plan
+requests a quote but sends no authorization or order. Send executes the approved
+Reactor allowance and exact Sign, then preserves an accepted-but-502 publication as
+pending. Restart looks up the saved identity without a new quote, curator tree,
+authorization nonce or POST; API-only filled status stays pending. Before filler
+execution the account retains input1,000 and output0 with allowance1,000. A canonical
+fixture Fill transfers input1,000 and output950 and settles the job. A further
+restart repeats no external mutation. The token balance, nonce and durable job
+assertions are part of the test, not inferred from a successful command.
+
+`make generate` and RFQ fixture regeneration preserved all 26 generated file hashes.
+`git diff --check` passed; SDK sources and go.mod/go.sum remain unchanged. The new
+fixtures reproduce the pinned account's hash program and Reactor request settlement;
+protocol authentication is deliberately simplified in the local Reactor fixture.
+[Fixture limitations and reproduction](../internal/providers/liquidlanerfq/testdata/README.md)
+and [wire/source provenance](../api/schemas/LIQUID_LANE_RFQ.md) describe that boundary.
+With the unchanged published SDK pin and `GOWORK=off`, the coordinator independently
+ran `make check`: host and SDK builds, race/coverage tests, vet and lint all passed
+with zero lint issues. New consumer provider statement coverage was 84.2%.
+`GOWORK=off make integration` passed all eleven top-level Anvil tests with no failures
+or skips. Logs are retained in the ignored `.superpowers/sdd/007-root/` directory.
+Independent review prompted the adaptive dense-range regression and corrected the
+wire cursor schema to string-or-null; regenerated Go output was unchanged.
+No live RFQ order, chain mutation, production deployment or hosted CI result is
+established by these local checks.

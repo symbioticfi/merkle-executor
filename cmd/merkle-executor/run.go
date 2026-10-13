@@ -19,6 +19,7 @@ import (
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/internal/providers/data"
+	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlanerfq"
 	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
 	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
 	"github.com/symbioticfi/merkle-executor/internal/providers/securitize"
@@ -60,7 +61,7 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 	defer client.Close()
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	registry := providerRegistry.NewRegistry()
-	for _, register := range []func(*providerRegistry.Registry) error{data.Register, merkl.Register, cowswap.Register, redemptions.Register, securitize.Register} {
+	for _, register := range []func(*providerRegistry.Registry) error{data.Register, liquidlanerfq.Register, merkl.Register, cowswap.Register, redemptions.Register, securitize.Register} {
 		if err := register(registry); err != nil {
 			return err
 		}

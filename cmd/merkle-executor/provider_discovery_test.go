@@ -24,7 +24,7 @@ import (
 )
 
 func TestDaemonDirectProvidersUseDiscoveredAccount(t *testing.T) {
-	for _, name := range []string{"merkl", "cowswap", "liquidlane"} {
+	for _, name := range []string{"merkl", "cowswap", "liquidlane", "liquidlane-rfq"} {
 		t.Run(name, func(t *testing.T) {
 			cfg := testCLIConfig(t.TempDir())
 			target := common.HexToAddress(cfg.Strategies[0].Executor)
@@ -146,7 +146,11 @@ func TestDaemonDirectProvidersUseDiscoveredAccount(t *testing.T) {
 			if err == nil {
 				t.Fatal("fixture unexpected success")
 			}
-			if name == "liquidlane" {
+			if name == "liquidlane-rfq" {
+				if strings.Contains(err.Error(), "unknown provider") {
+					t.Fatalf("consumer redemption is unavailable: %v", err)
+				}
+			} else if name == "liquidlane" {
 				if apiCalls.Load() != 0 || !strings.Contains(err.Error(), "unknown provider") {
 					t.Fatalf("signed Liquid Lane remained registered: %v", err)
 				}

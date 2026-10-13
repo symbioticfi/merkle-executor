@@ -1,5 +1,9 @@
 # Liquid Lane issuer coverage
 
+This catalogue covers issuer requests and claims. Public RFQ consumer redemptions
+use the separate [liquidlane-rfq provider](PROVIDERS.md#liquid-lane-rfq-consumer-redemptions);
+signed connector discount production remains vault-solver.
+
 The [asset catalogue](../config/assets/liquid-lane.yaml) covers all **15 asset
 factories** listed under Liquid Lane on the [official addresses page](https://docs.symbiotic.fi/get-started/resources/addresses),
 checked on 2026-09-28, plus the additional **sUSN** native issuer route from the

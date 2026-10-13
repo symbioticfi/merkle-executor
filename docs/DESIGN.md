@@ -32,6 +32,13 @@ replace targets, masks, proofs, recipe instructions or caller identity. External
 does not grant authority. The final full execute simulation validates on-chain bindings
 and postconditions; the keeper does not duplicate the Solidity arithmetic interpreter.
 
+Liquid Lane RFQ consumers use the separate host provider `liquidlane-rfq` to
+acquire exact-input quotes, populate an approved account Sign action and reconcile
+canonical Reactor events. It persists the quote, Request digest and fixed `0x00`
+signature before publication, preserving identity through ambiguous HTTP responses.
+Only complete all-status lookup permits an idempotent retry. Bounded canonical event
+scan cursors survive restart; API statuses and used nonce bits are not settlement.
+
 Signed Liquid Lane discount/signature acquisition belongs to vault-solver; the daemon
 does not register that provider. Issuer redemptions remain registered. CoW authorization and settlement
 are separate phases: submit the ERC-1271 order only after its authorization transaction

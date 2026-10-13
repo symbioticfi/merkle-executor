@@ -379,6 +379,317 @@
         }
       },
       "additionalProperties": true
+    },
+    "RfqOutput": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "x-go-name": "Token",
+          "type": "string"
+        },
+        "amount": {
+          "x-go-name": "Amount",
+          "type": "string"
+        },
+        "recipient": {
+          "x-go-name": "Recipient",
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqAmount": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "x-go-name": "Token",
+          "type": "string"
+        },
+        "amount": {
+          "x-go-name": "Amount",
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqQuoteOutput": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "x-go-name": "Token",
+          "type": "string"
+        },
+        "recipient": {
+          "x-go-name": "Recipient",
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqQuoteRequest": {
+      "type": "object",
+      "properties": {
+        "tokenInChainId": {
+          "x-go-name": "TokenInChainID",
+          "type": "integer"
+        },
+        "tokenOutChainId": {
+          "x-go-name": "TokenOutChainID",
+          "type": "integer"
+        },
+        "tokenIn": {
+          "x-go-name": "TokenIn",
+          "type": "string"
+        },
+        "tokenOut": {
+          "x-go-name": "TokenOut",
+          "type": "string"
+        },
+        "type": {
+          "x-go-name": "Type",
+          "type": "string"
+        },
+        "amount": {
+          "x-go-name": "Amount",
+          "type": "string"
+        },
+        "swapper": {
+          "x-go-name": "Swapper",
+          "type": "string"
+        },
+        "routingPreference": {
+          "x-go-name": "RoutingPreference",
+          "type": "string"
+        },
+        "solverIds": {
+          "x-go-name": "SolverIDs",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-go-omitempty": true
+        },
+        "outputs": {
+          "x-go-name": "Outputs",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RfqQuoteOutput"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqQuoteInfo": {
+      "type": "object",
+      "properties": {
+        "tokenIn": {
+          "x-go-name": "TokenIn",
+          "type": "string"
+        },
+        "amountIn": {
+          "x-go-name": "AmountIn",
+          "type": "string"
+        },
+        "outputs": {
+          "x-go-name": "Outputs",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RfqOutput"
+          }
+        },
+        "deadline": {
+          "x-go-name": "Deadline",
+          "type": "integer"
+        },
+        "nonce": {
+          "x-go-name": "Nonce",
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqQuote": {
+      "type": "object",
+      "properties": {
+        "quoteId": {
+          "x-go-name": "QuoteID",
+          "type": "string"
+        },
+        "aggregatedOutputs": {
+          "x-go-name": "AggregatedOutputs",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RfqAmount"
+          }
+        },
+        "orderInfo": {
+          "x-go-name": "OrderInfo",
+          "$ref": "#/$defs/RfqQuoteInfo"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqSignatureData": {
+      "type": "object",
+      "properties": {
+        "domain": {
+          "x-go-name": "Domain",
+          "x-go-type": "json.RawMessage",
+          "type": "object"
+        },
+        "types": {
+          "x-go-name": "Types",
+          "x-go-type": "json.RawMessage",
+          "type": "object"
+        },
+        "primaryType": {
+          "x-go-name": "PrimaryType",
+          "type": "string"
+        },
+        "value": {
+          "x-go-name": "Value",
+          "x-go-type": "json.RawMessage",
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqSolver": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "x-go-name": "ID",
+          "type": "string"
+        },
+        "filler": {
+          "x-go-name": "Filler",
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqOption": {
+      "type": "object",
+      "properties": {
+        "solver": {
+          "x-go-name": "Solver",
+          "$ref": "#/$defs/RfqSolver"
+        },
+        "quote": {
+          "x-go-name": "Quote",
+          "x-go-type": "json.RawMessage",
+          "type": "object"
+        },
+        "signatureData": {
+          "x-go-name": "SignatureData",
+          "$ref": "#/$defs/RfqSignatureData"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqQuoteResponse": {
+      "type": "object",
+      "properties": {
+        "quotes": {
+          "x-go-name": "Quotes",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RfqOption"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqOrderRequest": {
+      "type": "object",
+      "properties": {
+        "quote": {
+          "x-go-name": "Quote",
+          "x-go-type": "json.RawMessage",
+          "type": "object"
+        },
+        "signature": {
+          "x-go-name": "Signature",
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqOrderResponse": {
+      "type": "object",
+      "properties": {
+        "orderId": {
+          "x-go-name": "OrderID",
+          "type": "string"
+        },
+        "orderStatus": {
+          "x-go-name": "OrderStatus",
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqOrder": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "x-go-name": "Type",
+          "type": "string"
+        },
+        "orderId": {
+          "x-go-name": "OrderID",
+          "type": "string"
+        },
+        "orderStatus": {
+          "x-go-name": "OrderStatus",
+          "type": "string"
+        },
+        "quoteId": {
+          "x-go-name": "QuoteID",
+          "type": "string"
+        },
+        "swapper": {
+          "x-go-name": "Swapper",
+          "type": "string"
+        },
+        "nonce": {
+          "x-go-name": "Nonce",
+          "type": "string"
+        },
+        "input": {
+          "x-go-name": "Input",
+          "$ref": "#/$defs/RfqAmount"
+        },
+        "outputs": {
+          "x-go-name": "Outputs",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RfqOutput"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "RfqOrdersResponse": {
+      "type": "object",
+      "properties": {
+        "orders": {
+          "x-go-name": "Orders",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RfqOrder"
+          }
+        },
+        "cursor": {
+          "x-go-name": "Cursor",
+          "x-go-type": "json.RawMessage",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": true
     }
   }
 }

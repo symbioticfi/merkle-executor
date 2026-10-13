@@ -1,7 +1,7 @@
 # Protocol providers
 
 Providers are registered explicitly as `redemptions`, `securitize`,
-`merkl`, and `cowswap`, alongside the generic data providers.
+`merkl`, `cowswap`, and `liquidlane-rfq`, alongside the generic data providers.
 They prepare runtime inputs and replacement calldata for curator-approved actions.
 Every numerical input index, including optional provider input mappings, must be
 in `0..4095`. Inspection, assembly and provider configuration use the same bound.
@@ -89,6 +89,7 @@ preserve zero From. Neither executes inside Multicall or shares transient EVM st
 | Preparation validation | 5 current metadata getters + unique roles + isolated simulation | 1 through 250 roles; opening and closing header stages add 2 |
 | Presend validation | 5 current metadata getters + isolated latest simulation | 1; opening and closing header stages add 2 |
 | Liquid Lane primitive (not daemon-registered) | 3 safe getters, then 6 safe getters | 2; unresolved ERC-1271 checks add 1 JSON array |
+| Liquid Lane RFQ Advance | 3 safe getters + 2 isolated token getters | 1 mixed array, with later event and canonical stages |
 | CoW Advance | domain, fill, account approval (3 safe getters) | 1, with later canonical fences |
 | Midas / OpenEden / Figure | 4 safe getters | 1 |
 | Centrifuge request / claim | 2 / 3 isolated getters | 1 JSON array |
@@ -163,9 +164,57 @@ Signed discount acquisition and connector signatures belong to vault-solver. The
 daemon no longer registers the `liquidlane` signed-swap provider; configuring that
 name is rejected. Its package, primitive validation and fixtures remain in the
 repository for existing consumers. Connector and adapter signing domains remain
-distinct. No signing-domain compatibility or RFQ consumer order flow is added by
-account or permission discovery. The independent `redemptions` provider remains
+distinct. The consumer provider below does not imply connector signing-domain
+compatibility. The independent `redemptions` provider remains
 registered for issuer requests and claims.
+
+## Liquid Lane RFQ consumer redemptions
+
+`liquidlane-rfq` requests and publishes consumer orders directly to the public RFQ
+backend. It supports same-chain EXACT_INPUT with one ordinary ERC20 output to the
+authenticated account. It preserves the exact quote and a fixed `0x00` signature
+through ambiguous publication and restart. Signed connector inventory swaps remain
+vault-solver's responsibility; issuer request/claim recipes remain `redemptions`.
+
+```yaml
+- name: liquidlane-rfq
+  config:
+    http:
+      url: https://rfq.example/api/v1
+      timeoutSeconds: 10
+      maxResponseBytes: 2097152
+    reactor: "0x1111111111111111111111111111111111111111"
+    protocol: "0x2222222222222222222222222222222222222222"
+    tokenIn: "0x3333333333333333333333333333333333333333"
+    tokenOut: "0x4444444444444444444444444444444444444444"
+    amountIn: "1000000"
+    minAmountOut: "990000"
+    minValiditySeconds: 60
+    maxValiditySeconds: 3600
+    action: "1:0"
+    # Optional numerical input mappings; action must be an approved account.sign.
+    amountInInput: 0
+    amountOutInput: 1
+    maxLookupPages: 10
+    eventRangeBlocks: 2000
+```
+
+The operator supplies all economics, supported deployments and a recipe granting
+Reactor allowance plus the exact 804-byte account signing layout. Native outputs,
+multiple outputs, fee-on-transfer and rebasing tokens are unsupported. No provider
+adds approvals, targets, masks or proofs. Quote acquisition occurs only during new
+preparation. Advance requires exact canonical Sign evidence, then canonical Reactor
+Fill or cancellation evidence; API status and a used nonce alone never release work.
+Deadline equality is live; expiry requires strictly greater confirmed time and a
+complete unused-nonce history. Post-fill revocation does not hide earlier settlement.
+
+Scans checkpoint complete canonical ranges, including when used=true. Dense ranges
+are subdivided; account-indexed cancellation queries avoid unrelated cancellation
+traffic. A single block above 1,024 returned events fails explicitly. Lookup must
+complete all-status pagination before an identical idempotent POST; missing or
+ambiguous identity remains owned. Finish active jobs before changing provider policy
+or operational bounds. This integration does not rewrite journals or acquire a new
+quote for an existing job. [Exact schema, bounds and provenance](../api/schemas/LIQUID_LANE_RFQ.md).
 
 ## Liquid Lane issuer requests and claims
 

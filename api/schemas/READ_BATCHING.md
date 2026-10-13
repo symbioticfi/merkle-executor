@@ -80,3 +80,16 @@ Known share vault(asset) getters are public maps: JAAA `0x5a0F93D040De44e78F251b
 ## Exclusions
 
 Arbitrary configured data RPC reads (`From=snapshot.Account`), arbitrary ERC1271 signatures, full execution simulations and unknown external getter implementations retain original isolated eth_call context. JSON batching still eliminates independent network round trips. All final canonical fences and hash-linked ancestry walks remain ordered singles; writes/signing/nonce admission are excluded.
+
+## Liquid Lane RFQ consumer
+
+RFQ Reactor `22b04a850ca3680103e797bfae0e1a3b997fac83` exposes caller-independent
+`eip712Domain()` (immutable domain metadata) and `isUsedNonce(account,nonce)`
+(explicit mapping keys). MerkleAccount `signatures(digest)` at the SDK-pinned
+adapters revision above is also a direct mapping read. These are the only three
+safe getters used by the consumer's Advance stage. Domain can be staged into initial
+recipe metadata before quote acquisition. Token `balanceOf` and `allowance` targets
+are arbitrary operator configuration and remain isolated eth_call members sharing
+the JSON array; no caller-independence is inferred from their ABI. Fill and indexed
+account cancellation logs share a separate array with the range header. A matching
+event header and receipt share a later batch; canonical closure follows those reads. [Full source hashes and semantics](LIQUID_LANE_RFQ.md).

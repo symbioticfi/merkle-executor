@@ -5,7 +5,7 @@ specifications. Unknown response fields are tolerated; providers validate every
 field used for authorization, pricing, identity, proof verification and settlement.
 No schema or endpoint is fetched automatically during a normal build.
 
-- `protocols.json`: JSON Schema wire subsets for Liquid Lane discount list/resolve,
+- `protocols.json`: JSON Schema wire subsets for Liquid Lane discount list/resolve and public consumer RFQ,
   Merkl V4 reward responses and CoW quote/order requests and status responses.
   `hack/generate-protocol-types.py` generates `api/protocoltypes/types.gen.go`.
 - Liquid Lane wire source: sibling `vault-solver/openapi/rfq-backend-internal.openapi.json`
@@ -72,3 +72,8 @@ EIP712 and Merkl golden vectors in provider tests were independently computed wi
 `viem`'s `hashTypedData`, `encodeAbiParameters`, and `keccak256`, using the explicit
 fixed addresses/amounts shown in each test. They are local encoding evidence,
 not API acceptance, a deployed permission proof or a live transaction result.
+
+The public Liquid Lane RFQ consumer uses a distinct Reactor ABI and public quote/order
+wire subset. [LIQUID_LANE_RFQ.md](LIQUID_LANE_RFQ.md) records exact contract/backend
+revisions, ABI source hash, account interface, EIP712 layout, cursor semantics and
+unsupported boundaries. These do not change the older signed discount subset.

@@ -190,6 +190,12 @@ refresh them when the on-chain ABI or upstream API changes.
 The [verification record](docs/VERIFICATION.md) separates local checks from live
 integration coverage.
 
+Liquid Lane consumer redemptions use `liquidlane-rfq`: fixed-policy EXACT_INPUT
+quotes, account Sign authorization, idempotent public RFQ publication and canonical
+Fill reconciliation. One ordinary ERC20 output to the derived account is supported;
+[configuration and limits](docs/PROVIDERS.md#liquid-lane-rfq-consumer-redemptions)
+remain explicit.
+
 Signed Liquid Lane discount acquisition and signatures belong to vault-solver. The
 daemon does not register the `liquidlane` signed-swap provider; its implementation
 and SDK primitives remain available in the repository. The `redemptions` issuer
