@@ -1,13 +1,12 @@
 # Protocol providers
 
-Providers are registered explicitly as `liquidlane`, `redemptions`, `securitize`,
+Providers are registered explicitly as `redemptions`, `securitize`,
 `merkl`, and `cowswap`, alongside the generic data providers.
 They prepare runtime inputs and replacement calldata for curator-approved actions.
 Every numerical input index, including optional provider input mappings, must be
 in `0..4095`. Inspection, assembly and provider configuration use the same bound.
 Provider configuration cannot contain YAML aliases (including merge aliases).
-Write operational values explicitly; alias-free configuration fingerprints are
-unchanged, preserving durable job recovery. Existing alias-based active jobs need
+Write operational values explicitly. Existing alias-based active jobs need
 operator investigation; the service does not rewrite their journal or identity.
 Targets, values, masks, permission proofs and instruction order remain committed by
 RecipeExecutor. A provider cannot install a missing approval or authorization leaf.
@@ -24,6 +23,36 @@ network path), `apiKeyEnv` optionally names an environment variable containing a
 credential, `timeoutSeconds` defaults to 10 (1..120), and `maxResponseBytes` defaults to
 2097152 (maximum 16777216). Credentials, response bodies and complete URLs are omitted
 from request errors. Redirects are never followed. No literal API key belongs in YAML.
+
+## Account and permission discovery
+
+Configure a global `curator` block with the shared HTTP settings above and a base
+URL including `/api/v1`. Strategies contain `name`, `executor`, optional
+`recipeHash`, `interval` and `providers`; strict YAML rejects the former `account`
+and `tree` fields. Startup derives accounts from deduplicated `executor.account()`
+reads at one pinned block, then checks its canonical header again. Preparation and
+presend still verify the account freshly. Startup discovery adds no per-preparation
+RPC reads.
+
+Each new preparation fetches the authenticated account's exact active root through
+`GET /merkle-trees/{root}?chainId={chainId}`. The SDK verifies the response chain,
+root, optional account and every permission leaf/proof before invoking providers.
+The backend's `adapter` is a MerkleAdapter, not the account or executor; actions,
+signer and display fields are ignored. No local-file or latest-revision fallback is
+used. Empty, missing, stale or unavailable responses fail preparation. Permission
+HTTP calls are separate from the RPC counts below. [Wire provenance](../api/schemas/CURATOR_PERMISSIONS.md).
+
+Finish every active job with the old binary and old configuration **before upgrading**
+and adding curator configuration, including combined strategies whose other providers
+have already completed. Derived accounts and curator settings change the recovery
+fingerprint. Do not rewrite saved fingerprints, transaction nonces or order UIDs.
+Recovery of existing signed attempts and CoW advancement use saved execution evidence
+without fetching a new curator tree. `check-config`, `status` and `reset-strategy`
+perform no RPC or curator requests and do not load API credentials.
+
+Merkl rewards and CoW quotes/orders remain direct daemon API integrations. Their
+explicit token mappings, budgets, minimum proceeds, slippage and expiry settings
+remain required; the curator response does not supply or infer economic policy.
 
 ## Read batching
 
@@ -59,7 +88,7 @@ preserve zero From. Neither executes inside Multicall or shares transient EVM st
 | Standalone unique account leaf roles | up to 256 safe getters | 1 per chunk, then canonical fence |
 | Preparation validation | 5 current metadata getters + unique roles + isolated simulation | 1 through 250 roles; opening and closing header stages add 2 |
 | Presend validation | 5 current metadata getters + isolated latest simulation | 1; opening and closing header stages add 2 |
-| Liquid Lane | 3 safe getters, then 6 safe getters | 2; unresolved ERC-1271 checks add 1 JSON array |
+| Liquid Lane primitive (not daemon-registered) | 3 safe getters, then 6 safe getters | 2; unresolved ERC-1271 checks add 1 JSON array |
 | CoW Advance | domain, fill, account approval (3 safe getters) | 1, with later canonical fences |
 | Midas / OpenEden / Figure | 4 safe getters | 1 |
 | Centrifuge request / claim | 2 / 3 isolated getters | 1 JSON array |
@@ -128,67 +157,15 @@ larger groups check every role before closing the guards. Anvil also proves thre
 caller-sensitive data reads share one HTTP array while retaining caller and isolated
 temporary state. These are local fixture measurements, not deployment or latency claims.
 
-## Liquid Lane signed connector inventory swap
+## Signed Liquid Lane ownership
 
-```yaml
-- name: liquidlane
-  config:
-    http:
-      url: https://connector-backend.example.invalid
-      apiKeyEnv: CONNECTOR_API_TOKEN
-    format: connector-v1
-    connector: "0x0000000000000000000000000000000000000004"
-    token: "0x0000000000000000000000000000000000000005"
-    outputAsset: "0x0000000000000000000000000000000000000001"
-    recipient: "0x0000000000000000000000000000000000000008"
-    protocol: "0x0000000000000000000000000000000000000007"
-    discountId: "0x013ccaf5b90414d2b2e3e85792dd1c878dd7df9f0eb51a1ba3ee57c50d8ba08b"
-    amountIn: "1000000"
-    maxAmountOut: "990000"
-    minValiditySeconds: 60
-    maxSignatureBytes: 1024
-    action: "1:0"
-    calldataBytes: 644
-    amountInInput: 0
-    amountOutInput: 1
-```
-
-The provider resolves the configured ID with `POST /api-internal/v1/discounts`.
-A separate typed client exposes unsigned list discovery. `discount.adapter` must name
-this connector proxy. Both EIP712 signatures and the ID are checked against the exact
-connector domain; current owner/additional signer, nonce, minimum discount, account,
-output asset and current spend budget are read at the pinned snapshot. EOA signatures
-are checked locally; contract signers use pinned ERC-1271 reads.
-
-`getAmountOut(token, amountIn)` supplies the current undiscounted quote. The provider
-applies the signed discount once, checks `maxAmountOut` and the remaining budget,
-and packs the connector's signed `swap` overload. `maxAmountOut` is a preparation
-bound: the connector recomputes its quote in the transaction. A hard execution-time
-payment cap must be enforced by the recipe (for example exact allowance and returned
-amount/balance checks) or an on-chain budget. Simulation does not freeze an oracle.
-The recipe must arrange RWA inventory at the connector, output-asset allowance/payment, and any subsequent issuer redemption.
-`amountInInput` and `amountOutInput` are optional numerical recipe slots.
-`calldataBytes` must equal the actual approved layout; 644 bytes is the ordinary case
-with two 65-byte signatures. Contract signatures may require a different approved
-layout. Values are never silently padded to fit a proof or signature shape.
-
-`token` is the RWA received by the account; `outputAsset` is the payment asset sent
-to the configured recipient, matching the connector's getter. There is no token
-allowlist in the provider. Each configured token must be registered on the connector
-with an oracle and sufficient budget, and the recipe must have the necessary
-permissions. Issuer redemption requests and later claims require their own recipes;
-the signed-swap provider does not discover or track those lifecycles.
-
-**Current producer exclusion:** the inspected sibling RFQ backend hardcodes the
-`LiquidLaneAdapter` EIP712 domain and uses adapter-only discovery methods. It does
-not currently serve matching connector terms. Its existing responses are rejected;
-changing the URL or setting `format` does not make its signatures compatible.
-A matching connector backend and deployment integration review are required.
-The local matching producer fixture validates encoding and checks only.
-
-The LL consumer RFQ quote/order flow is different: account authorization over a
-Reactor Request, signature `0x00`, nonce cancellation and asynchronous fill tracking.
-That consumer provider is not implemented here. This provider never posts RFQ orders.
+Signed discount acquisition and connector signatures belong to vault-solver. The
+daemon no longer registers the `liquidlane` signed-swap provider; configuring that
+name is rejected. Its package, primitive validation and fixtures remain in the
+repository for existing consumers. Connector and adapter signing domains remain
+distinct. No signing-domain compatibility or RFQ consumer order flow is added by
+account or permission discovery. The independent `redemptions` provider remains
+registered for issuer requests and claims.
 
 ## Liquid Lane issuer requests and claims
 

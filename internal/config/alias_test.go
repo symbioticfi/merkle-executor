@@ -46,12 +46,12 @@ func TestProviderAliasesCannotBypassDurableFingerprint(t *testing.T) {
 		t.Fatalf("aliases accepted: fingerprints=%v effective input 2=%v", fingerprints, values)
 	}
 }
-func TestAliasFreeHistoricalFingerprint(t *testing.T) {
+func TestCuratorMigrationChangesHistoricalFingerprint(t *testing.T) {
 	var cfg Config
 	if err := yaml.Unmarshal([]byte(validConfig), &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Strategies[0].Fingerprint(); got != "0xd18ac7f2923b2b85175af6b900c355eef2cfcf2d3cd745d0a1ca02e41bdb5270" {
-		t.Fatalf("historical alias-free fingerprint changed: %s", got)
+	if got := cfg.Strategies[0].Fingerprint(); got == "0xd18ac7f2923b2b85175af6b900c355eef2cfcf2d3cd745d0a1ca02e41bdb5270" {
+		t.Fatalf("legacy fingerprint silently retained: %s", got)
 	}
 }

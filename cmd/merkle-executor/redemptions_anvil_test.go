@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -157,15 +159,20 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 		}
 		permissionLeaves[i] = map[string]any{"hash": leaf.Hash.Hex(), "target": leaf.Target.Hex(), "value": "zero", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": proof}
 	}
-	permission, err := json.Marshal(map[string]any{"root": root.Hex(), "chainId": 31337, "account": account.Hex(), "leaves": permissionLeaves})
+	permission, err := json.Marshal(map[string]any{"root": root.Hex(), "chainId": 31337, "adapter": issuer.Hex(), "vault": account.Hex(), "actions": []any{}, "leaves": permissionLeaves})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(cfg.Strategies[0].Tree, permission, 0600); err != nil {
-		t.Fatal(err)
-	}
+	permissionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/merkle-trees/"+root.Hex() || r.URL.Query().Get("chainId") != "31337" {
+			t.Error("wrong active-root permission request")
+		}
+		_, _ = w.Write(permission)
+	}))
+	defer permissionServer.Close()
+	cfg.Curator.URL = permissionServer.URL + "/api/v1"
 	requestStrategy := cfg.Strategies[0]
-	requestStrategy.Name, requestStrategy.Executor, requestStrategy.Account = "request", requestExecutor.Hex(), account.Hex()
+	requestStrategy.Name, requestStrategy.Executor = "request", requestExecutor.Hex()
 	requestConfig := redemptions.Config{Family: "centrifuge", Mode: "request", ChainID: 31337, Token: share.Hex(), OutputAsset: asset.Hex(), Target: issuer.Hex(), Amount: "100", Action: "1:0"}
 	requestStrategy.Providers = []config.Provider{{Name: "redemptions", Config: serviceNode(t, requestConfig)}}
 	claimStrategy := requestStrategy

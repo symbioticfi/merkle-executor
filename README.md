@@ -17,7 +17,6 @@ one serialized transaction sender. [Design and comparison](docs/DESIGN.md).
 | Flow | Implementation |
 | --- | --- |
 | Ordered Morpho/Aave funding, caps and overflow deposits | Execute the configured on-chain recipe; all 12 current operations are supported. No hardcoded lending strategy in Go. |
-| LL connector swap | `liquidlane` provider supplies connector-domain signed terms, exact calldata and quoted input amounts. |
 | All 15 documented LL assets plus sUSN | `redemptions` provider prepares Midas, Centrifuge, OpenEden, Figure, Pareto and Noon requests and eligible claims. [Catalogue and lifecycle](docs/LIQUID-LANE-ASSETS.md). |
 | Securitize EVM assets | `securitize` provider prepares wallet requests and legacy/modern atomic offramps for all 10 symbols in the public feed. [Deployment coverage and limits](docs/SECURITIZE-ASSETS.md). |
 | CoW Swap | Quote, build account ERC-1271 authorization, wait for its confirmed transaction, submit/reconcile deterministic order UID, verify full fill on-chain. |
@@ -42,7 +41,8 @@ bin/merkle-executor run --config config/operator.local.yaml
 
 `simulate` is the default mode and requires no key. `plan` always simulates and
 prints a reviewable transaction package; it never signs, broadcasts or posts an
-order. Quotes and signed-term acquisition can contact configured provider APIs.
+order. Curator permissions, Merkl rewards and CoW quotes are fetched directly from
+the configured APIs.
 Treat plan files and the state directory as operational data: they contain
 calldata, signatures and prepared orders. Logs omit those payloads.
 
@@ -56,8 +56,10 @@ reconcile same-key nonce races, but independent recipe services have no shared
 business-state reservation and can each execute the same recipe.
 
 All relative paths resolve against the configuration file. Addresses, endpoints,
-limits and polling cadence are configured. Contract targets always come from
-configuration; a reviewed token address list only restricts which Securitize
+limits and polling cadence are configured. Strategies specify executors and economic
+policies; startup derives each account through `executor.account()`. The required
+`curator` HTTP configuration points to a curator-backend base URL including `/api/v1`.
+Protocol targets remain explicit configuration; a reviewed token address list only restricts which Securitize
 `decimals` getters may aggregate.
 Secrets use `*Env` references and are read at point of use. `chain.rpcUrl` and
 `chain.writeRpcUrl` support environment interpolation. HTTP redirects are refused.
@@ -78,10 +80,21 @@ the number of configured strategies and are cleared on restart.
 
 ## Permissions and runtime inputs
 
-`tree` accepts the adapters export (`root`, `leaves`) and the frontend permission
-package (`root`, `calls`, optional `chainId`/`account`). Each leaf contains
-`target`, `value`, `data`, `dataMask`, `hash`, `proof`. Both hashes and sorted-pair
-proofs are verified against the account's **accepted** root.
+For every new preparation, the daemon fetches `/merkle-trees/{acceptedRoot}?chainId=...`
+from the configured curator backend. The root comes from the authenticated on-chain
+snapshot. The response must identify the configured chain and exact active root;
+every leaf hash and sorted-pair proof is verified, including unused leaves. Backend
+`adapter`, actions and display metadata do not authorize execution. Strategies no
+longer accept `account` or local `tree` fields. The SDK retains its optional local
+permission-file interface for other hosts.
+
+Before upgrading from a configuration with manual account/tree fields, finish all
+active jobs using the old binary and configuration, including combined workflows
+with some completed providers. Then add `curator` and remove those strategy fields.
+Derived accounts and curator settings are part of the recovery fingerprint. Existing
+journals are never rewritten to accept a configuration change. Curator access is
+required for new preparation; saved signed attempts and external settlement retain
+their existing recovery paths without fetching a new permission tree.
 
 `SetRecipe` fixes instructions and runtime slot ordering. Providers output input
 indices and/or replacement calldata keyed by `stepIndex:actionIndex`. Replacement
@@ -177,10 +190,13 @@ refresh them when the on-chain ABI or upstream API changes.
 The [verification record](docs/VERIFICATION.md) separates local checks from live
 integration coverage.
 
-Current integration boundary: the sibling RFQ backend signs `LiquidLaneAdapter`
-terms, while this connector needs `LiquidLaneConnector` terms. A compatible terms
-producer is required; old-domain signatures are rejected. The public LL RFQ
-consumer/orderbook flow and authenticated 3F offer discovery need dedicated
-providers; generic data reads do not implement those side effects.
+Signed Liquid Lane discount acquisition and signatures belong to vault-solver. The
+daemon does not register the `liquidlane` signed-swap provider; its implementation
+and SDK primitives remain available in the repository. The `redemptions` issuer
+request/claim provider remains registered. Explicit strategies and YAML budgets,
+slippage, expiry and approved layouts remain operator policy.
+
+The curator route is verified against source and local fixtures; its availability
+on a particular deployment must be checked before rollout. [Wire contract](api/schemas/CURATOR_PERMISSIONS.md).
 
 The shared execution implementation is an independently versioned [Go SDK](sdk/README.md). See [host integration and ownership](docs/MERKLE-SDK.md).

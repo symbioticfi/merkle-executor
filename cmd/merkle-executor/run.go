@@ -14,11 +14,11 @@ import (
 
 	"github.com/symbioticfi/merkle-executor/internal/chain"
 	"github.com/symbioticfi/merkle-executor/internal/config"
+	"github.com/symbioticfi/merkle-executor/internal/curator"
 	"github.com/symbioticfi/merkle-executor/internal/observability"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/internal/providers/data"
-	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlane"
 	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
 	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
 	"github.com/symbioticfi/merkle-executor/internal/providers/securitize"
@@ -60,14 +60,28 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 	defer client.Close()
 	httpClient := &http.Client{Timeout: cfg.HTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	registry := providerRegistry.NewRegistry()
-	for _, register := range []func(*providerRegistry.Registry) error{data.Register, liquidlane.Register, merkl.Register, cowswap.Register, redemptions.Register, securitize.Register} {
+	for _, register := range []func(*providerRegistry.Registry) error{data.Register, merkl.Register, cowswap.Register, redemptions.Register, securitize.Register} {
 		if err := register(registry); err != nil {
 			return err
 		}
 	}
+	source, err := curator.New(cfg.Curator, httpClient)
+	if err != nil {
+		return err
+	}
+	targets := make([]common.Address, len(cfg.Strategies))
+	for i, sc := range cfg.Strategies {
+		targets[i] = common.HexToAddress(sc.Executor)
+	}
+	discovery, cancel := context.WithTimeout(ctx, cfg.OperationTimeout)
+	accounts, err := discoverAccounts(discovery, client, targets)
+	cancel()
+	if err != nil {
+		return err
+	}
 	strategies := make([]keeper.Strategy, 0, len(cfg.Strategies))
 	for _, sc := range cfg.Strategies {
-		s := keeper.Strategy{Config: keeper.Config{Name: sc.Name, Executor: sc.Executor, Account: sc.Account, RecipeHash: sc.RecipeHash, Tree: sc.Tree, Interval: sc.Interval, Revision: sc.Fingerprint()}}
+		s := keeper.Strategy{Config: keeper.Config{Name: sc.Name, Executor: sc.Executor, Account: accounts[common.HexToAddress(sc.Executor)].Hex(), RecipeHash: sc.RecipeHash, Interval: sc.Interval, Revision: cfg.StrategyFingerprint(sc, accounts[common.HexToAddress(sc.Executor)])}}
 		for _, pc := range sc.Providers {
 			p, err := registry.New(pc.Name, pc.Config, providerRegistry.Deps{Chain: client, HTTP: httpClient, Log: log.WithValues("strategy", sc.Name, "provider", pc.Name), ConfigDir: configDir})
 			if err != nil {
@@ -77,7 +91,7 @@ func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer
 		}
 		strategies = append(strategies, s)
 	}
-	planner := &keeper.Planner{Chain: client, ChainID: chainID, Caller: common.HexToAddress(cfg.Signer.Address), Confirmations: cfg.TxManager.Confirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), cfg.RecipeCacheBytes)}
+	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: common.HexToAddress(cfg.Signer.Address), Confirmations: cfg.TxManager.Confirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), cfg.RecipeCacheBytes)}
 	if planOnly {
 		plans := make(map[string]keeper.Plan)
 		for _, s := range strategies {

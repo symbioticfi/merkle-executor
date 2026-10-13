@@ -66,3 +66,49 @@ New adapter regressions cover persistence before original/replacement broadcasts
 These checks use ephemeral local chains and local HTTP/RPC fixtures. No production transactions or orders were submitted; production deployment and operator configuration were not verified.
 
 After the local-engine cleanup, `make check` and `make integration` passed again; lint reported zero issues and engine statement coverage was 92.2%. Both the duplicated operation-label and invalid receipt-status cost regressions failed before their fixes and pass afterward. Journal tests cover late successful and reverted receipts after active tracking ends, uncertain-job admission/acknowledgement blocking, no recovery rebroadcast and durable terminal evidence. Independent review found no remaining blockers. The primary checkout's tracked patch and untracked-file hashes remain unchanged.
+
+
+## Curator permissions and account discovery — 2026-10-13
+
+The executor-only configuration regression failed against the prior decoder because
+`curator` was unknown. It passes with required curator settings and strict rejection
+of the removed strategy `account`/`tree` fields. Local fixtures cover pinned startup
+account discovery, distinct target/account association, deduplication/chunking,
+canonical closure, atomic failure and recovery fingerprint rejection without saved
+state changes. SDK fixtures reject source errors, empty/mismatched trees and invalid
+unused leaves before providers run, preserve cancellation and legacy local trees,
+and reject metadata/reorg changes while permission acquisition is in flight.
+
+The real local Anvil service plans and sends using backend-shaped HTTP permissions
+and a derived account. HTTP503, wrong-chain permissions and an accepted-root change
+during HTTP each prevent signing/broadcast, leave sender nonce and recipient balance
+unchanged, and create no prepared/authorized transaction journal. A healthy retry
+executes the existing transfer assertions. Completed-work restart makes no new curator
+request. The local issuer request/claim lifecycle also uses remote permissions and
+retains its balance, canonical receipt and restart assertions.
+
+Small daemon HTTP/RPC fixtures prove Merkl reward acquisition and CoW quote acquisition
+still contact their own APIs using the derived account; signed Liquid Lane daemon
+registration is absent. Existing provider fixtures continue covering their protocol
+semantics. Permission-source presend tests confirm validation does not refetch trees.
+
+`make check` passed for both modules: build, race/coverage tests, vet and lint with
+zero issues. `make integration` passed all ten top-level local Anvil tests (two SDK,
+four application and four transaction-engine tests, including their lifecycle
+subcases), with no skips. `make generate` reproduced the generated artifacts without
+diff; `git diff --check` passed. These initial gates used the local two-module
+workspace; published-module verification follows below.
+
+This is local EVM and API-fixture evidence. The curator route is sourced from the
+recorded backend revision and was absent from the inspected latest stage. Backend
+deployment availability, hosted CI and live third-party transactions are not claimed.
+
+The permission-source SDK was published at revision
+`80f0c0d6d4a3f93c52b7c92501162c083ac4dd46`. With `GOWORK=off`, the host
+resolved and pinned `v0.0.0-20261013102206-80f0c0d6d4a3`; module checksums
+were refreshed without a replace directive. With that published pin and `GOWORK=off`,
+`make check` passed both modules with zero lint issues, `make integration` passed
+all ten top-level local Anvil tests with no skips, and `make generate` passed.
+`git diff --exit-code -- api sdk/bindings` confirmed no generated drift;
+`git diff --check` also passed. Independent full review found no actionable issue.
+These standalone checks do not establish hosted CI or deployment availability.

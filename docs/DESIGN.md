@@ -21,6 +21,8 @@ another module's internal packages or change the solver or adapters checkouts.
   extension points for lending markets, 3F and future integrations. `redemptions`
   owns the documented LL issuer families; `securitize` owns wallet and offramp routes.
 - `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
+- `curator`: bounded HTTP acquisition of the exact active permission root; the SDK
+  validates the returned bytes independently.
 - `txengine`: local nonce admission, adaptive fees, gas estimation, replacements, canonical receipts and graceful drain.
 - `state`, `signer`, `txmanager`: exclusive process ownership and a durable recipe journal around the engine. See [transaction design](TRANSACTIONS.md).
 - `config`, `observability`, `cmd`: startup wiring, strict configuration and operational controls.
@@ -30,12 +32,35 @@ replace targets, masks, proofs, recipe instructions or caller identity. External
 does not grant authority. The final full execute simulation validates on-chain bindings
 and postconditions; the keeper does not duplicate the Solidity arithmetic interpreter.
 
-LL signed connector swaps execute inside a recipe. CoW authorization and settlement
+Signed Liquid Lane discount/signature acquisition belongs to vault-solver; the daemon
+does not register that provider. Issuer redemptions remain registered. CoW authorization and settlement
 are separate phases: submit the ERC-1271 order only after its authorization transaction
 confirms, persist its deterministic UID and reconcile it before retrying submission.
 Merkl reward proofs are protocol data, separate from account permission proofs. Claims
 must fit explicitly approved bounded calldata shapes. Asynchronous issuer redemptions
 use later claim recipes, configured independently from the request recipe.
+
+## Account and permission ownership
+
+The daemon requires executors and explicit provider policies in YAML. At startup it
+pins a valid head, batches deduplicated account getters, rejects any invalid member,
+and closes the same-number/hash guard before publishing the complete account map.
+The configured executor's account is immutable in the supported contract, but the SDK
+still rereads and compares it during every preparation and presend validation.
+
+The daemon supplies `keeper.PermissionSource` using the configured curator HTTP
+client. The SDK passes a copied chain ID and authenticated snapshot; the source returns
+raw JSON and the SDK decodes every leaf/proof itself. Remote trees require a nonnil
+matching chain ID, the active root and any supplied account to match. Curator metadata
+is not authorization, and failures occur before provider preparation. Final metadata,
+role, simulation and canonical guards remain unchanged, including root changes while
+HTTP is in flight. Other SDK hosts may omit the source and keep local tree loading.
+
+Only new preparation fetches permission bytes. Signed-attempt recovery and external
+provider advancement do not depend on curator availability. Runtime fingerprints bind
+the derived account and curator HTTP configuration (credential variable names only).
+Old active workflows must drain with the old binary/configuration before migration;
+there is no journal identity rewrite or fallback to a different tree source.
 
 ## Lifecycle
 
@@ -71,7 +96,7 @@ The keeper can plan independent provider reads from a provisional value-only blo
 pin and configured identity. This optional SDK contract lives in `protocolio`, keeping
 provider policy in the host and avoiding an import cycle through `provider`. Planning
 is pure local encoding. Initial metadata and planned calls share a bounded read group;
-only authenticated discovery plus configured tree validation can invoke their resolvers.
+only authenticated discovery plus active permission-tree validation can invoke their resolvers.
 Each resolver sees its own lazy results and must match the exact provisional pin.
 Ordinary member errors remain deferred until API eligibility requires them. Transport
 and batch-shape failures fail closed before provider classification, including when

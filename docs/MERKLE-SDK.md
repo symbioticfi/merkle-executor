@@ -42,3 +42,16 @@ arguments, image layers or configuration files.
 an image with explicit values and checks its `version` output. The SDK remains
 pinned to an immutable module revision; local `go.work` files are excluded from
 the container context.
+
+The optional `keeper.Planner.PermissionSource` accepts context, a copied chain ID and
+an authenticated recipe snapshot, and returns encoded permission JSON. The SDK still
+owns `DecodeTree`, verifies every leaf/proof, requires the source response's chain ID,
+and checks the active root and optional account before providers run. Source errors
+must be sanitized; their wrapped causes remain available for cancellation handling.
+Omitting this seam retains `keeper.Config.Tree` local-file behavior for SDK consumers.
+
+The daemon derives accounts at startup and uses curator-backend for this seam. It
+fetches only during new preparation, preserving saved-attempt and external-order
+recovery during backend outages. Signed Liquid Lane discount/signature acquisition
+belongs to vault-solver, while daemon Merkl and CoW clients continue direct API
+acquisition. No vault-solver code or protocol policy moves into the SDK.

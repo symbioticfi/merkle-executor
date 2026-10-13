@@ -11,26 +11,30 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/merkle-executor/internal/curator"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
 type Config struct {
-	RecipeCacheBytes int64         `yaml:"recipeCacheBytes"`
-	Mode             string        `yaml:"mode"`
-	Chain            Chain         `yaml:"chain"`
-	Signer           Signer        `yaml:"signer"`
-	TxManager        TxManager     `yaml:"txManager"`
-	StateDir         string        `yaml:"stateDir"`
-	PollInterval     time.Duration `yaml:"pollInterval"`
-	OperationTimeout time.Duration `yaml:"operationTimeout"`
-	HTTPTimeout      time.Duration `yaml:"httpTimeout"`
-	Observability    Observability `yaml:"observability"`
-	Strategies       []Strategy    `yaml:"strategies"`
+	Curator          protocolio.HTTPConfig `yaml:"curator"`
+	RecipeCacheBytes int64                 `yaml:"recipeCacheBytes"`
+	Mode             string                `yaml:"mode"`
+	Chain            Chain                 `yaml:"chain"`
+	Signer           Signer                `yaml:"signer"`
+	TxManager        TxManager             `yaml:"txManager"`
+	StateDir         string                `yaml:"stateDir"`
+	PollInterval     time.Duration         `yaml:"pollInterval"`
+	OperationTimeout time.Duration         `yaml:"operationTimeout"`
+	HTTPTimeout      time.Duration         `yaml:"httpTimeout"`
+	Observability    Observability         `yaml:"observability"`
+	Strategies       []Strategy            `yaml:"strategies"`
 }
 
 type Chain struct {
@@ -54,9 +58,7 @@ type Provider struct {
 type Strategy struct {
 	Name       string        `yaml:"name"`
 	Executor   string        `yaml:"executor"`
-	Account    string        `yaml:"account"`
 	RecipeHash string        `yaml:"recipeHash"`
-	Tree       string        `yaml:"tree"`
 	Interval   time.Duration `yaml:"interval"`
 	Providers  []Provider    `yaml:"providers"`
 }
@@ -114,9 +116,6 @@ func Load(path string) (*Config, error) {
 		if cfg.Strategies[i].Interval == 0 {
 			cfg.Strategies[i].Interval = time.Minute
 		}
-		if cfg.Strategies[i].Tree != "" && !filepath.IsAbs(cfg.Strategies[i].Tree) {
-			cfg.Strategies[i].Tree = filepath.Join(base, cfg.Strategies[i].Tree)
-		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -125,6 +124,9 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
+	if err := curator.ValidateConfig(c.Curator); err != nil {
+		return err
+	}
 	if c.RecipeCacheBytes < 0 {
 		return errors.New("recipeCacheBytes must be nonnegative")
 	}
@@ -181,11 +183,8 @@ func (c *Config) Validate() error {
 		if _, err := parse.Address(s.Executor); err != nil {
 			return errors.Errorf("strategy %s: invalid executor", s.Name)
 		}
-		if _, err := parse.Address(s.Account); err != nil {
-			return errors.Errorf("strategy %s: invalid account", s.Name)
-		}
-		if s.Tree == "" || s.Interval <= 0 {
-			return errors.Errorf("strategy %s: tree and positive interval required", s.Name)
+		if s.Interval <= 0 {
+			return errors.Errorf("strategy %s: positive interval required", s.Name)
 		}
 		if s.RecipeHash != "" {
 			b, err := hexutil.Decode(s.RecipeHash)
@@ -220,10 +219,21 @@ func (s Strategy) Fingerprint() string {
 		ps = append(ps, semanticProvider{p.Name, nodeIdentity(p.Config)})
 	}
 	raw, _ := json.Marshal(struct {
-		Name, Executor, Account, RecipeHash, Tree string
-		Interval                                  time.Duration
-		Providers                                 []semanticProvider
-	}{s.Name, s.Executor, s.Account, s.RecipeHash, s.Tree, s.Interval, ps})
+		Name, Executor, RecipeHash string
+		Interval                   time.Duration
+		Providers                  []semanticProvider
+	}{s.Name, s.Executor, s.RecipeHash, s.Interval, ps})
+	return crypto.Keccak256Hash(raw).Hex()
+}
+
+// StrategyFingerprint binds immutable derived identity and source settings to
+// durable work. Migration never rewrites an existing journal's fingerprint.
+func (c *Config) StrategyFingerprint(s Strategy, account common.Address) string {
+	raw, _ := json.Marshal(struct {
+		Strategy string
+		Account  common.Address
+		Curator  protocolio.HTTPConfig
+	}{s.Fingerprint(), account, c.Curator})
 	return crypto.Keccak256Hash(raw).Hex()
 }
 

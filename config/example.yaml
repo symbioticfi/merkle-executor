@@ -3,6 +3,11 @@ recipeCacheBytes: 16777216
 # Replace the sample addresses and publish matching recipes/permission trees.
 # This example validates without contacting an RPC or reading a private key.
 mode: simulate
+curator:
+  url: https://curator-backend.example.invalid/api/v1
+  # apiKeyEnv: CURATOR_API_TOKEN
+  timeoutSeconds: 10
+  maxResponseBytes: 16777216
 chain:
   # Optional: set only to a verified Multicall3 deployment on this chain.
   # multicall3: "0x0000000000000000000000000000000000000005"
@@ -31,8 +36,6 @@ observability:
 strategies:
   - name: ordered-funding
     executor: '0x0000000000000000000000000000000000000002'
-    account: '0x0000000000000000000000000000000000000003'
-    tree: permissions.json
     interval: 1m
     providers:
       - name: static

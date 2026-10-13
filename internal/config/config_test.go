@@ -9,7 +9,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const validConfig = `chain:
+const validConfig = `curator:
+  url: http://127.0.0.1:1/api/v1
+chain:
   chainId: 1
   rpcUrl: http://127.0.0.1:8545
 signer:
@@ -17,8 +19,6 @@ signer:
 strategies:
   - name: example
     executor: '0x0000000000000000000000000000000000000002'
-    account: '0x0000000000000000000000000000000000000003'
-    tree: permissions.json
     providers:
       - name: static
         config:
@@ -40,7 +40,7 @@ func TestConfigurationDefaultsAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Mode != "simulate" || c.Signer.KeyEnv != "" || c.Strategies[0].Tree != filepath.Join(filepath.Dir(p), "permissions.json") {
+	if c.Mode != "simulate" || c.Signer.KeyEnv != "" || c.StateDir != filepath.Join(filepath.Dir(p), "state") {
 		t.Fatal(c)
 	}
 }
@@ -73,7 +73,7 @@ func TestFingerprintIgnoresCommentsAndPosition(t *testing.T) {
 	if a.Strategies[0].Fingerprint() != b.Strategies[0].Fingerprint() {
 		t.Fatal("comments changed identity")
 	}
-	b.Strategies[0].Account = "different"
+	b.Strategies[0].Executor = "different"
 	if a.Strategies[0].Fingerprint() == b.Strategies[0].Fingerprint() {
 		t.Fatal("account did not change identity")
 	}
@@ -152,6 +152,35 @@ func TestRecipeCacheBudgetConfiguration(t *testing.T) {
 				if cfg.RecipeCacheBytes != want {
 					t.Fatalf("budget=%d want%d", cfg.RecipeCacheBytes, want)
 				}
+			}
+		})
+	}
+}
+
+func TestExecutorOnlyStrategyUsesRequiredCurator(t *testing.T) {
+	text := strings.ReplaceAll(validConfig, "    account: '0x0000000000000000000000000000000000000003'\n", "")
+	text = strings.ReplaceAll(text, "    tree: permissions.json\n", "")
+	text = strings.Replace(text, "  url: http://127.0.0.1:1/api/v1", "  url: http://127.0.0.1:1/api/v1\n  apiKeyEnv: UNSET_CURATOR_CONFIG_TEST_KEY", 1)
+	if _, err := Load(writeConfig(t, text)); err != nil {
+		t.Fatalf("executor-only curator configuration rejected: %v", err)
+	}
+}
+
+func TestCuratorValidationRejectsObsoleteAndUnsafeConfiguration(t *testing.T) {
+	for name, raw := range map[string]string{
+		"old account":      strings.Replace(validConfig, "    executor:", "    account: '0x0000000000000000000000000000000000000003'\n    executor:", 1),
+		"old file":         strings.Replace(validConfig, "    executor:", "    tree: permissions.json\n    executor:", 1),
+		"missing curator":  strings.Replace(validConfig, "curator:\n  url: http://127.0.0.1:1/api/v1\n", "", 1),
+		"credential URL":   strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "https://user:secret@example.invalid/api/v1", 1),
+		"query URL":        strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "http://example.invalid/api/v1?token=private", 1),
+		"negative timeout": strings.Replace(validConfig, "curator:", "curator:\n  timeoutSeconds: -1", 1),
+		"large timeout":    strings.Replace(validConfig, "curator:", "curator:\n  timeoutSeconds: 121", 1),
+		"negative bound":   strings.Replace(validConfig, "curator:", "curator:\n  maxResponseBytes: -1", 1),
+		"large bound":      strings.Replace(validConfig, "curator:", "curator:\n  maxResponseBytes: 16777217", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, raw)); err == nil {
+				t.Fatal("invalid curator configuration accepted")
 			}
 		})
 	}

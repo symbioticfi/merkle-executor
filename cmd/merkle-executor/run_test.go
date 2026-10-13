@@ -248,14 +248,35 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	directory := t.TempDir()
 	cfg := testCLIConfig(directory)
 	cfg.Mode, cfg.Chain.RPCURL, cfg.Signer.Address = "send", endpoint, caller.Hex()
-	cfg.Strategies[0].Executor, cfg.Strategies[0].Account = executorAddress.Hex(), accountAddress.Hex()
-	permission, err := json.Marshal(map[string]any{"root": leaf.Hash.Hex(), "chainId": 31337, "account": accountAddress.Hex(), "leaves": []any{map[string]any{"hash": leaf.Hash.Hex(), "target": tokenAddress.Hex(), "value": "zero", "data": hexutil.Encode(transfer), "dataMask": hexutil.Encode(mask), "proof": []string{}}}})
+	cfg.Strategies[0].Executor = executorAddress.Hex()
+	permission, err := json.Marshal(map[string]any{"root": leaf.Hash.Hex(), "chainId": 31337, "adapter": recipient.Hex(), "vault": owner.Hex(), "actions": []any{}, "leaves": []any{map[string]any{"hash": leaf.Hash.Hex(), "target": tokenAddress.Hex(), "value": "zero", "data": hexutil.Encode(transfer), "dataMask": hexutil.Encode(mask), "proof": []string{}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(cfg.Strategies[0].Tree, permission, 0600); err != nil {
-		t.Fatal(err)
-	}
+	var curatorCalls atomic.Int32
+	var curatorUnavailable atomic.Bool
+	var wrongPermissionChain atomic.Bool
+	var changeRootDuringHTTP atomic.Bool
+	permissionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		curatorCalls.Add(1)
+		if r.URL.Path != "/api/v1/merkle-trees/"+leaf.Hash.Hex() || r.URL.Query().Get("chainId") != "31337" {
+			t.Error("wrong active-root request")
+		}
+		if curatorUnavailable.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if changeRootDuringHTTP.Swap(false) {
+			serviceSeedTransaction(t, ctx, client, owner, &accountAddress, servicePack(t, accountArtifact, "configure", common.HexToHash("0x999"), [][32]byte{leaf.Hash}, executorAddress))
+		}
+		if wrongPermissionChain.Load() {
+			_, _ = w.Write(bytes.Replace(permission, []byte(`"chainId":31337`), []byte(`"chainId":1`), 1))
+			return
+		}
+		_, _ = w.Write(permission)
+	}))
+	defer permissionServer.Close()
+	cfg.Curator.URL = permissionServer.URL + "/api/v1"
 	var httpCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		httpCalls.Add(1)
@@ -271,9 +292,8 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		{Name: "http", Config: serviceNode(t, data.HTTPConfig{URL: server.URL, Inputs: map[uint]string{2: "/minimum"}})},
 	}
 	for name, mutate := range map[string]func(*config.Config){
-		"chain":   func(c *config.Config) { c.Chain.ChainID++ },
-		"caller":  func(c *config.Config) { c.Signer.Address = owner.Hex() },
-		"account": func(c *config.Config) { c.Strategies[0].Account = recipient.Hex() },
+		"chain":  func(c *config.Config) { c.Chain.ChainID++ },
+		"caller": func(c *config.Config) { c.Signer.Address = owner.Hex() },
 	} {
 		invalid := cfg
 		invalid.Strategies = append([]config.Strategy(nil), cfg.Strategies...)
@@ -295,7 +315,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 			t.Fatal(err)
 		}
 		plan, exists := plans["funding"]
-		if !exists || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 3 || plan.Outputs[0].Inputs[0] != "17" || plan.Outputs[1].Inputs[1] != "1000" || plan.Outputs[2].Inputs[2] != "900" {
+		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 3 || plan.Outputs[0].Inputs[0] != "17" || plan.Outputs[1].Inputs[1] != "1000" || plan.Outputs[2].Inputs[2] != "900" {
 			t.Fatal("plan lost configuration, provider output or transaction")
 		}
 	}
@@ -305,6 +325,36 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 0 {
 		t.Fatalf("plan sent a transaction: nonce=%d / %v", nonce, err)
 	}
+
+	// Failed curator acquisition/validation must stop the real send path before
+	// signing or journal ownership. A changed root during HTTP must also fail the
+	// existing fresh metadata guard; restore only the ephemeral fixture afterward.
+	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
+	for _, failure := range []string{"HTTP503", "wrong chain", "root during HTTP"} {
+		curatorUnavailable.Store(failure == "HTTP503")
+		wrongPermissionChain.Store(failure == "wrong chain")
+		changeRootDuringHTTP.Store(failure == "root during HTTP")
+		if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err == nil {
+			t.Fatalf("send accepted curator failure %s", failure)
+		}
+		if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
+			t.Fatalf("source failure submitted nonce%d: %v", nonce, e)
+		}
+		for _, key := range []string{"strategy.funding.v1", "txmanager.active.v1"} {
+			if found, e := state.Read(cfg.StateDir, key, new(any)); e != nil || found {
+				t.Fatalf("source failure persisted executable work %s: %v", key, e)
+			}
+		}
+		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddress, Data: tokenABI.PackBalanceOf(recipient)}, nil)
+		if e != nil || new(big.Int).SetBytes(raw).Sign() != 0 {
+			t.Fatal("source failure transferred funds")
+		}
+		if failure == "root during HTTP" {
+			serviceSeedTransaction(t, ctx, client, owner, &accountAddress, servicePack(t, accountArtifact, "configure", leaf.Hash, [][32]byte{leaf.Hash}, executorAddress))
+		}
+	}
+	curatorUnavailable.Store(false)
+	wrongPermissionChain.Store(false)
 
 	// Finality requires descendants after inclusion; mine local empty blocks while
 	// the real transaction manager confirms and acknowledges the signed transaction.
@@ -365,10 +415,12 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		}
 	}
 	requests := httpCalls.Load()
+	permissionRequests := curatorCalls.Load()
+	curatorUnavailable.Store(true)
 	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
 		t.Fatalf("restart failed: %v", err)
 	}
-	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || httpCalls.Load() != requests {
+	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || httpCalls.Load() != requests || curatorCalls.Load() != permissionRequests {
 		t.Fatalf("restart repeated completed work: nonce=%d / %v", nonce, err)
 	}
 }

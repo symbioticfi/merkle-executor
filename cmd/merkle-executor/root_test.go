@@ -19,6 +19,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	"github.com/symbioticfi/merkle-executor/internal/txmanager"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
@@ -26,6 +27,7 @@ import (
 func testCLIConfig(directory string) config.Config {
 	return config.Config{
 		Mode:             "simulate",
+		Curator:          protocolio.HTTPConfig{URL: "http://127.0.0.1:1/api/v1"},
 		Chain:            config.Chain{ChainID: 31337, RPCURL: "http://127.0.0.1:1"},
 		Signer:           config.Signer{Address: common.HexToAddress("0xabcd").Hex(), KeyEnv: "MERKLE_CLI_TEST_KEY"},
 		StateDir:         filepath.Join(directory, "state"),
@@ -33,7 +35,7 @@ func testCLIConfig(directory string) config.Config {
 		HTTPTimeout:      time.Second,
 		PollInterval:     time.Second,
 		TxManager:        config.TxManager{Confirmations: 1, PollInterval: 10 * time.Millisecond, MaxFeeGwei: 30},
-		Strategies:       []config.Strategy{{Name: "funding", Executor: common.HexToAddress("0x1111").Hex(), Account: common.HexToAddress("0x2222").Hex(), Tree: filepath.Join(directory, "permissions.json"), Interval: time.Hour}},
+		Strategies:       []config.Strategy{{Name: "funding", Executor: common.HexToAddress("0x1111").Hex(), Interval: time.Hour}},
 	}
 }
 
@@ -111,6 +113,7 @@ func TestCheckConfigDoesNotReadKeyOrUseRPC(t *testing.T) {
 	directory := t.TempDir()
 	cfg := testCLIConfig(directory)
 	cfg.Mode, cfg.Chain.RPCURL = "send", server.URL
+	cfg.Curator = protocolio.HTTPConfig{URL: server.URL + "/api/v1", APIKeyEnv: "MISSING_CURATOR_CHECK_CONFIG_KEY"}
 	t.Setenv(cfg.Signer.KeyEnv, "deliberately-invalid-cli-test-key")
 	path := writeCLIConfig(t, directory, cfg)
 	if output, err := executeCLI(t, "check-config", "--config", path); err != nil || output != "configuration valid\n" {
@@ -182,6 +185,7 @@ func TestStatusWhileDaemonOwnsState(t *testing.T) {
 	directory := t.TempDir()
 	cfg := testCLIConfig(directory)
 	cfg.Mode = "send"
+	cfg.Curator.APIKeyEnv = "MISSING_CURATOR_STATUS_KEY"
 	t.Setenv(cfg.Signer.KeyEnv, "invalid-key-that-status-must-not-read")
 	path := writeCLIConfig(t, directory, cfg)
 	job := keeper.Job{ID: "funding-1", Phase: "authorized", Result: txmanager.Result{Hash: common.HexToHash("0x1234")}, Progress: []provider.Progress{{Outcome: "waiting"}}, Plan: keeper.Plan{Outputs: []provider.Output{{Data: json.RawMessage(`{"privateDetail":"must-not-be-emitted"}`)}}}}
@@ -249,6 +253,7 @@ func TestResetStrategyRequiresTerminalAcknowledgedWork(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			directory := t.TempDir()
 			cfg := testCLIConfig(directory)
+			cfg.Curator.APIKeyEnv = "MISSING_CURATOR_RESET_KEY"
 			path := writeCLIConfig(t, directory, cfg)
 			store := seedCLIState(t, cfg, keeper.Job{ID: "funding-1", Phase: tc.phase}, tc.occupied)
 			if err := store.Close(); err != nil {
