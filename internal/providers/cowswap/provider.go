@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -71,6 +72,7 @@ type Provider struct {
 	settlement, sellToken, buyToken common.Address
 	sellAmount, minBuy              *big.Int
 	appData                         common.Hash
+	volumeBPS                       func(context.Context, *big.Int, common.Address, common.Address) (uint64, error)
 }
 type prepared struct {
 	Version       int            `json:"version"`
@@ -80,6 +82,8 @@ type prepared struct {
 	Order         wire.CowOrder  `json:"order"`
 	Digest        common.Hash    `json:"digest"`
 	UID           string         `json:"uid"`
+	FullAppData   string         `json:"fullAppData,omitempty"`
+	SlippageBPS   uint64         `json:"slippageBps,omitempty"`
 }
 type phase struct {
 	Phase string `json:"phase"`
@@ -99,11 +103,16 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	if e := parse.DecodeStrict(raw, &c); e != nil {
 		return nil, e
 	}
+	return New(c, deps)
+}
+
+// New accepts policy values derived from the authenticated recipe by the host.
+func New(c Config, deps providerRegistry.Deps) (*Provider, error) {
 	if e := protocolio.Action(c.Action); e != nil {
 		return nil, e
 	}
-	if c.SlippageBPS > 1000 {
-		return nil, errors.New("CoW slippageBps outside 0..1000")
+	if c.ValiditySeconds == 0 {
+		c.ValiditySeconds = DefaultValiditySeconds
 	}
 	if c.ValiditySeconds == 0 || c.ValiditySeconds > 86400 {
 		return nil, errors.New("CoW validitySeconds outside 1..86400")
@@ -130,9 +139,13 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	if e != nil || p.minBuy.Sign() == 0 {
 		return nil, errors.New("CoW minBuyAmount must be positive uint256")
 	}
-	p.appData, e = protocolio.Hash(c.AppData)
-	if e != nil {
-		return nil, e
+	// Retained only to drain legacy version-1 attempts; new preparation always
+	// creates the official AUTO appData document.
+	if c.AppData != "" {
+		p.appData, e = protocolio.Hash(c.AppData)
+		if e != nil {
+			return nil, e
+		}
 	}
 	for _, index := range []*uint{c.SellAmountInput, c.BuyAmountInput} {
 		if index != nil {
@@ -151,6 +164,11 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	if deps.Chain == nil {
 		return nil, errors.New("CoW chain reader required")
 	}
+	bff, e := protocolio.NewHTTP(protocolio.HTTPConfig{URL: volatilityURL, TimeoutSeconds: 2, MaxResponseBytes: 4096}, deps.HTTP)
+	if e != nil {
+		return nil, e
+	}
+	p.volumeBPS = volumeSuggestion(bff)
 	return p, nil
 }
 func (p *Provider) domain(ctx context.Context, s provider.Snapshot) (common.Hash, error) {
@@ -181,12 +199,16 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 		return provider.Output{}, e
 	}
 	validTo := int64(s.Timestamp + p.cfg.ValiditySeconds)
-	q, e := p.client.Quote(ctx, wire.CowQuoteRequest{SellToken: p.sellToken.Hex(), BuyToken: p.buyToken.Hex(), From: s.Account.Hex(), Receiver: s.Account.Hex(), SellAmountBeforeFee: p.sellAmount.String(), Kind: "sell", SigningScheme: "eip1271", ValidTo: validTo, AppData: p.appData.Hex(), PartiallyFillable: false})
+	initialAppData, initialHash := appData(defaultSlippageBPS)
+	q, e := p.client.Quote(ctx, wire.CowQuoteRequest{SellToken: p.sellToken.Hex(), BuyToken: p.buyToken.Hex(), From: s.Account.Hex(), Receiver: s.Account.Hex(), SellAmountBeforeFee: p.sellAmount.String(), Kind: "sell", SigningScheme: "eip1271", ValidTo: validTo, AppData: initialAppData, AppDataHash: initialHash.Hex(), PriceQuality: "verified", SellTokenBalance: "erc20", BuyTokenBalance: "erc20", PartiallyFillable: false})
 	if e != nil {
 		return provider.Output{}, e
 	}
-	if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
-		return provider.Output{}, e
+	if !q.Verified {
+		return provider.Output{}, errors.New("CoW quote was not verified")
+	}
+	if q.ID < 0 {
+		return provider.Output{}, errors.New("invalid CoW quote identity")
 	}
 	o := q.Quote
 	if o.ValidTo != validTo || o.Kind != "sell" || o.PartiallyFillable {
@@ -197,14 +219,15 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 		return provider.Output{}, errors.New("CoW quoted sell amount exceeds configured gross budget")
 	}
 	quotedFee, e := parse.Uint256(o.FeeAmount)
-	if e != nil || new(big.Int).Add(quotedSell, quotedFee).Cmp(p.sellAmount) > 0 {
-		return provider.Output{}, errors.New("CoW quote fee and sell amount exceed configured gross budget")
+	grossSell := new(big.Int)
+	if e != nil || grossSell.Add(quotedSell, quotedFee).Cmp(p.sellAmount) != 0 {
+		return provider.Output{}, errors.New("CoW quote fee and sell amount differ from authorized gross budget")
 	}
 	if !sameAddress(o.SellToken, p.sellToken) || !sameAddress(o.BuyToken, p.buyToken) || !sameAddress(o.Receiver, s.Account) {
 		return provider.Output{}, errors.New("CoW quote token or receiver mismatch")
 	}
 	app, e := protocolio.Hash(o.AppData)
-	if e != nil || app != p.appData {
+	if e != nil || app != initialHash {
 		return provider.Output{}, errors.New("CoW quote appData mismatch")
 	}
 	if o.SellTokenBalance != "" && o.SellTokenBalance != "erc20" || o.BuyTokenBalance != "" && o.BuyTokenBalance != "erc20" {
@@ -214,12 +237,26 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if e != nil || buy.Sign() == 0 {
 		return provider.Output{}, errors.New("CoW invalid quote amount")
 	}
-	buy.Mul(buy, new(big.Int).SetUint64(10000-p.cfg.SlippageBPS))
-	buy.Div(buy, big.NewInt(10000))
+	suggestionCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	volumeBPS, suggestionErr := p.volumeBPS(suggestionCtx, s.ChainID, p.sellToken, p.buyToken)
+	cancel()
+	if ctx.Err() != nil {
+		return provider.Output{}, errors.Wrap(ctx.Err(), 0)
+	}
+	if suggestionErr != nil || volumeBPS > 10000 {
+		volumeBPS = 0
+	}
+	slippageBPS := autoSlippageBPS(quotedSell, quotedFee, volumeBPS)
+	buy = buyAfterSlippage(buy, slippageBPS)
 	if buy.Cmp(p.minBuy) < 0 {
 		return provider.Output{}, errors.New("CoW quote below minBuyAmount after slippage")
 	}
 	o.BuyAmount = buy.String()
+	o.SellAmount = grossSell.String()
+	fullAppData, finalHash := appData(slippageBPS)
+	o.AppData = finalHash.Hex()
+	o.AppDataHash = ""
+	o.QuoteID = q.ID
 	o.SellToken = p.sellToken.Hex()
 	o.BuyToken = p.buyToken.Hex()
 	o.Receiver = s.Account.Hex()
@@ -239,13 +276,16 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if e != nil {
 		return provider.Output{}, errors.New("encode CoW account authorization")
 	}
-	data, e := json.Marshal(prepared{Version: 1, ChainID: s.ChainID.String(), Account: s.Account, PreparedBlock: s.BlockNumber.String(), Order: o, Digest: digest, UID: uid})
+	if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
+		return provider.Output{}, e
+	}
+	data, e := json.Marshal(prepared{Version: 2, ChainID: s.ChainID.String(), Account: s.Account, PreparedBlock: s.BlockNumber.String(), Order: o, Digest: digest, UID: uid, FullAppData: fullAppData, SlippageBPS: slippageBPS})
 	if e != nil {
 		return provider.Output{}, errors.New("encode CoW persisted order")
 	}
 	inputs := map[uint]string{}
 	if p.cfg.SellAmountInput != nil {
-		inputs[*p.cfg.SellAmountInput] = quotedSell.String()
+		inputs[*p.cfg.SellAmountInput] = grossSell.String()
 	}
 	if p.cfg.BuyAmountInput != nil {
 		inputs[*p.cfg.BuyAmountInput] = buy.String()
@@ -263,14 +303,27 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	if json.Unmarshal(out.Data, &d) != nil {
 		return provider.Progress{}, errors.New("invalid persisted CoW order")
 	}
-	if d.Version != 1 || d.Account != s.Account || d.ChainID != s.ChainID.String() {
+	if (d.Version != 1 && d.Version != 2) || d.Account != s.Account || d.ChainID != s.ChainID.String() {
 		return provider.Progress{}, errors.New("persisted CoW chain/account mismatch")
+	}
+	expectedAppData := p.appData
+	if d.Version == 2 {
+		if d.SlippageBPS == 0 || d.SlippageBPS > 10000 || d.Order.QuoteID < 0 || d.Order.AppDataHash != "" {
+			return provider.Progress{}, errors.New("invalid persisted CoW AUTO policy")
+		}
+		full, hash := appData(d.SlippageBPS)
+		if d.FullAppData != full || crypto.Keccak256Hash([]byte(d.FullAppData)) != hash {
+			return provider.Progress{}, errors.New("persisted CoW full appData differs from AUTO policy")
+		}
+		expectedAppData = hash
+	} else if p.cfg.AppData == "" {
+		return provider.Progress{}, errors.New("legacy CoW attempt requires the previous configuration to drain before enabling recipe-derived AUTO policy")
 	}
 	block, e := parse.Uint256(d.PreparedBlock)
 	if e != nil || s.BlockNumber.Cmp(block) <= 0 {
 		return provider.Progress{}, errors.New("CoW Advance requires a confirmed snapshot after preparation")
 	}
-	if e = p.validateOrder(d.Order, s.Account); e != nil {
+	if e = p.validateOrder(d.Order, s.Account, expectedAppData, d.Version == 2); e != nil {
 		return provider.Progress{}, e
 	}
 	domain := protocolio.Domain("Gnosis Protocol", "v2", s.ChainID, p.settlement)
@@ -374,7 +427,12 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
 		return provider.Progress{}, e
 	}
-	returned, code, postErr := p.client.Post(ctx, d.Order)
+	postOrder := d.Order
+	if d.Version == 2 {
+		postOrder.AppData = d.FullAppData
+		postOrder.AppDataHash = d.Order.AppData
+	}
+	returned, code, postErr := p.client.Post(ctx, postOrder)
 	if postErr != nil {
 		// A timeout, duplicate response or gateway error can hide acceptance. Keep the exact UID
 		// and reconcile GET before any later repost; the persisted Output survives this call.
@@ -388,9 +446,9 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	}
 	return progress(d, "posted", false), nil
 }
-func (p *Provider) validateOrder(o wire.CowOrder, account common.Address) error {
+func (p *Provider) validateOrder(o wire.CowOrder, account common.Address, expectedAppData common.Hash, exactBudget bool) error {
 	sell, e := parse.Uint256(o.SellAmount)
-	if e != nil || sell.Sign() == 0 || sell.Cmp(p.sellAmount) > 0 {
+	if e != nil || sell.Sign() == 0 || sell.Cmp(p.sellAmount) > 0 || exactBudget && sell.Cmp(p.sellAmount) != 0 {
 		return errors.New("persisted CoW sell amount exceeds budget")
 	}
 	buy, e := parse.Uint256(o.BuyAmount)
@@ -398,7 +456,7 @@ func (p *Provider) validateOrder(o wire.CowOrder, account common.Address) error 
 		return errors.New("persisted CoW buy amount below bound")
 	}
 	app, e := protocolio.Hash(o.AppData)
-	if e != nil || app != p.appData {
+	if e != nil || app != expectedAppData {
 		return errors.New("persisted CoW appData mismatch")
 	}
 	if !sameAddress(o.SellToken, p.sellToken) || !sameAddress(o.BuyToken, p.buyToken) || !sameAddress(o.Receiver, account) || !sameAddress(o.From, account) || o.Kind != "sell" || o.PartiallyFillable || o.FeeAmount != "0" || o.SigningScheme != "eip1271" || o.Signature != "0x" || o.SellTokenBalance != "erc20" || o.BuyTokenBalance != "erc20" || o.ValidTo <= 0 || uint64(o.ValidTo) > uint64(^uint32(0)) {

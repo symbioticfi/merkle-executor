@@ -1,4 +1,4 @@
-// Package config decodes file-driven configuration and opaque provider settings.
+// Package config decodes strict file-driven runtime configuration.
 package config
 
 import (
@@ -8,29 +8,32 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
+	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/permissions"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
 type Config struct {
-	RecipeCacheBytes int64         `yaml:"recipeCacheBytes"`
-	Mode             string        `yaml:"mode"`
-	Chain            Chain         `yaml:"chain"`
-	Signer           Signer        `yaml:"signer"`
-	TxManager        TxManager     `yaml:"txManager"`
-	StateDir         string        `yaml:"stateDir"`
-	PollInterval     time.Duration `yaml:"pollInterval"`
-	OperationTimeout time.Duration `yaml:"operationTimeout"`
-	HTTPTimeout      time.Duration `yaml:"httpTimeout"`
-	Observability    Observability `yaml:"observability"`
-	Strategies       []Strategy    `yaml:"strategies"`
+	Curator          protocolio.HTTPConfig `yaml:"curator"`
+	RecipeCacheBytes int64                 `yaml:"recipeCacheBytes"`
+	Mode             string                `yaml:"mode"`
+	Chain            Chain                 `yaml:"chain"`
+	Signer           Signer                `yaml:"signer"`
+	TxManager        TxManager             `yaml:"txManager"`
+	StateDir         string                `yaml:"stateDir"`
+	PollInterval     time.Duration         `yaml:"pollInterval"`
+	OperationTimeout time.Duration         `yaml:"operationTimeout"`
+	HTTPTimeout      time.Duration         `yaml:"httpTimeout"`
+	Observability    Observability         `yaml:"observability"`
+	Strategies       []string              `yaml:"strategies"`
 }
 
 type Chain struct {
@@ -47,28 +50,27 @@ type Observability struct {
 	Addr  string `yaml:"addr"`
 	Debug bool   `yaml:"debug"`
 }
-type Provider struct {
-	Name   string    `yaml:"name"`
-	Config yaml.Node `yaml:"config"`
-}
-type Strategy struct {
-	Name       string        `yaml:"name"`
-	Executor   string        `yaml:"executor"`
-	Account    string        `yaml:"account"`
-	RecipeHash string        `yaml:"recipeHash"`
-	Tree       string        `yaml:"tree"`
-	Interval   time.Duration `yaml:"interval"`
-	Providers  []Provider    `yaml:"providers"`
-}
 
-var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+const (
+	// RuntimePolicyVersion changes when built-in preparation or timing semantics change.
+	RuntimePolicyVersion                  = "address-only-v3"
+	DefaultKeyEnv                         = "MERKLE_EXECUTOR_PRIVATE_KEY"
+	DefaultRecipeCacheBytes        int64  = 16 << 20
+	DefaultPollInterval                   = 15 * time.Second
+	DefaultOperationTimeout               = 30 * time.Second
+	DefaultHTTPTimeout                    = 15 * time.Second
+	DefaultStrategyInterval               = time.Minute
+	DefaultConfirmations           uint64 = 2
+	DefaultTransactionPollInterval        = 2 * time.Second
+	StandardMulticall3                    = protocolio.StandardMulticall3
+)
 
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, errors.Errorf("read configuration: %w", err)
 	}
-	cfg := Config{RecipeCacheBytes: 16 << 20}
+	cfg := Config{RecipeCacheBytes: DefaultRecipeCacheBytes}
 	d := yaml.NewDecoder(bytes.NewReader(raw))
 	d.KnownFields(true)
 	if err := d.Decode(&cfg); err != nil {
@@ -85,21 +87,27 @@ func Load(path string) (*Config, error) {
 		cfg.Mode = "simulate"
 	}
 	if cfg.PollInterval == 0 {
-		cfg.PollInterval = 15 * time.Second
+		cfg.PollInterval = DefaultPollInterval
 	}
 	if cfg.OperationTimeout == 0 {
-		cfg.OperationTimeout = 30 * time.Second
+		cfg.OperationTimeout = DefaultOperationTimeout
 	}
 	if cfg.HTTPTimeout == 0 {
-		cfg.HTTPTimeout = 15 * time.Second
+		cfg.HTTPTimeout = DefaultHTTPTimeout
 	}
 	if cfg.TxManager.PollInterval == 0 {
-		cfg.TxManager.PollInterval = 2 * time.Second
+		cfg.TxManager.PollInterval = DefaultTransactionPollInterval
 	}
 	if cfg.TxManager.Confirmations == 0 {
-		cfg.TxManager.Confirmations = 2
+		cfg.TxManager.Confirmations = DefaultConfirmations
 	}
 	cfg.TxManager.applyDefaults()
+	if cfg.Signer.KeyEnv == "" {
+		cfg.Signer.KeyEnv = DefaultKeyEnv
+	}
+	if cfg.Chain.Multicall3 == "" {
+		cfg.Chain.Multicall3 = StandardMulticall3
+	}
 	base, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
 		return nil, err
@@ -110,14 +118,6 @@ func Load(path string) (*Config, error) {
 	if !filepath.IsAbs(cfg.StateDir) {
 		cfg.StateDir = filepath.Join(base, cfg.StateDir)
 	}
-	for i := range cfg.Strategies {
-		if cfg.Strategies[i].Interval == 0 {
-			cfg.Strategies[i].Interval = time.Minute
-		}
-		if cfg.Strategies[i].Tree != "" && !filepath.IsAbs(cfg.Strategies[i].Tree) {
-			cfg.Strategies[i].Tree = filepath.Join(base, cfg.Strategies[i].Tree)
-		}
-	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -125,6 +125,11 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
+	curator, err := permissions.NormalizeHostConfig(c.Curator)
+	if err != nil {
+		return err
+	}
+	c.Curator = curator
 	if c.RecipeCacheBytes < 0 {
 		return errors.New("recipeCacheBytes must be nonnegative")
 	}
@@ -132,8 +137,8 @@ func (c *Config) Validate() error {
 		return errors.New("mode must be simulate or send")
 	}
 	if c.Chain.Multicall3 != "" {
-		if _, err := parse.Address(c.Chain.Multicall3); err != nil {
-			return errors.New("chain.multicall3 must be a nonzero address when configured")
+		if _, err := parse.Address(c.Chain.Multicall3); err != nil || common.HexToAddress(c.Chain.Multicall3) != common.HexToAddress(StandardMulticall3) {
+			return errors.New("chain.multicall3 is fixed to the standard Multicall3 address")
 		}
 	}
 	if c.Chain.ChainID == 0 {
@@ -151,8 +156,10 @@ func (c *Config) Validate() error {
 	if c.Chain.RPCURL == "" {
 		return errors.New("rpcUrl required")
 	}
-	if _, err := parse.Address(c.Signer.Address); err != nil {
-		return errors.New("valid signer.address required in both modes")
+	if c.Signer.Address != "" {
+		if _, err := parse.Address(c.Signer.Address); err != nil {
+			return errors.New("signer.address must be a nonzero address when used as an assertion")
+		}
 	}
 	if c.PollInterval <= 0 || c.OperationTimeout <= 0 || c.HTTPTimeout <= 0 || c.TxManager.PollInterval <= 0 {
 		return errors.New("timeouts and intervals must be positive")
@@ -172,69 +179,39 @@ func (c *Config) Validate() error {
 	if err := c.TxManager.validate(c.Mode == "send"); err != nil {
 		return err
 	}
-	names := make(map[string]bool)
-	for _, s := range c.Strategies {
-		if !validName.MatchString(s.Name) || names[s.Name] {
-			return errors.New("strategy names must be unique filesystem-safe identifiers")
+	if c.RecipeCacheBytes != DefaultRecipeCacheBytes || c.PollInterval != DefaultPollInterval || c.OperationTimeout != DefaultOperationTimeout || c.HTTPTimeout != DefaultHTTPTimeout {
+		return errors.New("recipe cache, polling and timeout settings are fixed by the runtime policy; remove legacy overrides")
+	}
+	if err := c.TxManager.validateRuntimePolicy(); err != nil {
+		return err
+	}
+	seen := make(map[string]bool, len(c.Strategies))
+	for i, value := range c.Strategies {
+		executor, err := parse.Address(value)
+		if err != nil {
+			return errors.Errorf("strategy %d: invalid executor address", i+1)
 		}
-		names[s.Name] = true
-		if _, err := parse.Address(s.Executor); err != nil {
-			return errors.Errorf("strategy %s: invalid executor", s.Name)
+		canonical := strings.ToLower(executor.Hex())
+		if seen[canonical] {
+			return errors.Errorf("duplicate executor address %s", canonical)
 		}
-		if _, err := parse.Address(s.Account); err != nil {
-			return errors.Errorf("strategy %s: invalid account", s.Name)
-		}
-		if s.Tree == "" || s.Interval <= 0 {
-			return errors.Errorf("strategy %s: tree and positive interval required", s.Name)
-		}
-		if s.RecipeHash != "" {
-			b, err := hexutil.Decode(s.RecipeHash)
-			if err != nil || len(b) != 32 {
-				return errors.New("recipeHash must be bytes32")
-			}
-		}
-		if len(s.Providers) > 256 {
-			return errors.New("provider count exceeds limit")
-		}
-		for _, p := range s.Providers {
-			if err := parse.RejectAliases(p.Config); err != nil {
-				return err
-			}
-			if p.Name == "" {
-				return errors.New("provider name required")
-			}
-		}
+		seen[canonical] = true
+		c.Strategies[i] = canonical
 	}
 	return nil
 }
 
-// Fingerprint binds durable work to semantic configuration. Addresses, provider
-// mappings and endpoint selection cannot silently change during an active job.
-func (s Strategy) Fingerprint() string {
-	type semanticProvider struct {
-		Name string
-		Node any
-	}
-	ps := make([]semanticProvider, 0, len(s.Providers))
-	for _, p := range s.Providers {
-		ps = append(ps, semanticProvider{p.Name, nodeIdentity(p.Config)})
-	}
+// StrategyFingerprint binds the canonical executor, derived deployment identity
+// and effective runtime policy to durable work. Existing journals are never migrated.
+func (c *Config) StrategyFingerprint(executor string, account, caller common.Address) string {
 	raw, _ := json.Marshal(struct {
-		Name, Executor, Account, RecipeHash, Tree string
-		Interval                                  time.Duration
-		Providers                                 []semanticProvider
-	}{s.Name, s.Executor, s.Account, s.RecipeHash, s.Tree, s.Interval, ps})
+		Policy    string
+		Executor  common.Address
+		Account   common.Address
+		Caller    common.Address
+		ChainID   uint64
+		Curator   protocolio.HTTPConfig
+		TxManager TxManager
+	}{RuntimePolicyVersion, common.HexToAddress(executor), account, caller, c.Chain.ChainID, c.Curator, c.TxManager})
 	return crypto.Keccak256Hash(raw).Hex()
-}
-
-func nodeIdentity(n yaml.Node) any {
-	children := make([]any, len(n.Content))
-	for i, c := range n.Content {
-		children[i] = nodeIdentity(*c)
-	}
-	return struct {
-		Kind       yaml.Kind
-		Tag, Value string
-		Children   []any
-	}{n.Kind, n.Tag, n.Value, children}
 }

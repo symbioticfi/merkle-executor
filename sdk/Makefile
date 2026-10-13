@@ -2,7 +2,11 @@ SHELL := bash
 export GOTOOLCHAIN := go1.27.1
 export GOWORK := off
 GOLANGCI_LINT_VERSION := v2.13.2
-.PHONY: check test integration
+.PHONY: check test integration generate verify-lens
+generate:
+	python3 recipes/lens/generate.py
+verify-lens:
+	python3 recipes/lens/generate.py --check
 check:
 	go build ./...
 	go test -race -cover ./...

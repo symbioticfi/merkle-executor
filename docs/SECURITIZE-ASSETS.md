@@ -27,40 +27,39 @@ transaction environment, issuer enrollment, connector oracle/budget, or accepted
 recipe permissions. Those remain deployment prerequisites. Feed display names
 are not used as authorization: some current names are empty or placeholders.
 
-## Configure a route
+## Automatic route and recipe requirements
 
-Use one provider entry per request or atomic redemption action. Amounts and
-minimums are decimal strings in the corresponding token's base units. The example
-below is an HINC request; its action index must match the actual committed recipe.
+Startup registers Securitize automatically. Operators do not provide catalogue
+paths, symbols, token/target/payment addresses, modes, action mappings or economic
+parameters. The executor matches the authenticated chain and exact action ABI to
+one embedded route. The token pair, recipient and mode must be committed in the
+permission leaf. A selector alone does not identify Securitize: unrelated
+`redeem(uint256)` actions remain ordinary recipe actions.
 
-```yaml
-- name: securitize
-  config:
-    catalog: assets/securitize.yaml
-    symbol: HINC
-    chainId: 1
-    mode: wallet
-    token: "0x015C477A4E2881C4B3bB8999f59ee4A04e812344"
-    target: "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
-    amount: "1000000"
-    action: "3:0"
-    amountInput: 0
-```
-
-`catalog` resolves relative to the main configuration file. `catalog` and `symbol`
-must be supplied together. The provider verifies the explicit chain, token, route
-kind, target and payment token against that reviewed file; it does not fetch the
-feed during execution. Updating discovery data cannot substitute a target or
-recipient in an approved recipe. Operators can omit both fields for a separately
-verified deployment, but must still explicitly pin every address and the chain.
-The selected route must have the documented semantics; arbitrary contracts that
-merely share selectors are not supported.
-
-| Mode | Account action | Extra configuration | Completion outcome |
+| Mode | Account action | Derived economics | Completion outcome |
 | --- | --- | --- | --- |
-| `wallet` | Token `transfer(target, amount)` | No payment token or minimum | `requested` |
-| `modern` | Offramp `redeem(amount, minOutput)` | `paymentToken`, positive `minOutput` | `redeemed` |
-| `legacy` | Offramp `redeem(amount)` | `paymentToken`, positive `minOutput` preparation bound | `redeemed` |
+| `wallet` | Token `transfer(wallet, amount)` | Read-dependent amount | `requested` |
+| `modern` | Offramp `redeem(amount, minOutput)` | Read-dependent amount and minimum | `redeemed` |
+| `legacy` | Offramp `redeem(amount)` | Read-dependent amount and explicit recipe payment-delta floor | `redeemed` |
+
+An amount binds directly to a read-dependent Result, or uses an Input constrained
+by preceding equality or upper-bound checks against recipe results. Equality
+selects the exact value; otherwise the executor selects the smallest upper bound
+and checks every lower bound. Literal caps alone are insufficient. A modern
+minimum binds to a Result or an Input protected by preceding result-based
+lower-bound guards. Legacy routes require an explicit post-redemption payment
+balance-delta guard; their ABI has no minimum word. A guard Input is derived
+from preceding result-based lower/equality guards and saved separately from
+calldata bindings. Missing or free economic
+inputs are invalid recipes.
+
+The checked-in catalogue is copied exactly into
+`internal/providers/securitize/catalogue/securitize.yaml`, SHA-256
+`4eacabc956d8863fd2373e4f910315d84fc9ab0ed4b5be2969901ee31dbb9669`.
+Tests enforce equality with the reviewed source. Updates require deliberate
+review, copy and policy-version update. Recovery validates stored route, decimals,
+account, exact calldata, economic inputs and quote identity before I/O. It does
+not fetch the feed or adopt a new route or amount.
 
 For example, VBILL's Ethereum modern route uses token
 `0x2255718832bC9fD3bE1CaF75084F4803DA14FF01`, target
@@ -69,13 +68,10 @@ For example, VBILL's Ethereum modern route uses token
 **legacy**, not modern: they implement `redeem(uint256)`, not the two-argument
 method shown in Securitize's general dApp sample.
 
-`amountInput` and `minOutputInput` are optional numerical recipe slots. Duplicate
-assignments are rejected. The provider replaces a single action's calldata; it
-does not add actions, change targets, modify permission masks, or create approvals.
-The recipe must contain exact permitted token approvals for atomic offramps and
-any approval reset or subsequent asset transfer. A wallet action targets the token
-contract, while an atomic action targets the offramp. The complete recipe is
-simulated, including upstream Liquid Lane inventory delivery and issuer controls.
+The provider fills only authorized numerical fields in existing actions. The
+recipe owns approvals, approval resets, ordering and subsequent transfers. Wallet
+actions target the token; atomic actions target the offramp. The complete original
+recipe is simulated, including upstream inventory delivery and issuer controls.
 
 ## Receipt and settlement semantics
 

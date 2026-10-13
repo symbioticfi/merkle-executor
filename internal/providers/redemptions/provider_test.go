@@ -136,7 +136,7 @@ func issuerFixture(t *testing.T, cfg Config) (provider.Snapshot, *issuerReader) 
 		r.reply(token, share.NewCentrifugeShare().GetABI(), "vault", []any{asset}, target)
 		a := async.NewAsyncRedeemVault().GetABI()
 		r.reply(target, a, "asset", nil, asset)
-		r.reply(target, a, "maxRedeem", []any{s.Account}, big.NewInt(80))
+		r.reply(target, a, "maxRedeem", []any{s.Account}, big.NewInt(100))
 	case "openeden":
 		a := openeden.NewOpenEdenExpress().GetABI()
 		r.reply(target, a, "token", nil, token)
@@ -288,7 +288,7 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRequest(t *testing.T) 
 	}
 }
 
-func TestCentrifugeClaimCapsSharesAndRetainsConfiguredLimit(t *testing.T) {
+func TestCentrifugeClaimRequiresExactSharesAndRetainsConfiguredAmount(t *testing.T) {
 	for _, available := range []int64{0, 20, 100, 150} {
 		t.Run(big.NewInt(available).String(), func(t *testing.T) {
 			cfg := issuerConfig("centrifuge")
@@ -298,7 +298,7 @@ func TestCentrifugeClaimCapsSharesAndRetainsConfiguredLimit(t *testing.T) {
 			r.reply(common.HexToAddress(cfg.Target), a.GetABI(), "maxRedeem", []any{s.Account}, big.NewInt(available))
 			p := issuerProvider(t, cfg, r)
 			out, err := p.Prepare(context.Background(), s)
-			if available == 0 {
+			if available < 100 {
 				if !errors.Is(err, provider.ErrNotReady) {
 					t.Fatalf("empty claim must idle: %v", err)
 				}

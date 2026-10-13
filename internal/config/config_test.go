@@ -1,28 +1,26 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 )
 
-const validConfig = `chain:
+const validConfig = `curator:
+  url: http://127.0.0.1:1/api/v1
+chain:
   chainId: 1
   rpcUrl: http://127.0.0.1:8545
 signer:
   address: '0x0000000000000000000000000000000000000001'
 strategies:
-  - name: example
-    executor: '0x0000000000000000000000000000000000000002'
-    account: '0x0000000000000000000000000000000000000003'
-    tree: permissions.json
-    providers:
-      - name: static
-        config:
-          inputs: {0: '42'}
+  - '0x0000000000000000000000000000000000000002'
 `
 
 func writeConfig(t *testing.T, text string) string {
@@ -40,7 +38,7 @@ func TestConfigurationDefaultsAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Mode != "simulate" || c.Signer.KeyEnv != "" || c.Strategies[0].Tree != filepath.Join(filepath.Dir(p), "permissions.json") {
+	if c.Mode != "simulate" || c.Signer.KeyEnv != DefaultKeyEnv || c.StateDir != filepath.Join(filepath.Dir(p), "state") {
 		t.Fatal(c)
 	}
 }
@@ -62,20 +60,20 @@ func TestRejectMalformedConfiguration(t *testing.T) {
 	}
 }
 func TestFingerprintIgnoresCommentsAndPosition(t *testing.T) {
-	t.Parallel()
-	var a, b Config
-	if err := yaml.Unmarshal([]byte(validConfig), &a); err != nil {
+	a, err := Load(writeConfig(t, validConfig))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := yaml.Unmarshal([]byte("# documentation\n\n"+validConfig), &b); err != nil {
+	b, err := Load(writeConfig(t, "# documentation\n\n"+validConfig))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Strategies[0].Fingerprint() != b.Strategies[0].Fingerprint() {
+	account, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01")
+	if a.StrategyFingerprint(a.Strategies[0], account, caller) != b.StrategyFingerprint(b.Strategies[0], account, caller) {
 		t.Fatal("comments changed identity")
 	}
-	b.Strategies[0].Account = "different"
-	if a.Strategies[0].Fingerprint() == b.Strategies[0].Fingerprint() {
-		t.Fatal("account did not change identity")
+	if a.StrategyFingerprint(a.Strategies[0], account, caller) == a.StrategyFingerprint(common.HexToAddress("0x04").Hex(), account, caller) {
+		t.Fatal("executor did not change identity")
 	}
 }
 
@@ -111,11 +109,11 @@ func TestTransactionHorizonDefaultsAndInvalidLimits(t *testing.T) {
 	}
 }
 
-func TestOptionalGlobalMulticallAddress(t *testing.T) {
+func TestGlobalMulticallAddressIsFixed(t *testing.T) {
 	for _, tc := range []struct {
 		value string
 		valid bool
-	}{{"", true}, {"0x0000000000000000000000000000000000000005", true}, {"0x0000000000000000000000000000000000000000", false}, {"not-address", false}} {
+	}{{"", true}, {StandardMulticall3, true}, {"0x0000000000000000000000000000000000000005", false}, {"0x0000000000000000000000000000000000000000", false}, {"not-address", false}} {
 		t.Run(tc.value, func(t *testing.T) {
 			text := validConfig
 			if tc.value != "" {
@@ -134,7 +132,7 @@ func TestRecipeCacheBudgetConfiguration(t *testing.T) {
 		name, yaml string
 		valid      bool
 	}{
-		{"default", "", true}, {"disabled", "recipeCacheBytes: 0\n", true}, {"bounded", "recipeCacheBytes: 4096\n", true}, {"negative", "recipeCacheBytes: -1\n", false},
+		{"default", "", true}, {"disabled", "recipeCacheBytes: 0\n", false}, {"bounded", "recipeCacheBytes: 4096\n", false}, {"negative", "recipeCacheBytes: -1\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := Load(writeConfig(t, validConfig+tc.yaml))
@@ -154,5 +152,209 @@ func TestRecipeCacheBudgetConfiguration(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExecutorOnlyStrategyUsesRequiredCurator(t *testing.T) {
+	text := strings.ReplaceAll(validConfig, "    account: '0x0000000000000000000000000000000000000003'\n", "")
+	text = strings.ReplaceAll(text, "    tree: permissions.json\n", "")
+	text = strings.Replace(text, "  url: http://127.0.0.1:1/api/v1", "  url: http://127.0.0.1:1/api/v1\n  apiKeyEnv: UNSET_CURATOR_CONFIG_TEST_KEY", 1)
+	if _, err := Load(writeConfig(t, text)); err != nil {
+		t.Fatalf("executor-only curator configuration rejected: %v", err)
+	}
+}
+
+func TestCuratorValidationRejectsObsoleteAndUnsafeConfiguration(t *testing.T) {
+	for name, raw := range map[string]string{
+		"old account":      strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    account: '0x0000000000000000000000000000000000000003'\n"),
+		"old file":         strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    tree: permissions.json\n"),
+		"missing curator":  strings.Replace(validConfig, "curator:\n  url: http://127.0.0.1:1/api/v1\n", "", 1),
+		"credential URL":   strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "https://user:secret@example.invalid/api/v1", 1),
+		"query URL":        strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "http://example.invalid/api/v1?token=private", 1),
+		"negative timeout": strings.Replace(validConfig, "curator:", "curator:\n  timeoutSeconds: -1", 1),
+		"large timeout":    strings.Replace(validConfig, "curator:", "curator:\n  timeoutSeconds: 121", 1),
+		"negative bound":   strings.Replace(validConfig, "curator:", "curator:\n  maxResponseBytes: -1", 1),
+		"large bound":      strings.Replace(validConfig, "curator:", "curator:\n  maxResponseBytes: 16777217", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, raw)); err == nil {
+				t.Fatal("invalid curator configuration accepted")
+			}
+		})
+	}
+}
+
+func TestMinimalConfigurationDerivesSignerAndUsesStandardConstants(t *testing.T) {
+	for _, mode := range []string{"simulate", "send"} {
+		t.Run(mode, func(t *testing.T) {
+			raw := strings.Replace(validConfig, "signer:\n  address: '0x0000000000000000000000000000000000000001'\n", "", 1)
+			raw += "mode: " + mode + "\ntxManager:\n  maxFeeGwei: 30\n"
+			cfg, err := Load(writeConfig(t, raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Signer.Address != "" || cfg.Signer.KeyEnv != DefaultKeyEnv || cfg.Chain.Multicall3 != StandardMulticall3 {
+				t.Fatalf("unexpected defaults: %+v", cfg)
+			}
+		})
+	}
+}
+
+func TestRuntimePolicyRejectsLegacyOverrides(t *testing.T) {
+	for name, override := range map[string]string{
+		"poll": "pollInterval: 1s\n", "operation": "operationTimeout: 1s\n", "http": "httpTimeout: 1s\n",
+		"confirmations": "txManager: {confirmations: 1}\n", "transaction poll": "txManager: {pollInterval: 1s}\n",
+		"horizon": "txManager: {horizon: {maxBlocks: 8}}\n", "broadcast": "txManager: {broadcastTimeoutMs: 1000}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, validConfig+override)); err == nil {
+				t.Fatal("legacy runtime policy override accepted")
+			}
+		})
+	}
+}
+
+func TestRuntimeRejectsManualProviders(t *testing.T) {
+	for _, name := range []string{"static", "rpc", "http", "cowswap", "merkl", "liquidlane-rfq", "redemptions", "securitize"} {
+		t.Run(name, func(t *testing.T) {
+			raw := strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    providers:\n      - name: " + name + "\n        config: {}\n")
+			if _, err := Load(writeConfig(t, raw)); err == nil {
+				t.Fatalf("manual provider accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
+	var fingerprint string
+	for _, tc := range []struct {
+		name, fields string
+		invalid      bool
+	}{
+		{"omitted", "", false}, {"zero", "  timeoutSeconds: 0\n  maxResponseBytes: 0\n", false}, {"fixed", "  timeoutSeconds: 10\n  maxResponseBytes: 2097152\n", false}, {"different timeout", "  timeoutSeconds: 11\n", true}, {"different bound", "  maxResponseBytes: 1048576\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Replace(validConfig, "curator:\n", "curator:\n"+tc.fields, 1)
+			cfg, err := Load(writeConfig(t, raw))
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("legacy curator transport override accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Curator.TimeoutSeconds != permissions.HostTimeoutSeconds || cfg.Curator.MaxResponseBytes != permissions.HostMaxResponseBytes {
+				t.Fatalf("effective curator policy %+v", cfg.Curator)
+			}
+			got := cfg.StrategyFingerprint(cfg.Strategies[0], common.HexToAddress("0x03"), common.HexToAddress("0x01"))
+			if fingerprint == "" {
+				fingerprint = got
+			} else if fingerprint != got {
+				t.Fatal("equivalent curator policy changed fingerprint")
+			}
+		})
+	}
+}
+
+func strategyConfig(body string) string {
+	prefix, _, _ := strings.Cut(validConfig, "strategies:\n")
+	return prefix + "strategies:\n" + body
+}
+
+func TestScalarStrategyAddressSchema(t *testing.T) {
+	const mixed = "0xaBcDeF0000000000000000000000000000000001"
+	const canonical = "0xabcdef0000000000000000000000000000000001"
+	const other = "0x0000000000000000000000000000000000000002"
+	for _, tc := range []struct {
+		name, body string
+		want       []string
+	}{
+		{"one", "  - '" + mixed + "'\n", []string{canonical}},
+		{"lowercase", "  - '" + canonical + "'\n", []string{canonical}},
+		{"uppercase", "  - '0x" + strings.ToUpper(mixed[2:]) + "'\n", []string{canonical}},
+		{"ordered", "  - '" + mixed + "'\n  - '" + other + "'\n", []string{canonical, other}},
+		{"reordered", "  - '" + other + "'\n  - '" + mixed + "'\n", []string{other, canonical}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := Load(writeConfig(t, strategyConfig(tc.body)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(cfg.Strategies, tc.want) {
+				t.Fatalf("strategies=%v want%v", cfg.Strategies, tc.want)
+			}
+		})
+	}
+	many := strings.Builder{}
+	for i := 1; i <= 257; i++ {
+		fmt.Fprintf(&many, "  - '0x%040x'\n", i)
+	}
+	for name, body := range map[string]string{
+		"empty list": "  []\n", "too many": many.String(), "empty": "  - ''\n", "zero": "  - '0x0000000000000000000000000000000000000000'\n", "invalid": "  - invalid\n", "short": "  - '0x1'\n", "number": "  - 1\n", "null": "  - null\n", "duplicate": "  - '" + mixed + "'\n  - '" + canonical + "'\n",
+		"named object": "  - name: custom\n    executor: '" + mixed + "'\n", "unnamed object": "  - executor: '" + mixed + "'\n", "label": "  - executor-" + canonical + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, strategyConfig(body))); err == nil {
+				t.Fatal("invalid strategy accepted")
+			}
+		})
+	}
+}
+
+func TestAddressIdentityIgnoresCaseAndOrder(t *testing.T) {
+	account, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01")
+	a, err := Load(writeConfig(t, strategyConfig("  - '0xaBcDeF0000000000000000000000000000000001'\n  - '0x0000000000000000000000000000000000000002'\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(writeConfig(t, strategyConfig("  - '0x0000000000000000000000000000000000000002'\n  - '0xabcdef0000000000000000000000000000000001'\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, executor := range a.Strategies {
+		if a.StrategyFingerprint(executor, account, caller) != b.StrategyFingerprint(executor, account, caller) {
+			t.Fatal("case/order changed identity")
+		}
+	}
+	original := a.StrategyFingerprint(a.Strategies[0], account, caller)
+	for name, change := range map[string]func(*Config, *common.Address, *common.Address){
+		"account":       func(_ *Config, a, _ *common.Address) { *a = common.HexToAddress("0x04") },
+		"caller":        func(_ *Config, _, c *common.Address) { *c = common.HexToAddress("0x05") },
+		"chain":         func(c *Config, _, _ *common.Address) { c.Chain.ChainID++ },
+		"source":        func(c *Config, _, _ *common.Address) { c.Curator.URL = "http://other.invalid/api/v1" },
+		"credential":    func(c *Config, _, _ *common.Address) { c.Curator.APIKeyEnv = "OTHER_CURATOR_KEY" },
+		"sender policy": func(c *Config, _, _ *common.Address) { c.TxManager.MaxFeeGwei++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, a1, c1 := *a, account, caller
+			change(&c, &a1, &c1)
+			if c.StrategyFingerprint(c.Strategies[0], a1, c1) == original {
+				t.Fatal("changed identity invisible")
+			}
+		})
+	}
+}
+
+func TestValidateStoresCanonicalAddresses(t *testing.T) {
+	cfg, err := Load(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Strategies = []string{"0xaBcDeF0000000000000000000000000000000001"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Strategies[0] != "0xabcdef0000000000000000000000000000000001" {
+		t.Fatal("direct validation did not canonicalize")
+	}
+	cfg.Strategies = append(cfg.Strategies, "0xABCDEF0000000000000000000000000000000001")
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("direct validation accepted duplicate")
+	}
+	cfg.Strategies = []string{"invalid"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("invalid executor accepted")
 	}
 }

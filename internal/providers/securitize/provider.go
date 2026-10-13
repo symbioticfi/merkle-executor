@@ -2,7 +2,6 @@
 package securitize
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"math/big"
@@ -25,18 +24,19 @@ import (
 )
 
 type Config struct {
-	Catalog        string `yaml:"catalog"`
-	Symbol         string `yaml:"symbol"`
-	ChainID        uint64 `yaml:"chainId"`
-	Mode           string `yaml:"mode"`
-	Token          string `yaml:"token"`
-	Target         string `yaml:"target"`
-	PaymentToken   string `yaml:"paymentToken"`
-	Amount         string `yaml:"amount"`
-	MinOutput      string `yaml:"minOutput"`
-	Action         string `yaml:"action"`
-	AmountInput    *uint  `yaml:"amountInput"`
-	MinOutputInput *uint  `yaml:"minOutputInput"`
+	Catalog           string `yaml:"catalog"`
+	Symbol            string `yaml:"symbol"`
+	ChainID           uint64 `yaml:"chainId"`
+	Mode              string `yaml:"mode"`
+	Token             string `yaml:"token"`
+	Target            string `yaml:"target"`
+	PaymentToken      string `yaml:"paymentToken"`
+	Amount            string `yaml:"amount"`
+	MinOutput         string `yaml:"minOutput"`
+	Action            string `yaml:"action"`
+	AmountInput       *uint  `yaml:"amountInput"`
+	MinOutputInput    *uint  `yaml:"minOutputInput"`
+	GuardMinimumInput *uint  `yaml:"guardMinimumInput"`
 }
 
 type Provider struct {
@@ -66,6 +66,11 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	if err := parse.DecodeStrict(raw, &c); err != nil {
 		return nil, err
 	}
+	return New(c, deps)
+}
+
+// New consumes authenticated recipe values or explicit local fixture policy.
+func New(c Config, deps providerRegistry.Deps) (*Provider, error) {
 	if c.ChainID == 0 || deps.Chain == nil {
 		return nil, errors.New("Securitize chainId and chain reader are required")
 	}
@@ -103,7 +108,7 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 			return nil, errors.New("Securitize minOutput must be positive uint256")
 		}
 	}
-	for _, index := range []*uint{c.AmountInput, c.MinOutputInput} {
+	for _, index := range []*uint{c.AmountInput, c.MinOutputInput, c.GuardMinimumInput} {
 		if index != nil {
 			if err := parse.InputIndex(*index); err != nil {
 				return nil, err
@@ -112,6 +117,12 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	}
 	if c.AmountInput != nil && c.MinOutputInput != nil && *c.AmountInput == *c.MinOutputInput {
 		return nil, errors.New("duplicate Securitize input assignment")
+	}
+	if c.GuardMinimumInput != nil && c.Mode != "legacy" {
+		return nil, errors.New("guard minimum input applies only to legacy Securitize")
+	}
+	if c.GuardMinimumInput != nil && (c.MinOutputInput != nil || (c.AmountInput != nil && *c.AmountInput == *c.GuardMinimumInput)) {
+		return nil, errors.New("duplicate Securitize guard assignment")
 	}
 	if err = p.validateCatalog(); err != nil {
 		return nil, err
@@ -163,6 +174,9 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	}
 	if p.cfg.MinOutputInput != nil {
 		inputs[*p.cfg.MinOutputInput] = p.minimum.String()
+	}
+	if p.cfg.GuardMinimumInput != nil {
+		inputs[*p.cfg.GuardMinimumInput] = p.minimum.String()
 	}
 	data, err := json.Marshal(prepared{ChainID: p.cfg.ChainID, Account: s.Account, Token: p.token, Target: p.target, Payment: p.payment, Mode: p.cfg.Mode, Amount: p.amount.String(), Minimum: p.minimum.String(), Expected: expected.String()})
 	if err != nil {
@@ -349,20 +363,13 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, output prov
 	if err := p.snapshot(s); err != nil {
 		return provider.Progress{}, err
 	}
-	var data prepared
-	if err := json.Unmarshal(output.Data, &data); err != nil {
-		return provider.Progress{}, errors.New("invalid persisted Securitize identity")
-	}
-	if data.ChainID != p.cfg.ChainID || data.Account != s.Account || data.Token != p.token || data.Target != p.target || data.Payment != p.payment || data.Mode != p.cfg.Mode || data.Amount != p.amount.String() || data.Minimum != p.minimum.String() {
-		return provider.Progress{}, errors.New("persisted Securitize identity mismatch")
-	}
-	expected, err := parse.Uint256(data.Expected)
-	if err != nil || (p.cfg.Mode == "wallet" && expected.Sign() != 0) || (p.cfg.Mode != "wallet" && expected.Cmp(p.minimum) < 0) {
-		return provider.Progress{}, errors.New("invalid persisted Securitize quote")
+	expected, err := p.validatePersisted(output, s.Account)
+	if err != nil {
+		return provider.Progress{}, err
 	}
 	payload, err := p.payload()
-	if err != nil || !bytes.Equal(output.Actions[p.cfg.Action], payload) {
-		return provider.Progress{}, errors.New("persisted Securitize action mismatch")
+	if err != nil {
+		return provider.Progress{}, err
 	}
 	if err = protocolio.Execution(ctx, p.deps.Chain, s); err != nil {
 		return provider.Progress{}, err

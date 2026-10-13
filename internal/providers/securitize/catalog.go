@@ -48,6 +48,11 @@ func LoadCatalog(path string) (Catalog, error) {
 	if err != nil || len(raw) > 1<<20 {
 		return Catalog{}, errors.New("Securitize catalog unreadable or larger than 1 MiB")
 	}
+	return decodeCatalog(raw)
+}
+
+func decodeCatalog(raw []byte) (Catalog, error) {
+	var err error
 	var c Catalog
 	d := yaml.NewDecoder(bytes.NewReader(raw))
 	d.KnownFields(true)

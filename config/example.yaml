@@ -1,42 +1,17 @@
-# Total retained recipe-evidence cache budget; 0 disables (default 16 MiB).
-recipeCacheBytes: 16777216
-# Replace the sample addresses and publish matching recipes/permission trees.
-# This example validates without contacting an RPC or reading a private key.
+# Replace the endpoint, chain identity and executor with your deployment.
+# This example validates without RPC access or reading a private key.
 mode: simulate
+curator:
+  url: https://curator-backend.example.invalid/api/v1
+  # apiKeyEnv: CURATOR_API_TOKEN
 chain:
-  # Optional: set only to a verified Multicall3 deployment on this chain.
-  # multicall3: "0x0000000000000000000000000000000000000005"
   chainId: 1
   rpcUrl: http://127.0.0.1:8545
-signer:
-  address: '0x0000000000000000000000000000000000000001'
-  keyEnv: MERKLE_EXECUTOR_PRIVATE_KEY
 stateDir: ../state
-pollInterval: 15s
-operationTimeout: 30s
-httpTimeout: 15s
-txManager:
-  confirmations: 2
-  pollInterval: 2s
-  maxFeeGwei: 30
-  broadcastTimeoutMs: 5000
-  replacementIntervalMs: 30000
-  pendingTimeoutMs: 300000
-  shutdownTimeoutMs: 60000
-  horizon:
-    maxBlocks: 6
-    blockTimeMs: 12000
+# Required for send mode: choose an absolute fee ceiling for this deployment.
+# txManager:
+#   maxFeeGwei: 30
 observability:
   addr: 127.0.0.1:9090
 strategies:
-  - name: ordered-funding
-    executor: '0x0000000000000000000000000000000000000002'
-    account: '0x0000000000000000000000000000000000000003'
-    tree: permissions.json
-    interval: 1m
-    providers:
-      - name: static
-        config:
-          inputs:
-            0: '1000000000000000000'
-            1: '990000'
+  - '0x0000000000000000000000000000000000000002'
