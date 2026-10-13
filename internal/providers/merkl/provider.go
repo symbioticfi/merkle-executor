@@ -82,6 +82,11 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	if e := parse.DecodeStrict(raw, &c); e != nil {
 		return nil, e
 	}
+	return New(c, deps)
+}
+
+// New consumes an immutable carrier derived from the authenticated claim leaf.
+func New(c Config, deps providerRegistry.Deps) (*Provider, error) {
 	if e := protocolio.Action(c.Action); e != nil {
 		return nil, e
 	}

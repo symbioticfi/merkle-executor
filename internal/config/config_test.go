@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,10 +21,6 @@ signer:
 strategies:
   - name: example
     executor: '0x0000000000000000000000000000000000000002'
-    providers:
-      - name: static
-        config:
-          inputs: {0: '42'}
 `
 
 func writeConfig(t *testing.T, text string) string {
@@ -40,7 +38,7 @@ func TestConfigurationDefaultsAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Mode != "simulate" || c.Signer.KeyEnv != "" || c.StateDir != filepath.Join(filepath.Dir(p), "state") {
+	if c.Mode != "simulate" || c.Signer.KeyEnv != DefaultKeyEnv || c.StateDir != filepath.Join(filepath.Dir(p), "state") {
 		t.Fatal(c)
 	}
 }
@@ -111,11 +109,11 @@ func TestTransactionHorizonDefaultsAndInvalidLimits(t *testing.T) {
 	}
 }
 
-func TestOptionalGlobalMulticallAddress(t *testing.T) {
+func TestGlobalMulticallAddressIsFixed(t *testing.T) {
 	for _, tc := range []struct {
 		value string
 		valid bool
-	}{{"", true}, {"0x0000000000000000000000000000000000000005", true}, {"0x0000000000000000000000000000000000000000", false}, {"not-address", false}} {
+	}{{"", true}, {StandardMulticall3, true}, {"0x0000000000000000000000000000000000000005", false}, {"0x0000000000000000000000000000000000000000", false}, {"not-address", false}} {
 		t.Run(tc.value, func(t *testing.T) {
 			text := validConfig
 			if tc.value != "" {
@@ -134,7 +132,7 @@ func TestRecipeCacheBudgetConfiguration(t *testing.T) {
 		name, yaml string
 		valid      bool
 	}{
-		{"default", "", true}, {"disabled", "recipeCacheBytes: 0\n", true}, {"bounded", "recipeCacheBytes: 4096\n", true}, {"negative", "recipeCacheBytes: -1\n", false},
+		{"default", "", true}, {"disabled", "recipeCacheBytes: 0\n", false}, {"bounded", "recipeCacheBytes: 4096\n", false}, {"negative", "recipeCacheBytes: -1\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := Load(writeConfig(t, validConfig+tc.yaml))
@@ -181,6 +179,80 @@ func TestCuratorValidationRejectsObsoleteAndUnsafeConfiguration(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeConfig(t, raw)); err == nil {
 				t.Fatal("invalid curator configuration accepted")
+			}
+		})
+	}
+}
+
+func TestMinimalConfigurationDerivesSignerAndUsesStandardConstants(t *testing.T) {
+	for _, mode := range []string{"simulate", "send"} {
+		t.Run(mode, func(t *testing.T) {
+			raw := strings.Replace(validConfig, "signer:\n  address: '0x0000000000000000000000000000000000000001'\n", "", 1)
+			raw += "mode: " + mode + "\ntxManager:\n  maxFeeGwei: 30\n"
+			cfg, err := Load(writeConfig(t, raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Signer.Address != "" || cfg.Signer.KeyEnv != DefaultKeyEnv || cfg.Chain.Multicall3 != StandardMulticall3 {
+				t.Fatalf("unexpected defaults: %+v", cfg)
+			}
+		})
+	}
+}
+
+func TestRuntimePolicyRejectsLegacyOverrides(t *testing.T) {
+	for name, override := range map[string]string{
+		"poll": "pollInterval: 1s\n", "operation": "operationTimeout: 1s\n", "http": "httpTimeout: 1s\n",
+		"confirmations": "txManager: {confirmations: 1}\n", "transaction poll": "txManager: {pollInterval: 1s}\n",
+		"horizon": "txManager: {horizon: {maxBlocks: 8}}\n", "broadcast": "txManager: {broadcastTimeoutMs: 1000}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, validConfig+override)); err == nil {
+				t.Fatal("legacy runtime policy override accepted")
+			}
+		})
+	}
+}
+
+func TestRuntimeRejectsManualProviders(t *testing.T) {
+	for _, name := range []string{"static", "rpc", "http", "cowswap", "merkl", "liquidlane-rfq", "redemptions", "securitize"} {
+		t.Run(name, func(t *testing.T) {
+			raw := validConfig + "    providers:\n      - name: " + name + "\n        config: {}\n"
+			if _, err := Load(writeConfig(t, raw)); err == nil || !strings.Contains(err.Error(), "authenticated recipe") {
+				t.Fatalf("manual provider accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
+	var fingerprint string
+	for _, tc := range []struct {
+		name, fields string
+		invalid      bool
+	}{
+		{"omitted", "", false}, {"zero", "  timeoutSeconds: 0\n  maxResponseBytes: 0\n", false}, {"fixed", "  timeoutSeconds: 10\n  maxResponseBytes: 2097152\n", false}, {"different timeout", "  timeoutSeconds: 11\n", true}, {"different bound", "  maxResponseBytes: 1048576\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Replace(validConfig, "curator:\n", "curator:\n"+tc.fields, 1)
+			cfg, err := Load(writeConfig(t, raw))
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("legacy curator transport override accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Curator.TimeoutSeconds != permissions.HostTimeoutSeconds || cfg.Curator.MaxResponseBytes != permissions.HostMaxResponseBytes {
+				t.Fatalf("effective curator policy %+v", cfg.Curator)
+			}
+			got := cfg.StrategyFingerprint(cfg.Strategies[0], common.HexToAddress("0x0000000000000000000000000000000000000003"))
+			if fingerprint == "" {
+				fingerprint = got
+			} else if fingerprint != got {
+				t.Fatal("equivalent curator policy changed fingerprint")
 			}
 		})
 	}

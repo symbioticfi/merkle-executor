@@ -18,6 +18,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/go-logr/logr"
+	"github.com/symbioticfi/merkle-executor/internal/chain"
+	"github.com/symbioticfi/merkle-executor/internal/curator"
+	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/internal/signer"
+	"github.com/symbioticfi/merkle-executor/internal/txmanager"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 
 	async "github.com/symbioticfi/merkle-executor/api/bindings/asyncredeemvault"
 	"github.com/symbioticfi/merkle-executor/internal/config"
@@ -174,37 +181,19 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	requestStrategy := cfg.Strategies[0]
 	requestStrategy.Name, requestStrategy.Executor = "request", requestExecutor.Hex()
 	requestConfig := redemptions.Config{Family: "centrifuge", Mode: "request", ChainID: 31337, Token: share.Hex(), OutputAsset: asset.Hex(), Target: issuer.Hex(), Amount: "100", Action: "1:0"}
-	requestStrategy.Providers = []config.Provider{{Name: "redemptions", Config: serviceNode(t, requestConfig)}}
+	requestStrategy.Providers = nil
 	claimStrategy := requestStrategy
 	claimStrategy.Name, claimStrategy.Executor = "claim", claimExecutor.Hex()
 	claimConfig := requestConfig
-	claimConfig.Mode, claimConfig.Action, claimConfig.Amount = "claim", "0:0", "150"
-	claimStrategy.Providers = []config.Provider{{Name: "redemptions", Config: serviceNode(t, claimConfig)}}
+	claimConfig.Mode, claimConfig.Action, claimConfig.Amount = "claim", "0:0", "100"
+	claimStrategy.Providers = nil
 	cfg.Strategies = []config.Strategy{requestStrategy, claimStrategy}
 	path := writeCLIConfig(t, directory, cfg)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 
-	mining, stopMining := context.WithCancel(ctx)
-	miningDone := make(chan struct{})
-	go func() {
-		defer close(miningDone)
-		ticker := time.NewTicker(25 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-mining.Done():
-				return
-			case <-ticker.C:
-				if err := client.Client().CallContext(mining, nil, "evm_mine"); err != nil && mining.Err() == nil {
-					t.Error(err)
-					return
-				}
-			}
-		}
-	}()
-	t.Cleanup(func() { stopMining(); <-miningDone })
+	startServiceConfirmationMining(t, ctx, client, caller)
 	run := func() {
-		if err := runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
+		if err := runIssuerFixture(ctx, path, []redemptions.Config{requestConfig, claimConfig}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -248,7 +237,7 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 		t.Fatal("matured issuer claim did not finish as its own confirmed execution")
 	}
 	if read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Int64() != 200 || read(issuer, issuerArtifact, "claimCount").Int64() != 1 {
-		t.Fatal("claim failed to cap configured 150 shares at the claimable 100 shares")
+		t.Fatal("claim failed to redeem the exact committed 100 shares")
 	}
 	run()
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 2 {
@@ -257,4 +246,64 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	if found, err := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); err != nil || found {
 		t.Fatalf("completed claim retained nonce ownership: %v", err)
 	}
+}
+
+// The catalogue intentionally contains no local-chain deployments. This fixture
+// constructs reviewed providers directly at the SDK boundary; production YAML
+// continues to reject manual runtime providers and uses authenticated discovery.
+func runIssuerFixture(ctx context.Context, path string, policies []redemptions.Config) error {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	chainID := new(big.Int).SetUint64(cfg.Chain.ChainID)
+	client, err := chain.Dial(ctx, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID, common.HexToAddress(config.StandardMulticall3))
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	source, err := curator.New(cfg.Curator, &http.Client{Timeout: cfg.HTTPTimeout})
+	if err != nil {
+		return err
+	}
+	targets := make([]common.Address, len(cfg.Strategies))
+	for i, strategy := range cfg.Strategies {
+		targets[i] = common.HexToAddress(strategy.Executor)
+	}
+	accounts, caller, err := discoverIdentity(ctx, client, targets)
+	if err != nil {
+		return err
+	}
+	strategies := make([]keeper.Strategy, len(cfg.Strategies))
+	for i, strategy := range cfg.Strategies {
+		runtime, err := redemptions.New(policies[i], providerRegistry.Deps{Chain: client, Log: logr.Discard()})
+		if err != nil {
+			return err
+		}
+		revision, _ := json.Marshal(policies[i])
+		strategies[i] = keeper.Strategy{Config: keeper.Config{Name: strategy.Name, Executor: strategy.Executor, Account: accounts[targets[i]].Hex(), Interval: strategy.Interval, Revision: string(revision)}, Providers: []provider.Provider{runtime}}
+	}
+	store, err := state.Open(cfg.StateDir)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if err = bindState(store, cfg.Chain.ChainID, caller.Hex()); err != nil {
+		return err
+	}
+	txSigner, err := signer.FromEnv(cfg.Signer.KeyEnv)
+	if err != nil {
+		return err
+	}
+	sender, err := txmanager.New(client, txSigner, chainID, store, cfg.TxManager.EngineConfig(), logr.Discard())
+	if err != nil {
+		return err
+	}
+	if err = sender.Start(ctx); err != nil {
+		return err
+	}
+	defer sender.Close()
+	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: cfg.TxManager.Confirmations}
+	worker := keeper.Keeper{Store: store, Planner: planner, Sender: sender, Strategies: strategies, Mode: "send", OperationTimeout: cfg.OperationTimeout, Log: logr.Discard()}
+	return worker.Tick(ctx)
 }

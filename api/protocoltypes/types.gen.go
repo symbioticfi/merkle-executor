@@ -79,6 +79,10 @@ type CowQuoteRequest struct {
 	ValidTo             int64  `json:"validTo"`
 	AppData             string `json:"appData"`
 	PartiallyFillable   bool   `json:"partiallyFillable"`
+	AppDataHash         string `json:"appDataHash,omitempty"`
+	PriceQuality        string `json:"priceQuality"`
+	SellTokenBalance    string `json:"sellTokenBalance"`
+	BuyTokenBalance     string `json:"buyTokenBalance"`
 }
 
 type CowOrder struct {
@@ -97,12 +101,15 @@ type CowOrder struct {
 	SigningScheme     string `json:"signingScheme"`
 	Signature         string `json:"signature"`
 	From              string `json:"from"`
+	AppDataHash       string `json:"appDataHash,omitempty"`
+	QuoteID           int64  `json:"quoteId,omitempty"`
 }
 
 type CowQuoteResponse struct {
 	Quote      CowOrder `json:"quote"`
 	ID         int64    `json:"id"`
 	Expiration string   `json:"expiration"`
+	Verified   bool     `json:"verified"`
 }
 
 type CowOrderStatus struct {
@@ -204,4 +211,8 @@ type RfqOrder struct {
 type RfqOrdersResponse struct {
 	Orders []RfqOrder      `json:"orders"`
 	Cursor json.RawMessage `json:"cursor"`
+}
+
+type CowSlippageResponse struct {
+	SlippageBPS int64 `json:"slippageBps"`
 }

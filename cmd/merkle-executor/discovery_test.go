@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"testing"
@@ -66,6 +67,24 @@ func (r *discoveryReader) CallContract(ctx context.Context, m ethereum.CallMsg, 
 	if r.mode == "malformed" {
 		return []byte{1}, nil
 	}
+	binding := executor.NewRecipeExecutor()
+	if bytes.Equal(m.Data, binding.PackCaller()) {
+		caller := common.HexToAddress("0xabcd")
+		switch r.mode {
+		case "zero caller":
+			caller = common.Address{}
+		case "different callers":
+			caller = *m.To
+		case "malformed caller":
+			return []byte{1}, nil
+		case "caller member":
+			return nil, errors.New("private RPC")
+		}
+		return binding.GetABI().Methods["caller"].Outputs.Pack(caller)
+	}
+	if !bytes.Equal(m.Data, binding.PackAccount()) {
+		r.t.Fatal("unexpected getter")
+	}
 	account := common.BigToAddress(new(big.Int).Add(m.To.Big(), big.NewInt(0x700)))
 	if r.mode == "zero account" {
 		account = common.Address{}
@@ -100,7 +119,7 @@ func (r discoveryBatch) BatchRead(ctx context.Context, qs []protocolio.ReadReque
 	return results, nil
 }
 func TestStartupAccountsAreAtomicDeduplicatedAndCanonicallyClosed(t *testing.T) {
-	for _, mode := range []string{"valid", "chunked", "zero executor", "null head", "negative head", "overflow head", "member", "malformed", "zero account", "reorg", "wrong closing height", "closing error", "transport", "shape", "canceled"} {
+	for _, mode := range []string{"valid", "chunked", "zero executor", "null head", "negative head", "overflow head", "member", "malformed", "zero account", "zero caller", "different callers", "malformed caller", "caller member", "reorg", "wrong closing height", "closing error", "transport", "shape", "canceled"} {
 		t.Run(mode, func(t *testing.T) {
 			r := &discoveryReader{t: t, head: &types.Header{Number: big.NewInt(12)}, mode: mode}
 			targets := []common.Address{common.HexToAddress("0x01"), common.HexToAddress("0x02"), common.HexToAddress("0x01")}
@@ -120,9 +139,9 @@ func TestStartupAccountsAreAtomicDeduplicatedAndCanonicallyClosed(t *testing.T) 
 			if mode == "canceled" {
 				cancel()
 			}
-			result, err := discoverAccounts(ctx, discoveryBatch{r}, targets)
+			result, caller, err := discoverIdentity(ctx, discoveryBatch{r}, targets)
 			if mode == "valid" || mode == "chunked" {
-				if err != nil || len(result) != want || r.calls != want || r.headers != 2 || r.batches != (want+255)/256 {
+				if err != nil || len(result) != want || r.calls != 2*want || r.headers != 2 || r.batches != (2*want+255)/256 || caller != common.HexToAddress("0xabcd") {
 					t.Fatalf("discovery result%v calls%d headers%d batches%d: %v", result, r.calls, r.headers, r.batches, err)
 				}
 				for _, target := range targets {
@@ -142,8 +161,8 @@ func TestStartupAccountsAreAtomicDeduplicatedAndCanonicallyClosed(t *testing.T) 
 }
 func TestStartupAccountsLegacyReaderKeepsSamePin(t *testing.T) {
 	r := &discoveryReader{t: t, head: &types.Header{Number: big.NewInt(12)}}
-	got, err := discoverAccounts(t.Context(), r, []common.Address{common.HexToAddress("0x01")})
-	if err != nil || len(got) != 1 || r.calls != 1 || r.headers != 2 {
+	got, caller, err := discoverIdentity(t.Context(), r, []common.Address{common.HexToAddress("0x01")})
+	if err != nil || len(got) != 1 || r.calls != 2 || r.headers != 2 || caller != common.HexToAddress("0xabcd") {
 		t.Fatal(got, err)
 	}
 }

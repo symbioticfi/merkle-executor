@@ -48,7 +48,7 @@ func TestAdvanceBatchesButPreservesTerminalPrecedence(t *testing.T) {
 	for _, mode := range []string{"filled", "expired", "partial", "invalidated", "domain", "local identity"} {
 		t.Run(mode, func(t *testing.T) {
 			r := &cowBatchReader{t: t, filled: big.NewInt(990)}
-			p, err := Factory(node(t, negativeConfig("http://127.0.0.1:1")), registry.Deps{Chain: r})
+			p, err := fixtureFactory(node(t, negativeConfig("http://127.0.0.1:1")), registry.Deps{Chain: r})
 			if err != nil {
 				t.Fatal(err)
 			}

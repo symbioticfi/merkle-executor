@@ -29,7 +29,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/merkle-executor/internal/config"
-	"github.com/symbioticfi/merkle-executor/internal/providers/data"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
@@ -113,6 +112,15 @@ func startServiceAnvil(t *testing.T, ctx context.Context) (*ethclient.Client, st
 			if chainID.Cmp(big.NewInt(31337)) != 0 {
 				t.Fatal("unexpected local chain identity")
 			}
+			// Install the vendored fixture runtime at the official address so daemon
+			// tests exercise the same fixed aggregate destination as production.
+			runtime, err := client.CallContract(ctx, ethereum.CallMsg{Data: loadMerklArtifact(t, "Multicall3").Bytecode}, nil)
+			if err != nil || len(runtime) == 0 {
+				t.Fatal("Multicall3 fixture runtime unavailable", err)
+			}
+			if err := client.Client().CallContext(ctx, nil, "anvil_setCode", common.HexToAddress(config.StandardMulticall3), hexutil.Bytes(runtime)); err != nil {
+				t.Fatal(err)
+			}
 			return client, endpoint
 		}
 		select {
@@ -123,6 +131,47 @@ func startServiceAnvil(t *testing.T, ctx context.Context) (*ethclient.Client, st
 		case <-ticker.C:
 		}
 	}
+}
+
+// The fixed polling profile needs a stable head while checking ancestry. Mine
+// exactly the required descendants after each included caller transaction.
+func startServiceConfirmationMining(t *testing.T, ctx context.Context, client *ethclient.Client, caller common.Address) {
+	t.Helper()
+	mining, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		var confirmedNonce uint64
+		for {
+			select {
+			case <-mining.Done():
+				return
+			case <-ticker.C:
+				nonce, err := client.NonceAt(mining, caller, nil)
+				if err != nil {
+					if mining.Err() == nil {
+						t.Error(err)
+					}
+					return
+				}
+				if nonce <= confirmedNonce {
+					continue
+				}
+				for range config.DefaultConfirmations {
+					if err := client.Client().CallContext(mining, nil, "evm_mine"); err != nil {
+						if mining.Err() == nil {
+							t.Error(err)
+						}
+						return
+					}
+				}
+				confirmedNonce = nonce
+			}
+		}
+	}()
+	t.Cleanup(func() { stop(); <-done })
 }
 
 func serviceSeedTransaction(t *testing.T, ctx context.Context, client *ethclient.Client, from common.Address, to *common.Address, calldata []byte) *types.Receipt {
@@ -165,36 +214,18 @@ func serviceNode(t *testing.T, value any) yaml.Node {
 	return node
 }
 
-func serviceRecipe(t *testing.T, leaf common.Hash) recipes.Recipe {
+func serviceRecipe(t *testing.T, leaf common.Hash, token, account common.Address) recipes.Recipe {
 	t.Helper()
-	valueType, err := abi.NewType("uint256", "", nil)
-	if err != nil {
-		t.Fatal(err)
+	result := func(index int64) *big.Int {
+		return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(index))
 	}
-	leavesType, err := abi.NewType("bytes32[]", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bindingsType, err := abi.NewType("uint256[][]", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pack := func(args abi.Arguments, values ...any) []byte {
-		encoded, err := args.Pack(values...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return encoded
-	}
-	input := func(index int64) *big.Int {
-		return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(1), 216), big.NewInt(index))
-	}
-	binary := abi.Arguments{{Type: valueType}, {Type: valueType}}
-	manage := abi.Arguments{{Type: valueType}, {Type: leavesType}, {Type: bindingsType}}
-	return recipes.Recipe{Steps: [][]byte{
-		append([]byte{recipes.LessOrEqual}, pack(binary, input(0), input(1))...),
-		append([]byte{recipes.LessOrEqual}, pack(binary, input(2), input(1))...),
-		append([]byte{recipes.Manage}, pack(manage, big.NewInt(1), [][32]byte{leaf}, [][]*big.Int{{new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), input(0))}})...),
+	input := new(big.Int).Lsh(big.NewInt(1), 216)
+	query := issuerStep(t, 0, []string{"address", "bytes", "uint256[]", "uint256"}, token, erc20.NewERC20().PackBalanceOf(account), []*big.Int{}, new(big.Int))[1:]
+	return recipes.Recipe{Queries: [][]byte{query}, Steps: [][]byte{
+		issuerStep(t, recipes.Read, []string{"uint256"}, new(big.Int)),
+		issuerStep(t, recipes.Min, []string{"uint256", "uint256"}, result(0), big.NewInt(17)),
+		issuerStep(t, recipes.Equal, []string{"uint256", "uint256"}, input, result(1)),
+		issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{leaf}, [][]*big.Int{{new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), input)}}),
 	}}
 }
 
@@ -242,7 +273,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	serviceSeedTransaction(t, ctx, client, owner, &accountAddress, servicePack(t, accountArtifact, "configure", leaf.Hash, [][32]byte{leaf.Hash}, executorAddress))
 	serviceSeedTransaction(t, ctx, client, owner, &tokenAddress, servicePack(t, tokenArtifact, "mint", accountAddress, big.NewInt(1000)))
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, executorABI.PackSetCaller(caller))
-	recipe := serviceRecipe(t, leaf.Hash)
+	recipe := serviceRecipe(t, leaf.Hash, tokenAddress, accountAddress)
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
 
 	directory := t.TempDir()
@@ -277,20 +308,6 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	}))
 	defer permissionServer.Close()
 	cfg.Curator.URL = permissionServer.URL + "/api/v1"
-	var httpCalls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		httpCalls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]string{"minimum": "900"}); err != nil {
-			t.Error(err)
-		}
-	}))
-	t.Cleanup(server.Close)
-	cfg.Strategies[0].Providers = []config.Provider{
-		{Name: "static", Config: serviceNode(t, data.StaticConfig{Inputs: map[uint]string{0: "17"}})},
-		{Name: "rpc", Config: serviceNode(t, data.RPCConfig{Reads: []data.Read{{Target: tokenAddress.Hex(), Data: hexutil.Encode(tokenABI.PackBalanceOf(accountAddress)), Input: 1}}})},
-		{Name: "http", Config: serviceNode(t, data.HTTPConfig{URL: server.URL, Inputs: map[uint]string{2: "/minimum"}})},
-	}
 	for name, mutate := range map[string]func(*config.Config){
 		"chain":  func(c *config.Config) { c.Chain.ChainID++ },
 		"caller": func(c *config.Config) { c.Signer.Address = owner.Hex() },
@@ -303,6 +320,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 			t.Fatalf("plan accepted wrong %s identity", name)
 		}
 	}
+	cfg.Signer.Address = ""
 	path := writeCLIConfig(t, directory, cfg)
 	for _, invalidKey := range []string{"invalid-test-key-that-plan-must-ignore", ""} {
 		t.Setenv(cfg.Signer.KeyEnv, invalidKey)
@@ -315,7 +333,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 			t.Fatal(err)
 		}
 		plan, exists := plans["funding"]
-		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 3 || plan.Outputs[0].Inputs[0] != "17" || plan.Outputs[1].Inputs[1] != "1000" || plan.Outputs[2].Inputs[2] != "900" {
+		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 6 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
 			t.Fatal("plan lost configuration, provider output or transaction")
 		}
 	}
@@ -324,6 +342,18 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	}
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 0 {
 		t.Fatalf("plan sent a transaction: nonce=%d / %v", nonce, err)
+	}
+
+	mismatchedKey, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(mismatchedKey)))
+	if err := runBot(ctx, path, true, false, new(bytes.Buffer)); err == nil {
+		t.Fatal("send accepted a key that is not executor caller")
+	}
+	if _, err := os.Stat(cfg.StateDir); !os.IsNotExist(err) {
+		t.Fatal("caller mismatch created durable state", err)
 	}
 
 	// Failed curator acquisition/validation must stop the real send path before
@@ -358,25 +388,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 
 	// Finality requires descendants after inclusion; mine local empty blocks while
 	// the real transaction manager confirms and acknowledges the signed transaction.
-	mining, stopMining := context.WithCancel(ctx)
-	miningDone := make(chan struct{})
-	go func() {
-		defer close(miningDone)
-		ticker := time.NewTicker(25 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-mining.Done():
-				return
-			case <-ticker.C:
-				if err := client.Client().CallContext(mining, nil, "evm_mine"); err != nil && mining.Err() == nil {
-					t.Error(err)
-					return
-				}
-			}
-		}
-	}()
-	t.Cleanup(func() { stopMining(); <-miningDone })
+	startServiceConfirmationMining(t, ctx, client, caller)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
 		t.Fatalf("send-once failed: %v", err)
@@ -385,7 +397,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if found, err := state.Read(cfg.StateDir, "strategy.funding.v1", &job); err != nil || !found {
 		t.Fatalf("durable job missing: %v", err)
 	}
-	if job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || job.Result.Hash == (common.Hash{}) || len(job.Progress) != 3 || job.FinishedAt.IsZero() {
+	if job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || job.Result.Hash == (common.Hash{}) || len(job.Progress) != 6 || job.FinishedAt.IsZero() {
 		t.Fatalf("job did not settle: %+v", job.Result)
 	}
 	for _, progress := range job.Progress {
@@ -414,13 +426,12 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 			t.Fatalf("post-execution balance expected %d: %v / %v", expected, balance, err)
 		}
 	}
-	requests := httpCalls.Load()
 	permissionRequests := curatorCalls.Load()
 	curatorUnavailable.Store(true)
 	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
 		t.Fatalf("restart failed: %v", err)
 	}
-	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || httpCalls.Load() != requests || curatorCalls.Load() != permissionRequests {
+	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || curatorCalls.Load() != permissionRequests {
 		t.Fatalf("restart repeated completed work: nonce=%d / %v", nonce, err)
 	}
 }

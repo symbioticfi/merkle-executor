@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,10 +21,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/go-errors/errors"
 	reactor "github.com/symbioticfi/merkle-executor/api/bindings/liquidlanereactor"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	"github.com/symbioticfi/merkle-executor/internal/config"
-	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlanerfq"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
@@ -70,7 +70,6 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	tokenIn := serviceSeedTransaction(t, ctx, client, owner, nil, tokenArtifact.Bytecode).ContractAddress
 	tokenOut := serviceSeedTransaction(t, ctx, client, owner, nil, tokenArtifact.Bytecode).ContractAddress
 	reactorAddress := serviceSeedTransaction(t, ctx, client, owner, nil, reactorArtifact.Bytecode).ContractAddress
-	multicall := serviceSeedTransaction(t, ctx, client, owner, nil, loadMerklArtifact(t, "Multicall3").Bytecode).ContractAddress
 	executorArtifact := loadServiceArtifact(t, "RecipeExecutor")
 	executorAddress := serviceSeedTransaction(t, ctx, client, owner, nil, append(bytes.Clone(executorArtifact.Bytecode), servicePack(t, executorArtifact, "", owner, account)...)).ContractAddress
 	serviceSeedTransaction(t, ctx, client, owner, &tokenIn, servicePack(t, tokenArtifact, "mint", account, big.NewInt(1000)))
@@ -88,7 +87,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := head.Time + 3600
+	deadline := head.Time + 600
 	request := reactor.IReactorRequest{TokenIn: tokenIn, AmountIn: big.NewInt(1000), Outputs: []reactor.IReactorOutput{{Token: tokenOut, Amount: big.NewInt(900), Recipient: account}}, Deadline: new(big.Int).SetUint64(deadline), Nonce: big.NewInt(7), Protocol: owner}
 	// Leaf-fixed buffer independently mirrors the reviewed Request hash program.
 	words := []common.Hash{crypto.Keccak256Hash([]byte("Request(address tokenIn,uint256 amountIn,Output[] outputs,uint256 deadline,uint256 nonce,address protocol)Output(address token,uint256 amount,address recipient)")), common.BytesToHash(tokenIn.Bytes()), common.BigToHash(request.AmountIn), {}, common.BigToHash(request.Deadline), common.BigToHash(request.Nonce), common.BytesToHash(owner.Bytes()), crypto.Keccak256Hash([]byte("Output(address token,uint256 amount,address recipient)")), common.BytesToHash(tokenOut.Bytes()), common.BigToHash(big.NewInt(900)), common.BytesToHash(account.Bytes())}
@@ -106,6 +105,11 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	for i := 36; i < 68; i++ {
 		leaves[0].DataMask[i] = 0xff
 	}
+	for _, word := range []int{2, 4, 5, 9} {
+		for i := 132 + 32*word; i < 132+32*(word+1); i++ {
+			leaves[1].DataMask[i] = 0xff
+		}
+	}
 	for i := range leaves {
 		leaves[i].Hash, err = recipes.HashLeaf(leaves[i])
 		if err != nil {
@@ -122,7 +126,23 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	serviceSeedTransaction(t, ctx, client, owner, &account, servicePack(t, accountArtifact, "configure", root, [][32]byte{leaves[0].Hash, leaves[1].Hash}, executorAddress))
 	binding := executor.NewRecipeExecutor()
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetCaller(caller))
-	recipe := recipes.Recipe{Steps: [][]byte{issuerStep(t, recipes.Approve, []string{"uint256", "address", "address", "bytes32"}, big.NewInt(1000), tokenIn, reactorAddress, leaves[0].Hash), issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{leaves[1].Hash}, [][]*big.Int{{}})}}
+	resultOperand := func(index int64) *big.Int {
+		return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(index))
+	}
+	inputOperand := func(index int64) *big.Int {
+		return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(1), 216), big.NewInt(index))
+	}
+	fieldBinding := func(word int, value *big.Int) *big.Int {
+		return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(int64(132+32*word)), 224), value)
+	}
+	query := issuerStep(t, 0, []string{"address", "bytes", "uint256[]", "uint256"}, tokenIn, erc20.NewERC20().PackBalanceOf(account), []*big.Int{}, new(big.Int))[1:]
+	recipe := recipes.Recipe{Queries: [][]byte{query}, Steps: [][]byte{
+		issuerStep(t, recipes.Read, []string{"uint256"}, new(big.Int)),
+		issuerStep(t, recipes.MulDiv, []string{"uint256", "uint256", "uint256"}, resultOperand(0), big.NewInt(9), big.NewInt(10)),
+		issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, resultOperand(1), inputOperand(0)),
+		issuerStep(t, recipes.Approve, []string{"uint256", "address", "address", "bytes32"}, resultOperand(0), tokenIn, reactorAddress, leaves[0].Hash),
+		issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{leaves[1].Hash}, [][]*big.Int{{fieldBinding(2, resultOperand(0)), fieldBinding(4, inputOperand(1)), fieldBinding(5, inputOperand(2)), fieldBinding(9, inputOperand(0))}}),
+	}}
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
 	var curatorCalls, quotes, gets, posts atomic.Int32
 	var accepted atomic.Bool
@@ -184,14 +204,14 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	cfg := testCLIConfig(directory)
 	cfg.Mode = "send"
 	cfg.Chain.RPCURL = endpoint
-	cfg.Chain.Multicall3 = multicall.Hex()
 	cfg.Signer.Address = caller.Hex()
 	cfg.Curator.URL = curator.URL + "/api/v1"
 	cfg.Strategies[0].Executor = executorAddress.Hex()
-	cfg.Strategies[0].Providers = []config.Provider{{Name: "liquidlane-rfq", Config: serviceNode(t, liquidlanerfq.Config{HTTP: protocolio.HTTPConfig{URL: api.URL + "/api/v1"}, Reactor: reactorAddress.Hex(), Protocol: owner.Hex(), TokenIn: tokenIn.Hex(), TokenOut: tokenOut.Hex(), AmountIn: "1000", MinAmountOut: "900", MinValiditySeconds: 60, MaxValiditySeconds: 7200, Action: "1:0", MaxLookupPages: 10, EventRangeBlocks: 2000})}}
+	fixtureURL, _ := url.Parse(api.URL)
+	apiHTTP := &http.Client{Transport: serviceRewriteTransport{host: "swap.symbiotic.fi", target: fixtureURL}, Timeout: 15 * time.Second}
 	path := writeCLIConfig(t, directory, cfg)
 	var planOutput bytes.Buffer
-	if err = runBot(ctx, path, true, true, &planOutput); err != nil {
+	if err = runBotWithHTTP(ctx, path, true, true, &planOutput, apiHTTP); err != nil {
 		t.Fatal(err)
 	}
 	var plans map[string]keeper.Plan
@@ -199,34 +219,16 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := plans["funding"]
-	if len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0].Actions["1:0"], signData) || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
+	if len(plan.Outputs) != 6 || !bytes.Equal(plan.Outputs[2].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
 		t.Fatal("plan did not preserve exact sign or published early")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
 		t.Fatal("plan signed", nonce, e)
 	}
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
-	mining, stopMining := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(25 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-mining.Done():
-				return
-			case <-ticker.C:
-				if e := client.Client().CallContext(mining, nil, "evm_mine"); e != nil && mining.Err() == nil {
-					t.Error(e)
-					return
-				}
-			}
-		}
-	}()
-	t.Cleanup(func() { stopMining(); <-done })
+	startServiceConfirmationMining(t, ctx, client, caller)
 	run := func() {
-		if e := runBot(ctx, path, true, false, new(bytes.Buffer)); e != nil {
+		if e := runBotWithHTTP(ctx, path, true, false, new(bytes.Buffer), apiHTTP); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -239,14 +241,14 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	}
 	run()
 	job := load()
-	if job.Phase != "authorized" || len(job.Progress) != 1 || job.Progress[0].Outcome != "publication-uncertain" || job.Result.Execution == nil || posts.Load() != 1 || quotes.Load() != 2 {
+	if job.Phase != "authorized" || len(job.Progress) != 6 || job.Progress[2].Outcome != "publication-uncertain" || job.Result.Execution == nil || posts.Load() != 1 || quotes.Load() != 2 {
 		t.Fatalf("ambiguous publication lost ownership: phase=%s progress=%+v posts=%d quotes=%d", job.Phase, job.Progress, posts.Load(), quotes.Load())
 	}
-	originalData := bytes.Clone(job.Plan.Outputs[0].Data)
+	originalData := bytes.Clone(job.Plan.Outputs[2].Data)
 	treeCalls := curatorCalls.Load()
 	run()
 	job = load()
-	if job.Phase != "authorized" || job.Progress[0].Done || job.Progress[0].Reference != orderID || posts.Load() != 1 || quotes.Load() != 2 || curatorCalls.Load() != treeCalls || !bytes.Equal(originalData, job.Plan.Outputs[0].Data) {
+	if job.Phase != "authorized" || job.Progress[2].Done || job.Progress[2].Reference != orderID || posts.Load() != 1 || quotes.Load() != 2 || curatorCalls.Load() != treeCalls || !bytes.Equal(originalData, job.Plan.Outputs[2].Data) {
 		t.Fatal("API-only fill released work or restart changed identity")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 {
@@ -271,7 +273,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	}
 	run()
 	job = load()
-	if job.Phase != "settled" || !job.Progress[0].Done || job.Progress[0].Outcome != "settled" {
+	if job.Phase != "settled" || !job.Progress[2].Done || job.Progress[2].Outcome != "settled" {
 		t.Fatal("canonical fill did not settle", job.Phase, job.Progress)
 	}
 	for token, want := range map[common.Address]int64{tokenIn: 0, tokenOut: 950} {
@@ -288,4 +290,25 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	if found, e := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); e != nil || found {
 		t.Fatal("settled transaction retained nonce journal", e)
 	}
+}
+
+// serviceRewriteTransport redirects one official provider hostname to a local
+// API fixture while allowing only loopback curator endpoints otherwise.
+type serviceRewriteTransport struct {
+	host   string
+	target *url.URL
+}
+
+func (f serviceRewriteTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	copy := r.Clone(r.Context())
+	u := *r.URL
+	copy.URL = &u
+	if r.URL.Hostname() == f.host {
+		copy.URL.Scheme = f.target.Scheme
+		copy.URL.Host = f.target.Host
+		copy.Host = f.target.Host
+	} else if r.URL.Hostname() != "127.0.0.1" && r.URL.Hostname() != "localhost" {
+		return nil, errors.New("fixture blocked external HTTP")
+	}
+	return http.DefaultTransport.RoundTrip(copy)
 }

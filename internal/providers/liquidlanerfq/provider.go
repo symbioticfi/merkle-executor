@@ -38,6 +38,8 @@ type Config struct {
 	Action             string                `yaml:"action"`
 	AmountInInput      *uint                 `yaml:"amountInInput"`
 	AmountOutInput     *uint                 `yaml:"amountOutInput"`
+	DeadlineInput      *uint                 `yaml:"deadlineInput"`
+	NonceInput         *uint                 `yaml:"nonceInput"`
 	SolverIDs          []string              `yaml:"solverIds"`
 	MaxLookupPages     int                   `yaml:"maxLookupPages"`
 	EventRangeBlocks   uint64                `yaml:"eventRangeBlocks"`
@@ -86,6 +88,11 @@ func Factory(raw yaml.Node, deps registry.Deps) (provider.Provider, error) {
 	if err := parse.DecodeStrict(raw, &c); err != nil {
 		return nil, err
 	}
+	return New(c, deps)
+}
+
+// New accepts the immutable carrier derived from an authenticated recipe.
+func New(c Config, deps registry.Deps) (*Provider, error) {
 	if err := protocolio.Action(c.Action); err != nil {
 		return nil, err
 	}
@@ -114,11 +121,16 @@ func Factory(raw yaml.Node, deps registry.Deps) (provider.Provider, error) {
 	if c.MaxLookupPages < 1 || c.MaxLookupPages > 100 || c.EventRangeBlocks < 1 || c.EventRangeBlocks > 100000 {
 		return nil, errors.New("RFQ lookup pages must be 1..100 and event range 1..100000")
 	}
-	for _, index := range []*uint{c.AmountInInput, c.AmountOutInput} {
+	seenInputs := map[uint]bool{}
+	for _, index := range []*uint{c.AmountInInput, c.AmountOutInput, c.DeadlineInput, c.NonceInput} {
 		if index != nil {
 			if err := parse.InputIndex(*index); err != nil {
 				return nil, err
 			}
+			if seenInputs[*index] {
+				return nil, errors.New("RFQ input mappings must differ")
+			}
+			seenInputs[*index] = true
 		}
 	}
 	if c.AmountInInput != nil && c.AmountOutInput != nil && *c.AmountInInput == *c.AmountOutInput {
@@ -253,6 +265,12 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 		if p.cfg.AmountOutInput != nil {
 			out.Inputs[*p.cfg.AmountOutInput] = request.Outputs[0].Amount.String()
 		}
+		if p.cfg.DeadlineInput != nil {
+			out.Inputs[*p.cfg.DeadlineInput] = request.Deadline.String()
+		}
+		if p.cfg.NonceInput != nil {
+			out.Inputs[*p.cfg.NonceInput] = request.Nonce.String()
+		}
 		return out, nil
 	}
 	return provider.Output{}, provider.ErrNotReady
@@ -283,6 +301,12 @@ func (p *Provider) persisted(s provider.Snapshot, out provider.Output) (prepared
 	}
 	if p.cfg.AmountOutInput != nil {
 		expected[*p.cfg.AmountOutInput] = request.Outputs[0].Amount.String()
+	}
+	if p.cfg.DeadlineInput != nil {
+		expected[*p.cfg.DeadlineInput] = request.Deadline.String()
+	}
+	if p.cfg.NonceInput != nil {
+		expected[*p.cfg.NonceInput] = request.Nonce.String()
 	}
 	if len(out.Inputs) != len(expected) {
 		return d, domain, errors.New("RFQ persisted inputs mismatch")

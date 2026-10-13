@@ -120,7 +120,7 @@ func checkStateIdentity(load func(string, any) (bool, error), chainID uint64, ca
 	if !found {
 		return errors.New("no deployment identity in state directory")
 	}
-	if saved.ChainID != chainID || saved.Caller != common.HexToAddress(caller) {
+	if saved.ChainID != chainID || saved.Caller == (common.Address{}) || caller != "" && saved.Caller != common.HexToAddress(caller) {
 		return errors.New("state directory belongs to another chain or caller")
 	}
 	return nil

@@ -43,9 +43,8 @@ No schema or endpoint is fetched automatically during a normal build.
   disabled. Run `python3 internal/providers/merkl/testdata/generate.py`, then
   `make generate`. These local deployments establish aggregation and pinned-state
   behavior, not the existence or correctness of any external chain deployment.
-- CoW source: <https://github.com/cowprotocol/services/blob/main/crates/orderbook/openapi.yml>
-  and <https://docs.cow.fi/cow-protocol/reference/core/signing-schemes>, inspected
-  2026-09-27. The settlement ABI subset is `domainSeparator()` and
+- CoW wire schema, production constants and SDK AUTO slippage are pinned in
+  [CoW provenance](COW_AUTO.md), refreshed 2026-10-13. The settlement ABI subset is `domainSeparator()` and
   `filledAmount(bytes)`. Full-fill sell orders use the filled sell amount; the
   invalidation sentinel is not success.
 - `api/abi/LiquidConnector.json`: full compiled ABI extracted from the adapters
@@ -57,11 +56,12 @@ No schema or endpoint is fetched automatically during a normal build.
   a source update requires deliberately refreshing this file.
 - The ten LL/Noon issuer ABI subsets are sourced from pinned adapters interfaces and
   issuer contracts. [Liquid Lane provenance](../../docs/LIQUID-LANE-ASSETS.md)
-  records every source, hash, address catalogue and read-only topology check.
+  records every source, hash, embedded catalogue policy and read-only topology check.
 - Four Securitize ABI subsets cover fund decimals, topology and the distinct
   legacy/modern offramp versions. [Securitize provenance](../../docs/SECURITIZE-ASSETS.md)
   records the official public feed, verified implementation sources and coverage.
-  Its local catalogue is a reviewed snapshot; builds and execution never adopt
+  Its embedded catalogue is a reviewed snapshot, pinned by SHA-256 and durable
+  recipe policy; builds and execution never adopt
   remote feed changes automatically.
 
 Generate bindings with `sh hack/generate-protocol-bindings.sh` using `abigen --v2`

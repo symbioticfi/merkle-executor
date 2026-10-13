@@ -80,7 +80,7 @@ func (p *Provider) centrifuge(ctx context.Context, s provider.Snapshot, out *pro
 			return nil, idle("no claimable Centrifuge shares")
 		}
 		if amount.Cmp(available) > 0 {
-			amount.Set(available)
+			return nil, idle("exact recipe amount exceeds claimable Centrifuge shares")
 		}
 		out.Actions[p.cfg.Action] = a.PackRedeem(amount, s.Account, s.Account)
 	}
@@ -144,6 +144,9 @@ func (p *Provider) figure(ctx context.Context, s provider.Snapshot, out *provide
 	}
 	if intermediate.Sign() == 0 {
 		return nil, nil, idle("Figure unwrap rounds to zero")
+	}
+	if p.intermediate != nil && p.intermediate.Cmp(intermediate) != 0 {
+		return nil, nil, errors.New("Figure issuer preview differs from recipe-derived intermediate amount")
 	}
 	out.Actions[p.cfg.Action] = vault.PackRedeem(p.amount, s.Account, s.Account)
 	out.Actions[p.cfg.SecondAction] = a.PackRequestRedeem(intermediate)

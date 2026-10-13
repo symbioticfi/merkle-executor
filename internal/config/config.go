@@ -17,8 +17,8 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/symbioticfi/merkle-executor/internal/curator"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
@@ -63,6 +63,20 @@ type Strategy struct {
 	Providers  []Provider    `yaml:"providers"`
 }
 
+const (
+	// RuntimePolicyVersion changes when built-in preparation or timing semantics change.
+	RuntimePolicyVersion                  = "recipe-derived-v2"
+	DefaultKeyEnv                         = "MERKLE_EXECUTOR_PRIVATE_KEY"
+	DefaultRecipeCacheBytes        int64  = 16 << 20
+	DefaultPollInterval                   = 15 * time.Second
+	DefaultOperationTimeout               = 30 * time.Second
+	DefaultHTTPTimeout                    = 15 * time.Second
+	DefaultStrategyInterval               = time.Minute
+	DefaultConfirmations           uint64 = 2
+	DefaultTransactionPollInterval        = 2 * time.Second
+	StandardMulticall3                    = protocolio.StandardMulticall3
+)
+
 var validName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 func Load(path string) (*Config, error) {
@@ -70,7 +84,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, errors.Errorf("read configuration: %w", err)
 	}
-	cfg := Config{RecipeCacheBytes: 16 << 20}
+	cfg := Config{RecipeCacheBytes: DefaultRecipeCacheBytes}
 	d := yaml.NewDecoder(bytes.NewReader(raw))
 	d.KnownFields(true)
 	if err := d.Decode(&cfg); err != nil {
@@ -87,21 +101,27 @@ func Load(path string) (*Config, error) {
 		cfg.Mode = "simulate"
 	}
 	if cfg.PollInterval == 0 {
-		cfg.PollInterval = 15 * time.Second
+		cfg.PollInterval = DefaultPollInterval
 	}
 	if cfg.OperationTimeout == 0 {
-		cfg.OperationTimeout = 30 * time.Second
+		cfg.OperationTimeout = DefaultOperationTimeout
 	}
 	if cfg.HTTPTimeout == 0 {
-		cfg.HTTPTimeout = 15 * time.Second
+		cfg.HTTPTimeout = DefaultHTTPTimeout
 	}
 	if cfg.TxManager.PollInterval == 0 {
-		cfg.TxManager.PollInterval = 2 * time.Second
+		cfg.TxManager.PollInterval = DefaultTransactionPollInterval
 	}
 	if cfg.TxManager.Confirmations == 0 {
-		cfg.TxManager.Confirmations = 2
+		cfg.TxManager.Confirmations = DefaultConfirmations
 	}
 	cfg.TxManager.applyDefaults()
+	if cfg.Signer.KeyEnv == "" {
+		cfg.Signer.KeyEnv = DefaultKeyEnv
+	}
+	if cfg.Chain.Multicall3 == "" {
+		cfg.Chain.Multicall3 = StandardMulticall3
+	}
 	base, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
 		return nil, err
@@ -114,7 +134,7 @@ func Load(path string) (*Config, error) {
 	}
 	for i := range cfg.Strategies {
 		if cfg.Strategies[i].Interval == 0 {
-			cfg.Strategies[i].Interval = time.Minute
+			cfg.Strategies[i].Interval = DefaultStrategyInterval
 		}
 	}
 	if err := cfg.Validate(); err != nil {
@@ -124,9 +144,11 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
-	if err := curator.ValidateConfig(c.Curator); err != nil {
+	curator, err := permissions.NormalizeHostConfig(c.Curator)
+	if err != nil {
 		return err
 	}
+	c.Curator = curator
 	if c.RecipeCacheBytes < 0 {
 		return errors.New("recipeCacheBytes must be nonnegative")
 	}
@@ -134,8 +156,8 @@ func (c *Config) Validate() error {
 		return errors.New("mode must be simulate or send")
 	}
 	if c.Chain.Multicall3 != "" {
-		if _, err := parse.Address(c.Chain.Multicall3); err != nil {
-			return errors.New("chain.multicall3 must be a nonzero address when configured")
+		if _, err := parse.Address(c.Chain.Multicall3); err != nil || common.HexToAddress(c.Chain.Multicall3) != common.HexToAddress(StandardMulticall3) {
+			return errors.New("chain.multicall3 is fixed to the standard Multicall3 address")
 		}
 	}
 	if c.Chain.ChainID == 0 {
@@ -153,8 +175,10 @@ func (c *Config) Validate() error {
 	if c.Chain.RPCURL == "" {
 		return errors.New("rpcUrl required")
 	}
-	if _, err := parse.Address(c.Signer.Address); err != nil {
-		return errors.New("valid signer.address required in both modes")
+	if c.Signer.Address != "" {
+		if _, err := parse.Address(c.Signer.Address); err != nil {
+			return errors.New("signer.address must be a nonzero address when used as an assertion")
+		}
 	}
 	if c.PollInterval <= 0 || c.OperationTimeout <= 0 || c.HTTPTimeout <= 0 || c.TxManager.PollInterval <= 0 {
 		return errors.New("timeouts and intervals must be positive")
@@ -174,6 +198,12 @@ func (c *Config) Validate() error {
 	if err := c.TxManager.validate(c.Mode == "send"); err != nil {
 		return err
 	}
+	if c.RecipeCacheBytes != DefaultRecipeCacheBytes || c.PollInterval != DefaultPollInterval || c.OperationTimeout != DefaultOperationTimeout || c.HTTPTimeout != DefaultHTTPTimeout {
+		return errors.New("recipe cache, polling and timeout settings are fixed by the runtime policy; remove legacy overrides")
+	}
+	if err := c.TxManager.validateRuntimePolicy(); err != nil {
+		return err
+	}
 	names := make(map[string]bool)
 	for _, s := range c.Strategies {
 		if !validName.MatchString(s.Name) || names[s.Name] {
@@ -183,8 +213,8 @@ func (c *Config) Validate() error {
 		if _, err := parse.Address(s.Executor); err != nil {
 			return errors.Errorf("strategy %s: invalid executor", s.Name)
 		}
-		if s.Interval <= 0 {
-			return errors.Errorf("strategy %s: positive interval required", s.Name)
+		if s.Interval != DefaultStrategyInterval {
+			return errors.Errorf("strategy %s: interval is fixed to one minute; remove the legacy override", s.Name)
 		}
 		if s.RecipeHash != "" {
 			b, err := hexutil.Decode(s.RecipeHash)
@@ -192,8 +222,8 @@ func (c *Config) Validate() error {
 				return errors.New("recipeHash must be bytes32")
 			}
 		}
-		if len(s.Providers) > 256 {
-			return errors.New("provider count exceeds limit")
+		if len(s.Providers) != 0 {
+			return errors.New("strategy.providers is obsolete; runtime values must be derived from the authenticated recipe")
 		}
 		for _, p := range s.Providers {
 			if err := parse.RejectAliases(p.Config); err != nil {
@@ -230,10 +260,12 @@ func (s Strategy) Fingerprint() string {
 // durable work. Migration never rewrites an existing journal's fingerprint.
 func (c *Config) StrategyFingerprint(s Strategy, account common.Address) string {
 	raw, _ := json.Marshal(struct {
-		Strategy string
-		Account  common.Address
-		Curator  protocolio.HTTPConfig
-	}{s.Fingerprint(), account, c.Curator})
+		Policy    string
+		Strategy  string
+		Account   common.Address
+		Curator   protocolio.HTTPConfig
+		TxManager TxManager
+	}{RuntimePolicyVersion, s.Fingerprint(), account, c.Curator, c.TxManager})
 	return crypto.Keccak256Hash(raw).Hex()
 }
 

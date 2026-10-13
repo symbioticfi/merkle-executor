@@ -27,15 +27,16 @@ import (
 func testCLIConfig(directory string) config.Config {
 	return config.Config{
 		Mode:             "simulate",
+		RecipeCacheBytes: config.DefaultRecipeCacheBytes,
 		Curator:          protocolio.HTTPConfig{URL: "http://127.0.0.1:1/api/v1"},
 		Chain:            config.Chain{ChainID: 31337, RPCURL: "http://127.0.0.1:1"},
 		Signer:           config.Signer{Address: common.HexToAddress("0xabcd").Hex(), KeyEnv: "MERKLE_CLI_TEST_KEY"},
 		StateDir:         filepath.Join(directory, "state"),
-		OperationTimeout: 10 * time.Second,
-		HTTPTimeout:      time.Second,
-		PollInterval:     time.Second,
-		TxManager:        config.TxManager{Confirmations: 1, PollInterval: 10 * time.Millisecond, MaxFeeGwei: 30},
-		Strategies:       []config.Strategy{{Name: "funding", Executor: common.HexToAddress("0x1111").Hex(), Interval: time.Hour}},
+		OperationTimeout: config.DefaultOperationTimeout,
+		HTTPTimeout:      config.DefaultHTTPTimeout,
+		PollInterval:     config.DefaultPollInterval,
+		TxManager:        config.TxManager{MaxFeeGwei: 30},
+		Strategies:       []config.Strategy{{Name: "funding", Executor: common.HexToAddress("0x1111").Hex(), Interval: config.DefaultStrategyInterval}},
 	}
 }
 
@@ -281,5 +282,28 @@ func TestStatusWithoutIdentityDoesNotCreateState(t *testing.T) {
 	}
 	if _, err := os.Stat(cfg.StateDir); !os.IsNotExist(err) {
 		t.Fatalf("status created state: %v", err)
+	}
+}
+
+func TestOfflineStateCommandsUseSavedCallerWhenAssertionOmitted(t *testing.T) {
+	for _, command := range []string{"status", "reset-strategy"} {
+		t.Run(command, func(t *testing.T) {
+			directory := t.TempDir()
+			cfg := testCLIConfig(directory)
+			store := seedCLIState(t, cfg, keeper.Job{ID: "owned", Phase: "settled"}, false)
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			cfg.Signer = config.Signer{}
+			t.Setenv(config.DefaultKeyEnv, "invalid-offline-key-must-not-be-read")
+			path := writeCLIConfig(t, directory, cfg)
+			args := []string{command, "--config", path}
+			if command == "reset-strategy" {
+				args = append(args, "--name", "funding")
+			}
+			if _, err := executeCLI(t, args...); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

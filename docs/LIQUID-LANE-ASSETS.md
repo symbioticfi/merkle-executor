@@ -8,8 +8,9 @@ The [asset catalogue](../config/assets/liquid-lane.yaml) covers all **15 asset
 factories** listed under Liquid Lane on the [official addresses page](https://docs.symbiotic.fi/get-started/resources/addresses),
 checked on 2026-09-28, plus the additional **sUSN** native issuer route from the
 adapters source. The separate AccountRegistry entry is not an asset. The
-catalogue is configuration reference data, not a runnable strategy and not an
-allowlist in Go. It supplies no account, signer, approval, permission tree or amount.
+catalogue is embedded discovery data. An authenticated action leaf still supplies
+the authority to execute; the catalogue supplies no account, signer, approval,
+permission tree or amount.
 
 Issuer calls originate from the MerkleAccount. The published LL account factories
 identify the documented asset inventory; the provider does not transfer assets to
@@ -30,41 +31,42 @@ The symbols mF-ONE and mM1-USD correspond to `mFONEAccountFactory` and
 `mM1USDAccountFactory` on the addresses page. HYB and HYBOND have different issuers
 and redemption interfaces.
 
-## Configuration and recipe requirements
+## Automatic route and recipe requirements
 
-For each selected route, configure a `redemptions` provider with `chainId: 1`,
-`family`, `mode`, `token`, `outputAsset`, `target`, the decimal base-unit `amount`
-and the committed `action` reference. Copy those operational fields from the
-catalogue; its `symbol`, `factory`, mode lists and settlement descriptions are
-metadata, not provider configuration. Centrifuge claim amounts cap the number of
-claimable shares. Pareto and Noon claim modes claim the full eligible request and
-must omit `amount`. Noon claims require an explicit decimal `requestId`; zero is
-a valid request ID. The configured Noon `target` is the handler, while its request
-action targets sUSN itself.
+Startup registers issuer redemption support automatically. Operators do not supply
+provider entries, asset addresses, modes, action mappings, amounts or catalogue
+paths. The executor derives a unique known route from the chain, target, exact ABI,
+token pair and recipients committed in the authenticated recipe and permission
+leaves. Masked or runtime-bound token pairs and recipients are invalid. Unknown
+contracts sharing a selector remain ordinary committed recipe actions.
 
-The Figure route additionally uses a `secondAction` for wYLDS `requestRedeem`.
-Its first action targets PRIME and calls
-`redeem`; its configured `target` is wYLDS. Pareto requires the expected `cdo` and
-`strategy`, and `queue-claim` requires the explicit decimal `epoch`. These
-addresses and recipients remain fixed in the curator's approved action leaves.
+Amounts must bind directly to a read-dependent recipe Result, or use an Input with
+preceding equality or upper-bound checks against recipe results. Equality selects
+the exact value; otherwise the executor selects the smallest upper bound, after
+checking every lower bound. Literal caps alone cannot determine an amount.
+Centrifuge claims keep that exact share budget and wait if the available allowance
+is smaller. Pareto and Noon complete-request claims have no amount field. Their
+epoch or request ID must be a committed literal or exact deterministic Result.
+An Input needs a preceding exact equality; a range-bound arbitrary index is invalid.
 
-Optional `amountInput` supplies a numerical recipe slot: token shares for requests
-and Centrifuge/queue claims, or output-asset units for Noon and direct/instant
-Pareto claims.
-Figure's optional `intermediateInput` supplies the previewed wYLDS amount. These
-slots do not measure cash actually received; use recipe balance deltas for that.
+Figure requires an ordered PRIME `redeem` and wYLDS `requestRedeem`, with the
+second amount linked to the first through the committed `previewRedeem` query.
+The original recipe retains its output and balance guards. A read depending on
+an earlier effect is unsupported until its actual result can be resolved safely;
+preparation does not substitute a preview for an actual post-effect balance.
 
-The recipe owns all approvals, action ordering and balance/output conditions.
-The provider supplies data for existing actions; it cannot add a missing approval
-or replace a target. Amounts must use each token's actual decimals: PRIME and
-wYLDS use six decimals, for example. A Midas output route is explicit; an absent
-USDC configuration must not silently select another token.
+The recipe owns approvals, ordering and balance/output conditions. Providers fill
+only existing authorized fields. Requests and claims run independently: a
+confirmed request establishes issuer submission, while later settlement or a
+claim belongs to a separate approved recipe.
 
-Request and claim recipes run independently. A confirmed request transaction
-establishes submission to the issuer, not final settlement. Midas, OpenEden and
-Figure have issuer-driven payouts and no user claim transaction in these routes.
-Later proceeds can be consumed by an independently configured recipe. This avoids
-keeping an account busy throughout an issuer's settlement delay.
+The checked-in catalogue is copied exactly into
+`internal/providers/redemptions/catalogue/liquid-lane.yaml`, SHA-256
+`d29862ea24a7968ca7161780d272f70cfe314418c603839fb884985aaebd95f2`.
+Tests enforce byte-for-byte equality with the reviewed source. A catalogue update
+requires deliberate review, copy and policy-version update. Recovery validates
+stored configuration, account, action bytes and numerical inputs against this
+embedded policy before I/O; it does not discover a new route or amount.
 
 ## Issuer calls and readiness
 
@@ -88,12 +90,10 @@ keeping an account busy throughout an issuer's settlement delay.
   Execute PRIME `redeem(amount, account, account)` followed by wYLDS
   `requestRedeem(wYLDSAmount)`. `pendingRedemptions(account)` returns shares,
   assets and timestamp. There can be only one outstanding request per account.
-  Preparation supplies the `previewRedeem` wYLDS amount. The recipe may bind the
-  second call to the actual unwrap result instead: reconciliation verifies the
-  PRIME `Withdraw` event's sender, receiver, owner, shares and assets, then matches
-  the request against those exact assets. It does not accept unrelated wYLDS
-  balances. With a fixed preview amount, enforce an adequate actual unwrap result
-  in the recipe; excess wYLDS remains in the account.
+  Preparation validates the exact recipe-derived `previewRedeem` amount.
+  Reconciliation verifies the PRIME `Withdraw` sender, receiver, owner, shares and
+  assets, then matches the request to those exact assets. An unrelated wYLDS
+  balance cannot establish the output link.
 - **Noon:** verify `sUSN.asset() == outputAsset`, `handler.usn() == outputAsset`
   and, for new requests, `handler.hasRole(handler.STAKING_VAULT_ROLE(), sUSN)`.
   Existing claims remain available if that role is later revoked. Request with
@@ -181,8 +181,8 @@ strategy proxy's verified implementation
 That implementation combines normal and APR0 requests and has no separate
 `postDefaultRequests` mapping. Newer upstream code adds different default handling;
 it must not be substituted without reviewing the actual deployed implementation.
-Queue claims require an explicit epoch in configuration; this provider does not
-automatically discover or roll forward queue epochs.
+Queue claims require an exact epoch committed or derived in the recipe; this
+provider does not discover or roll forward queue epochs.
 
 The [Figure curator guide](https://github.com/provenance-io/hastra-eth-vault/blob/main/docs/CURATOR_INTEGRATION.md)
 documents the single-pending-request constraint and admin-driven completion.

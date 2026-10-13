@@ -26,10 +26,10 @@ func TestInternalHTTPAliasCannotMoveDurableCoWOrder(t *testing.T) {
 			hits[i]++
 			switch r.URL.Path {
 			case "/api/v1/quote":
-				q := sampleOrder()
+				q := sampleQuote()
 				q.BuyAmount = "2000"
 				q.FeeAmount = "10"
-				_ = json.NewEncoder(w).Encode(wire.CowQuoteResponse{Quote: q, ID: 1})
+				_ = json.NewEncoder(w).Encode(wire.CowQuoteResponse{Quote: q, ID: 1, Verified: true})
 			case "/api/v1/orders":
 				_ = json.NewEncoder(w).Encode(identity.UID)
 			default:
@@ -52,12 +52,12 @@ func TestInternalHTTPAliasCannotMoveDurableCoWOrder(t *testing.T) {
 		}
 		cfg, err := hostconfig.Load(path)
 		if err != nil {
-			if !strings.Contains(err.Error(), "aliases") {
+			if !strings.Contains(err.Error(), "aliases") && !strings.Contains(err.Error(), "strategy.providers is obsolete") {
 				t.Fatal(err)
 			}
 			continue
 		}
-		p, err := Factory(cfg.Strategies[0].Providers[0].Config, registry.Deps{Chain: &negativeChain{}, HTTP: servers[i].Client()})
+		p, err := fixtureFactory(cfg.Strategies[0].Providers[0].Config, registry.Deps{Chain: &negativeChain{}, HTTP: servers[i].Client()})
 		if err != nil {
 			t.Fatal(err)
 		}

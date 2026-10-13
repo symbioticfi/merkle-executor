@@ -258,6 +258,23 @@
         "partiallyFillable": {
           "type": "boolean",
           "x-go-name": "PartiallyFillable"
+        },
+        "appDataHash": {
+          "type": "string",
+          "x-go-name": "AppDataHash",
+          "x-go-omitempty": true
+        },
+        "priceQuality": {
+          "type": "string",
+          "x-go-name": "PriceQuality"
+        },
+        "sellTokenBalance": {
+          "type": "string",
+          "x-go-name": "SellTokenBalance"
+        },
+        "buyTokenBalance": {
+          "type": "string",
+          "x-go-name": "BuyTokenBalance"
         }
       },
       "additionalProperties": true
@@ -324,6 +341,16 @@
         "from": {
           "type": "string",
           "x-go-name": "From"
+        },
+        "appDataHash": {
+          "type": "string",
+          "x-go-name": "AppDataHash",
+          "x-go-omitempty": true
+        },
+        "quoteId": {
+          "type": "integer",
+          "x-go-name": "QuoteID",
+          "x-go-omitempty": true
         }
       },
       "additionalProperties": true
@@ -342,9 +369,18 @@
         "expiration": {
           "type": "string",
           "x-go-name": "Expiration"
+        },
+        "verified": {
+          "type": "boolean",
+          "x-go-name": "Verified"
         }
       },
-      "additionalProperties": true
+      "additionalProperties": true,
+      "required": [
+        "quote",
+        "expiration",
+        "verified"
+      ]
     },
     "CowOrderStatus": {
       "type": "object",
@@ -687,6 +723,16 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "CowSlippageResponse": {
+      "type": "object",
+      "properties": {
+        "slippageBps": {
+          "type": "integer",
+          "x-go-name": "SlippageBPS"
         }
       },
       "additionalProperties": true

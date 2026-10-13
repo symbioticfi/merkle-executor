@@ -19,28 +19,31 @@ import (
 )
 
 type Config struct {
-	Family            string `yaml:"family"`
-	Mode              string `yaml:"mode"`
-	ChainID           uint64 `yaml:"chainId"`
-	Token             string `yaml:"token"`
-	OutputAsset       string `yaml:"outputAsset"`
-	Target            string `yaml:"target"`
-	Amount            string `yaml:"amount"`
-	Action            string `yaml:"action"`
-	SecondAction      string `yaml:"secondAction"`
-	CDO               string `yaml:"cdo"`
-	Strategy          string `yaml:"strategy"`
-	Epoch             string `yaml:"epoch"`
-	RequestID         string `yaml:"requestId"`
-	AmountInput       *uint  `yaml:"amountInput"`
-	IntermediateInput *uint  `yaml:"intermediateInput"`
+	Family             string `yaml:"family"`
+	Mode               string `yaml:"mode"`
+	ChainID            uint64 `yaml:"chainId"`
+	Token              string `yaml:"token"`
+	OutputAsset        string `yaml:"outputAsset"`
+	Target             string `yaml:"target"`
+	Amount             string `yaml:"amount"`
+	Action             string `yaml:"action"`
+	SecondAction       string `yaml:"secondAction"`
+	CDO                string `yaml:"cdo"`
+	Strategy           string `yaml:"strategy"`
+	Epoch              string `yaml:"epoch"`
+	RequestID          string `yaml:"requestId"`
+	AmountInput        *uint  `yaml:"amountInput"`
+	IntermediateInput  *uint  `yaml:"intermediateInput"`
+	IntermediateAmount string `yaml:"intermediateAmount"`
+	EpochInput         *uint  `yaml:"epochInput"`
+	RequestIDInput     *uint  `yaml:"requestIdInput"`
 }
 
 type Provider struct {
-	cfg                                 Config
-	deps                                providerRegistry.Deps
-	token, asset, target, cdo, strategy common.Address
-	amount, epoch, requestID            *big.Int
+	cfg                                    Config
+	deps                                   providerRegistry.Deps
+	token, asset, target, cdo, strategy    common.Address
+	amount, epoch, requestID, intermediate *big.Int
 }
 
 func Register(registry *providerRegistry.Registry) error {
@@ -52,6 +55,11 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	if err := parse.DecodeStrict(raw, &cfg); err != nil {
 		return nil, err
 	}
+	return New(cfg, deps)
+}
+
+// New consumes authenticated recipe values or explicit local fixture policy.
+func New(cfg Config, deps providerRegistry.Deps) (*Provider, error) {
 	if cfg.ChainID == 0 || deps.Chain == nil {
 		return nil, errors.New("redemption chainId and chain reader required")
 	}
@@ -102,7 +110,14 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 		if cfg.SecondAction == cfg.Action {
 			return nil, errors.New("Figure unwrap and request actions must differ")
 		}
-	} else if cfg.SecondAction != "" || cfg.IntermediateInput != nil {
+		if cfg.IntermediateAmount != "" {
+			var err error
+			p.intermediate, err = parse.Uint256(cfg.IntermediateAmount)
+			if err != nil || p.intermediate.Sign() == 0 {
+				return nil, errors.New("Figure intermediate amount must be positive uint256")
+			}
+		}
+	} else if cfg.SecondAction != "" || cfg.IntermediateInput != nil || cfg.IntermediateAmount != "" {
 		return nil, errors.New("second action and intermediate input apply only to Figure")
 	}
 	if (cfg.Family != "pareto" && cfg.Family != "noon") || strings.HasSuffix(cfg.Mode, "request") {
@@ -123,6 +138,9 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	} else if cfg.Epoch != "" {
 		return nil, errors.New("epoch applies only to Pareto queue claims")
 	}
+	if cfg.EpochInput != nil && cfg.Mode != "queue-claim" {
+		return nil, errors.New("epoch input applies only to Pareto queue claims")
+	}
 	if cfg.Family == "noon" && cfg.Mode == "claim" {
 		var err error
 		p.requestID, err = parse.Uint256(cfg.RequestID)
@@ -132,9 +150,19 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	} else if cfg.RequestID != "" {
 		return nil, errors.New("requestId applies only to Noon claims")
 	}
-	for _, index := range []*uint{cfg.AmountInput, cfg.IntermediateInput} {
+	if cfg.RequestIDInput != nil && (cfg.Family != "noon" || cfg.Mode != "claim") {
+		return nil, errors.New("request ID input applies only to Noon claims")
+	}
+	seenInputs := map[uint]bool{}
+	for _, index := range []*uint{cfg.AmountInput, cfg.IntermediateInput, cfg.EpochInput, cfg.RequestIDInput} {
 		if index != nil && *index > parse.MaxInputIndex {
 			return nil, errors.New("redemption input index exceeds limit")
+		}
+		if index != nil {
+			if seenInputs[*index] {
+				return nil, errors.New("redemption input indices must differ")
+			}
+			seenInputs[*index] = true
 		}
 	}
 	if cfg.AmountInput != nil && cfg.IntermediateInput != nil && *cfg.AmountInput == *cfg.IntermediateInput {
@@ -176,6 +204,12 @@ func (p *Provider) Prepare(ctx context.Context, snapshot provider.Snapshot) (pro
 	if p.cfg.IntermediateInput != nil {
 		out.Inputs[*p.cfg.IntermediateInput] = intermediate.String()
 	}
+	if p.cfg.EpochInput != nil {
+		out.Inputs[*p.cfg.EpochInput] = p.epoch.String()
+	}
+	if p.cfg.RequestIDInput != nil {
+		out.Inputs[*p.cfg.RequestIDInput] = p.requestID.String()
+	}
 	out.Data, err = json.Marshal(snapshot.Account)
 	return out, err
 }
@@ -183,12 +217,12 @@ func (p *Provider) Prepare(ctx context.Context, snapshot provider.Snapshot) (pro
 // Requests finish at their confirmed submission. Issuer-owned queues retain the
 // pending claim; a separate claim recipe can run without an account-lock deadlock.
 func (p *Provider) Advance(ctx context.Context, snapshot provider.Snapshot, output provider.Output, _ json.RawMessage) (provider.Progress, error) {
+	var account common.Address
+	if err := json.Unmarshal(output.Data, &account); err != nil || account != snapshot.Account || snapshot.ChainID == nil || snapshot.ChainID.Cmp(new(big.Int).SetUint64(p.cfg.ChainID)) != 0 {
+		return provider.Progress{}, errors.New("redemption execution identity mismatch")
+	}
 	if err := protocolio.Execution(ctx, p.deps.Chain, snapshot); err != nil {
 		return provider.Progress{}, err
-	}
-	var account common.Address
-	if err := json.Unmarshal(output.Data, &account); err != nil || account != snapshot.Account || snapshot.ChainID.Cmp(new(big.Int).SetUint64(p.cfg.ChainID)) != 0 {
-		return provider.Progress{}, errors.New("redemption execution identity mismatch")
 	}
 	target := p.target
 	if p.cfg.Family == "figure" {
