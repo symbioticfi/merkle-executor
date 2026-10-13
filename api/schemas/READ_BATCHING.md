@@ -1,6 +1,6 @@
 # Read aggregation source provenance
 
-Read-only source inspection on 2026-10-12 established the getter scopes below. No live transactions were used. These are the supported implementation assumptions when `chain.multicall3` is enabled. Operators must verify that configured deployments, custom targets and proxy upgrades retain the reviewed behavior. Source discovery is never performed automatically at runtime. ABI view annotations alone do not establish safety.
+Read-only source inspection on 2026-10-12 established the getter scopes below. No live transactions were used. The normal daemon uses the standard Multicall3 address. These are the reviewed implementation assumptions for getters that opt into aggregation. Operators must verify that deployments and proxy upgrades retain the reviewed behavior. Source discovery is never performed automatically at runtime. ABI view annotations alone do not establish safety.
 
 Sourcify source URL template: `https://sourcify.dev/server/v2/contract/1/<implementation>?fields=sources`. Proxy mapping metadata used `?fields=proxyResolution`; it establishes mappings at retrieval, not code verification at a runtime pinned block.
 
@@ -91,4 +91,17 @@ Known share vault(asset) getters are public maps: JAAA `0x5a0F93D040De44e78F251b
 
 ## Exclusions
 
-Arbitrary configured data RPC reads (`From=snapshot.Account`), arbitrary ERC1271 signatures, full execution simulations and unknown external getter implementations retain original isolated eth_call context. JSON batching still eliminates independent network round trips. All final canonical fences and hash-linked ancestry walks remain ordered singles; writes/signing/nonce admission are excluded.
+SDK direct data RPC reads (`From=snapshot.Account`), arbitrary ERC1271 signatures, full execution simulations and unknown external getter implementations retain original isolated eth_call context. JSON batching still eliminates independent network round trips. All final canonical fences and hash-linked ancestry walks remain ordered singles; writes/signing/nonce admission are excluded.
+
+## Liquid Lane RFQ consumer
+
+RFQ Reactor `22b04a850ca3680103e797bfae0e1a3b997fac83` exposes caller-independent
+`eip712Domain()` (immutable domain metadata) and `isUsedNonce(account,nonce)`
+(explicit mapping keys). MerkleAccount `signatures(digest)` at the SDK-pinned
+adapters revision above is also a direct mapping read. These are the only three
+safe getters used by the consumer's Advance stage. Domain can be staged into initial
+recipe metadata before quote acquisition. Token `balanceOf` and `allowance` targets
+come from the authenticated recipe and can have arbitrary implementations. They
+remain isolated eth_call members sharing the JSON array; no caller-independence is inferred from their ABI. Fill and indexed
+account cancellation logs share a separate array with the range header. A matching
+event header and receipt share a later batch; canonical closure follows those reads. [Full source hashes and semantics](LIQUID_LANE_RFQ.md).

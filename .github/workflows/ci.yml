@@ -16,14 +16,13 @@ jobs:
           go-version: '1.27.1'
           cache: true
       - run: make check
-      - run: make generate && git diff --exit-code -- api sdk/bindings
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: v1.8.1
+      - run: make generate && git diff --exit-code -- api sdk/bindings sdk/recipes/lens
       - run: make integration
 
-      - name: Verify container build metadata
-        env:
+      - env:
           DOCKER_BUILDKIT: '1'
         run: |
           build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)

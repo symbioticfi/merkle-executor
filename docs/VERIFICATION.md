@@ -68,13 +68,114 @@ These checks use ephemeral local chains and local HTTP/RPC fixtures. No producti
 After the local-engine cleanup, `make check` and `make integration` passed again; lint reported zero issues and engine statement coverage was 92.2%. Both the duplicated operation-label and invalid receipt-status cost regressions failed before their fixes and pass afterward. Journal tests cover late successful and reverted receipts after active tracking ends, uncertain-job admission/acknowledgement blocking, no recovery rebroadcast and durable terminal evidence. Independent review found no remaining blockers. The primary checkout's tracked patch and untracked-file hashes remain unchanged.
 
 
-## Native Noon USN redemption (2026-10-12)
+## Curator permissions and account discovery — 2026-10-13
 
-The dedicated `redeem-usn` mode completes the separate USN→USDC leg while leaving
+The executor-only configuration regression failed against the prior decoder because
+`curator` was unknown. It passes with required curator settings and strict rejection
+of the removed strategy `account`/`tree` fields. Local fixtures cover pinned startup
+account discovery, distinct target/account association, deduplication/chunking,
+canonical closure, atomic failure and recovery fingerprint rejection without saved
+state changes. SDK fixtures reject source errors, empty/mismatched trees and invalid
+unused leaves before providers run, preserve cancellation and legacy local trees,
+and reject metadata/reorg changes while permission acquisition is in flight.
+
+The real local Anvil service plans and sends using backend-shaped HTTP permissions
+and a derived account. HTTP503, wrong-chain permissions and an accepted-root change
+during HTTP each prevent signing/broadcast, leave sender nonce and recipient balance
+unchanged, and create no prepared/authorized transaction journal. A healthy retry
+executes the existing transfer assertions. Completed-work restart makes no new curator
+request. The local issuer request/claim lifecycle also uses remote permissions and
+retains its balance, canonical receipt and restart assertions.
+
+Small daemon HTTP/RPC fixtures prove Merkl reward acquisition and CoW quote acquisition
+still contact their own APIs using the derived account; signed Liquid Lane daemon
+registration is absent. Existing provider fixtures continue covering their protocol
+semantics. Permission-source presend tests confirm validation does not refetch trees.
+
+`make check` passed for both modules: build, race/coverage tests, vet and lint with
+zero issues. `make integration` passed all ten top-level local Anvil tests (two SDK,
+four application and four transaction-engine tests, including their lifecycle
+subcases), with no skips. `make generate` reproduced the generated artifacts without
+diff; `git diff --check` passed. These initial gates used the local two-module
+workspace; published-module verification follows below.
+
+This is local EVM and API-fixture evidence. The curator route is sourced from the
+recorded backend revision and was absent from the inspected latest stage. Backend
+deployment availability, hosted CI and live third-party transactions are not claimed.
+
+The permission-source SDK was published at revision
+`80f0c0d6d4a3f93c52b7c92501162c083ac4dd46`. With `GOWORK=off`, the host
+resolved and pinned `v0.0.0-20261013102206-80f0c0d6d4a3`; module checksums
+were refreshed without a replace directive. With that published pin and `GOWORK=off`,
+`make check` passed both modules with zero lint issues, `make integration` passed
+all ten top-level local Anvil tests with no skips, and `make generate` passed.
+`git diff --exit-code -- api sdk/bindings` confirmed no generated drift;
+`git diff --check` also passed. Independent full review found no actionable issue.
+These standalone checks do not establish hosted CI or deployment availability.
+
+
+## Liquid Lane RFQ consumer — 2026-10-13
+
+The daemon registration regression first failed with unknown provider
+`liquidlane-rfq`; it passes after registration. A cancellation-before-Fill fixture
+also failed before contradictory evidence was rejected. The dense-history regression
+first failed with a range-log limit error for 1,025 unrelated Fill events. It now
+checkpoints a complete subdivided range and finds the later matching Fill after
+restart, including when the head nonce is already used. Single-block overflow fails
+explicitly; indexed account cancellation filtering ignores unrelated cancellations.
+
+Focused provider tests pass for the independent cast EIP712 vector and go-ethereum
+apitypes parity, exact 804-byte authorization, typed schema/domain/policy rejection,
+leading-zero numeric identity, staged/direct parity and pin mismatch, failed-batch
+no-fallback, three safe plus two isolated Advance getters, HTTP cancellation/bounds/
+redaction, persisted authority tampering, incomplete/complete pagination, ambiguous
+publication, canonical receipt membership, cancellation/Fill ordering, deadline
+equality, post-fill signature/budget changes, corrupt cursors and orphan rewind.
+
+`TestAnvilLiquidLaneRFQConsumerRestartAndFill` passes with deployed local Multicall3,
+the real RecipeExecutor artifact and test account/token/Reactor contracts. Plan
+requests a quote but sends no authorization or order. Send executes the approved
+Reactor allowance and exact Sign, then preserves an accepted-but-502 publication as
+pending. Restart looks up the saved identity without a new quote, curator tree,
+authorization nonce or POST; API-only filled status stays pending. Before filler
+execution the account retains input1,000 and output0 with allowance1,000. A canonical
+fixture Fill transfers input1,000 and output950 and settles the job. A further
+restart repeats no external mutation. The token balance, nonce and durable job
+assertions are part of the test, not inferred from a successful command.
+
+`make generate` and RFQ fixture regeneration preserved all 26 generated file hashes.
+`git diff --check` passed; SDK sources and go.mod/go.sum remain unchanged. The new
+fixtures reproduce the pinned account's hash program and Reactor request settlement;
+protocol authentication is deliberately simplified in the local Reactor fixture.
+[Fixture limitations and reproduction](../internal/providers/liquidlanerfq/testdata/README.md)
+and [wire/source provenance](../api/schemas/LIQUID_LANE_RFQ.md) describe that boundary.
+With the unchanged published SDK pin and `GOWORK=off`, the coordinator independently
+ran `make check`: host and SDK builds, race/coverage tests, vet and lint all passed
+with zero lint issues. New consumer provider statement coverage was 84.2%.
+`GOWORK=off make integration` passed all eleven top-level Anvil tests with no failures
+or skips. Logs are retained in the ignored `.superpowers/sdd/007-root/` directory.
+Independent review prompted the adaptive dense-range regression and corrected the
+wire cursor schema to string-or-null; regenerated Go output was unchanged.
+No live RFQ order, chain mutation, production deployment or hosted CI result is
+established by these local checks.
+
+## Automatic native Noon USN redemption (2026-10-13)
+
+The authenticated `redeem-usn` route completes the separate USN→USDC leg while leaving
 sUSN request/claim behavior unchanged. Deterministic tests cover canonical route
 configuration, full-amount quote units, whitelist/collateral readiness, malformed
 and unavailable reads, treasury balance and allowance, block-budget boundaries,
 prior-block counter reset, exact managed calldata and burn/payout receipt identity.
+Automatic-provider regressions failed before this adaptation: native selection
+returned no route, and recovery attempted to pack the claim ABI with a missing
+request ID. They now pass alongside bounded-amount, pure invalid-identity,
+policy/calldata/input/account tampering and missing terminal-evidence tests.
+The normal host test uses address-only YAML, curator HTTP permissions, discovered
+account/caller, one shared numerical lens, fixed automatic registrations and
+read-bounded USN amount. It confirms the native transaction through the existing
+sender, persists `redeemed` under the canonical address and does not resend after
+restart.
+
 The source-pinned local test compiles the unmodified verified RedeemHandlerV2
 with native solc **0.8.28+commit.7893614a**, **Paris**, optimizer **200**, and the
 original literal-content metadata settings. The existing real RecipeExecutor
@@ -92,8 +193,6 @@ from its collateral `getRate` view.
 
 ```sh
 python3 internal/providers/redemptions/testdata/noon/generate.py --check
-# Deliberate source/artifact refresh only:
-python3 internal/providers/redemptions/testdata/noon/generate.py --update
 make check
 make integration
 ```

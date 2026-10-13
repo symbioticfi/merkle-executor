@@ -136,7 +136,7 @@ func issuerFixture(t *testing.T, cfg Config) (provider.Snapshot, *issuerReader) 
 		r.reply(token, share.NewCentrifugeShare().GetABI(), "vault", []any{asset}, target)
 		a := async.NewAsyncRedeemVault().GetABI()
 		r.reply(target, a, "asset", nil, asset)
-		r.reply(target, a, "maxRedeem", []any{s.Account}, big.NewInt(80))
+		r.reply(target, a, "maxRedeem", []any{s.Account}, big.NewInt(100))
 	case "openeden":
 		a := openeden.NewOpenEdenExpress().GetABI()
 		r.reply(target, a, "token", nil, token)
@@ -225,8 +225,9 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRoute(t *testing.T) {
 	}
 	var catalogue struct {
 		Assets []struct {
-			Config `yaml:",inline"`
-			Symbol string `yaml:"symbol"`
+			Config       `yaml:",inline"`
+			Symbol       string   `yaml:"symbol"`
+			RequestModes []string `yaml:"requestModes"`
 		} `yaml:"assets"`
 	}
 	if err = yaml.Unmarshal(data, &catalogue); err != nil {
@@ -245,7 +246,10 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRoute(t *testing.T) {
 			seen[entry.Symbol] = true
 			if entry.Symbol == "USN" {
 				cfg, s, r := nativeNoonFixture(t)
-				cfg.ChainID, cfg.Token, cfg.OutputAsset, cfg.Target, cfg.Mode = entry.ChainID, entry.Token, entry.OutputAsset, entry.Target, entry.Mode
+				if len(entry.RequestModes) != 1 || entry.RequestModes[0] != "redeem-usn" {
+					t.Fatal("native catalogue mode changed")
+				}
+				cfg.ChainID, cfg.Token, cfg.OutputAsset, cfg.Target, cfg.Mode = entry.ChainID, entry.Token, entry.OutputAsset, entry.Target, entry.RequestModes[0]
 				out, err := issuerProvider(t, cfg, r).Prepare(t.Context(), s)
 				if err != nil || len(out.Actions) != 1 || out.Inputs[3] != cfg.Amount {
 					t.Fatalf("native USN catalogue route is not executable: %+v %v", out, err)
@@ -297,7 +301,7 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRoute(t *testing.T) {
 	}
 }
 
-func TestCentrifugeClaimCapsSharesAndRetainsConfiguredLimit(t *testing.T) {
+func TestCentrifugeClaimRequiresExactSharesAndRetainsConfiguredAmount(t *testing.T) {
 	for _, available := range []int64{0, 20, 100, 150} {
 		t.Run(big.NewInt(available).String(), func(t *testing.T) {
 			cfg := issuerConfig("centrifuge")
@@ -307,7 +311,7 @@ func TestCentrifugeClaimCapsSharesAndRetainsConfiguredLimit(t *testing.T) {
 			r.reply(common.HexToAddress(cfg.Target), a.GetABI(), "maxRedeem", []any{s.Account}, big.NewInt(available))
 			p := issuerProvider(t, cfg, r)
 			out, err := p.Prepare(context.Background(), s)
-			if available == 0 {
+			if available < 100 {
 				if !errors.Is(err, provider.ErrNotReady) {
 					t.Fatalf("empty claim must idle: %v", err)
 				}

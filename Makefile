@@ -32,6 +32,7 @@ tools: $(ABIGEN)
 $(ABIGEN):
 	GOTOOLCHAIN=$(ABIGEN_TOOLCHAIN) GOBIN='$(CURDIR)/.tools' go install github.com/ethereum/go-ethereum/cmd/abigen@$(ABIGEN_VERSION)
 generate: tools
+	$(MAKE) -C sdk generate
 	ABIGEN='$(ABIGEN)' bash hack/generate-bindings.sh
 	ABIGEN='$(ABIGEN)' bash hack/generate-protocol-bindings.sh
 	python3 hack/generate-protocol-types.py

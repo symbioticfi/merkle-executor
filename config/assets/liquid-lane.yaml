@@ -1,5 +1,5 @@
 # Asset catalogue, not a runnable executor strategy. See docs/LIQUID-LANE-ASSETS.md.
-# Amounts, action references, account, recipe permissions and signing settings are deployment-specific.
+# Authenticated recipes determine amounts, action references and permissions. Account/caller are discovered.
 version: 1
 provider: redemptions
 chainId: 1
@@ -187,15 +187,13 @@ assets:
     claimModes: [claim]
     settlement: claim
 
-  # Separate native USN -> USDC leg; not a Liquid Lane factory deployment.
+  # Separate native USN -> USDC leg, reviewed 2026-10-12; see source closure in docs/LIQUID-LANE-ASSETS.md.
   - symbol: USN
     chainId: 1
     family: noon
-    mode: redeem-usn
     token: "0xdA67B4284609d2d48e5d10cfAc411572727dc1eD"
     outputAsset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
     target: "0x9F8D0a683871125083170F65430F8A15aFfa0086"
-    redemptionModes: [redeem-usn]
+    requestModes: [redeem-usn]
+    claimModes: []
     settlement: atomic
-    checkedAt: "2026-10-12"
-    source: https://eth.blockscout.com/api/v2/smart-contracts/0x9F8D0a683871125083170F65430F8A15aFfa0086

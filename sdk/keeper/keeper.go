@@ -160,7 +160,7 @@ func validateJob(job Job, s Strategy) error {
 		if job.ConfigHash != s.Config.Fingerprint() {
 			return errors.Errorf("strategy %s configuration changed while work is active", s.Config.Name)
 		}
-		if err := ValidateComposition(job.Plan.Calldata, s.Providers); err != nil {
+		if err := ValidatePlanComposition(job.Plan.Calldata, s.Providers, job.Plan.Outputs); err != nil {
 			return err
 		}
 		if len(job.Plan.Outputs) != len(s.Providers) || len(job.Progress) != len(s.Providers) {
@@ -272,7 +272,7 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy) error {
 		if err != nil {
 			return err
 		}
-		if err := ValidateComposition(plan.Calldata, s.Providers); err != nil {
+		if err := ValidatePlanComposition(plan.Calldata, s.Providers, plan.Outputs); err != nil {
 			return err
 		}
 		var random [16]byte

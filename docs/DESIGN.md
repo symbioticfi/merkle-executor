@@ -21,6 +21,8 @@ another module's internal packages or change the solver or adapters checkouts.
   extension points for lending markets, 3F and future integrations. `redemptions`
   owns the documented LL issuer families; `securitize` owns wallet and offramp routes.
 - `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
+- `curator`: bounded HTTP acquisition of the exact active permission root; the SDK
+  validates the returned bytes independently.
 - `txengine`: local nonce admission, adaptive fees, gas estimation, replacements, canonical receipts and graceful drain.
 - `state`, `signer`, `txmanager`: exclusive process ownership and a durable recipe journal around the engine. See [transaction design](TRANSACTIONS.md).
 - `config`, `observability`, `cmd`: startup wiring, strict configuration and operational controls.
@@ -30,12 +32,50 @@ replace targets, masks, proofs, recipe instructions or caller identity. External
 does not grant authority. The final full execute simulation validates on-chain bindings
 and postconditions; the keeper does not duplicate the Solidity arithmetic interpreter.
 
-LL signed connector swaps execute inside a recipe. CoW authorization and settlement
+Liquid Lane RFQ consumers use the separate host provider `liquidlane-rfq` to
+acquire exact-input quotes, populate an approved account Sign action and reconcile
+canonical Reactor events. It persists the quote, Request digest and fixed `0x00`
+signature before publication, preserving identity through ambiguous HTTP responses.
+Only complete all-status lookup permits an idempotent retry. Bounded canonical event
+scan cursors survive restart; API statuses and used nonce bits are not settlement.
+
+Signed Liquid Lane discount/signature acquisition belongs to vault-solver; the daemon
+does not register that provider. Issuer redemptions remain registered. CoW authorization and settlement
 are separate phases: submit the ERC-1271 order only after its authorization transaction
 confirms, persist its deterministic UID and reconcile it before retrying submission.
 Merkl reward proofs are protocol data, separate from account permission proofs. Claims
 must fit explicitly approved bounded calldata shapes. Asynchronous issuer redemptions
 use later claim recipes, configured independently from the request recipe.
+
+## Account and permission ownership
+
+The daemon accepts a YAML list of executor addresses and registers fixed automatic
+providers at startup. Canonical lowercase executor addresses are the durable and
+log identifiers; duplicate addresses and old strategy objects are rejected. The
+`address-only-v4` policy binds chain, discovered account/caller, curator source and
+sender policy. Version 4 adds authenticated native Noon USN redemption; its embedded
+issuer policy also binds the reviewed catalogue digest. Old custom or prefixed
+journals remain inspectable and block new
+admission while unresolved; drain them with the previous binary and configuration.
+At startup it pins a valid head, batches deduplicated account and caller getters,
+rejects any invalid member,
+and closes the same-number/hash guard before publishing the complete account map.
+The configured executor's account is immutable in the supported contract, but the SDK
+still rereads and compares it during every preparation and presend validation.
+
+The daemon supplies `keeper.PermissionSource` using the configured curator HTTP
+client. The SDK passes a copied chain ID and authenticated snapshot; the source returns
+raw JSON and the SDK decodes every leaf/proof itself. Remote trees require a nonnil
+matching chain ID, the active root and any supplied account to match. Curator metadata
+is not authorization, and failures occur before provider preparation. Final metadata,
+role, simulation and canonical guards remain unchanged, including root changes while
+HTTP is in flight. Other SDK hosts may omit the source and keep local tree loading.
+
+Only new preparation fetches permission bytes. Signed-attempt recovery and external
+provider advancement do not depend on curator availability. Runtime fingerprints bind
+the derived account and curator HTTP configuration (credential variable names only).
+Old active workflows must drain with the old binary/configuration before migration;
+there is no journal identity rewrite or fallback to a different tree source.
 
 ## Lifecycle
 
@@ -64,6 +104,36 @@ recovery, retaining completed providers' claims. Repeated/static calls to those
 targets and arbitrary Call steps are unsupported; see [provider restrictions](PROVIDERS.md).
 Existing journals without evidence remain readable; new issuer reconciliation
 requires evidence and does not infer it from a successful transaction alone.
+
+## Preparation read stages
+
+The keeper can plan independent provider reads from a provisional value-only block
+pin and configured identity. This optional SDK contract lives in `protocolio`, keeping
+provider policy in the host and avoiding an import cycle through `provider`. Planning
+is pure local encoding. Initial metadata and planned calls share a bounded read group;
+only authenticated discovery plus active permission-tree validation can invoke their resolvers.
+Each resolver sees its own lazy results and must match the exact provisional pin.
+Ordinary member errors remain deferred until API eligibility requires them. Transport
+and batch-shape failures fail closed before provider classification, including when
+speculative results would later be unused. Merkl stages its existing strict aggregate
+as an isolated EVM call. Other providers retain their existing preparation behavior.
+
+A shared bounded recipe cache retains immutable event evidence only after successful
+closing preparation guards. Its key is full chain ID plus executor; its body preserves
+exact bytes, including trailing ABI data. Fresh metadata must match commitment and
+event block, and a newly read canonical event-block hash must authenticate the prior
+ordered/latest event evidence. The body is rehashed and inspected before reuse. Any
+semantic mismatch returns to cold log discovery; a matched hint's missing/failed header
+is a hard error. Initial/current metadata, permission roots/roles and full simulation
+are never cached. Public standalone discovery remains independently guarded and uncached.
+
+Cache hints are frozen per attempt and version-checked on invalidation. Mutex-protected
+FIFO entries are deep-copied on load/insert; callbacks cannot mutate pending verified
+cache bodies. Capacity derives from configured strategies and `recipeCacheBytes` bounds
+conservatively charged retained allocations, including payload/slice/object overhead.
+It defaults to 16 MiB; zero disables it and oversized recipes stay uncached. Transient
+attempt copies are released with the attempt. The cache has no journal representation,
+configuration fingerprint effect or authority to bypass a read or validation failure.
 
 ## Recipe encoding
 

@@ -68,7 +68,7 @@ func TestPrepareRejectsIncompatibleQuotesWithoutOrderPost(t *testing.T) {
 		{"app data", func(o *wire.CowOrder) { o.AppData = common.HexToHash("0x1").Hex() }},
 		{"sell balance", func(o *wire.CowOrder) { o.SellTokenBalance = "internal" }},
 		{"buy balance", func(o *wire.CowOrder) { o.BuyTokenBalance = "internal" }},
-		{"slippage takes below minimum", func(o *wire.CowOrder) { o.BuyAmount = "1818" }},
+		{"slippage takes below minimum", func(o *wire.CowOrder) { o.BuyAmount = "1817" }},
 		{"minimum", func(o *wire.CowOrder) { o.BuyAmount = "1700" }},
 	}
 	for _, tc := range cases {
@@ -80,14 +80,14 @@ func TestPrepareRejectsIncompatibleQuotesWithoutOrderPost(t *testing.T) {
 					w.WriteHeader(500)
 					return
 				}
-				q := sampleOrder()
+				q := sampleQuote()
 				q.FeeAmount = "10"
 				q.BuyAmount = "2000"
 				tc.change(&q)
-				_ = json.NewEncoder(w).Encode(wire.CowQuoteResponse{Quote: q, ID: 1})
+				_ = json.NewEncoder(w).Encode(wire.CowQuoteResponse{Quote: q, ID: 1, Verified: true})
 			}))
 			defer srv.Close()
-			p, err := Factory(node(t, negativeConfig(srv.URL)), providerRegistry.Deps{Chain: &negativeChain{}, HTTP: srv.Client()})
+			p, err := fixtureFactory(node(t, negativeConfig(srv.URL)), providerRegistry.Deps{Chain: &negativeChain{}, HTTP: srv.Client()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -109,13 +109,13 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/v1/quote":
-					q := sampleOrder()
+					q := sampleQuote()
 					q.FeeAmount = "10"
 					q.BuyAmount = "2000"
 					if mode == "reorg during quote" {
 						chain.reorg.Store(true)
 					}
-					_ = json.NewEncoder(w).Encode(wire.CowQuoteResponse{Quote: q, ID: 1})
+					_ = json.NewEncoder(w).Encode(wire.CowQuoteResponse{Quote: q, ID: 1, Verified: true})
 				case "/api/v1/orders":
 					posts++
 					var order wire.CowOrder
@@ -149,7 +149,7 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 						http.NotFound(w, r)
 						return
 					}
-					status := wire.CowOrderStatus{UID: identity.UID, Owner: addr(3).Hex(), Status: "open", SellAmount: "990", BuyAmount: "1980", ValidTo: 1600}
+					status := wire.CowOrderStatus{UID: identity.UID, Owner: addr(3).Hex(), Status: "open", SellAmount: "1000", BuyAmount: "1980", ValidTo: 1600}
 					switch mode {
 					case "owner":
 						status.Owner = addr(9).Hex()
@@ -170,7 +170,7 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			p, err := Factory(node(t, negativeConfig(srv.URL)), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
+			p, err := fixtureFactory(node(t, negativeConfig(srv.URL)), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -192,7 +192,7 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 			snap.BlockNumber = big.NewInt(13)
 			snap.BlockHash = testHeader(snap.BlockNumber).Hash()
 			for range 2 { // recreate provider: retries retain the same authorized UID/order.
-				p, err = Factory(node(t, negativeConfig(srv.URL)), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
+				p, err = fixtureFactory(node(t, negativeConfig(srv.URL)), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -212,6 +212,7 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 					t.Fatalf("must lookup before each identical retry: gets=%d posts=%d", gets, posts)
 				}
 				for _, o := range sent {
+					o.AppData = o.AppDataHash
 					raw, _ := EncodeOrder(o)
 					expected, _ := EncodeOrder(identity.Order)
 					if !bytes.Equal(raw, expected) {

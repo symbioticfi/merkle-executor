@@ -15,8 +15,9 @@ standalone daemon and vault-solver consume this same implementation.
 - `state`: optional exclusive local file store with atomic replacement and fsync.
 - `bindings`, `abi`: generated core interfaces and vendored provenance.
 
-The SDK creates no signer, nonce manager, fee engine, HTTP client, metrics server
-or daemon. A host implements `submission.Transport` over its existing sender.
+The SDK creates no signer, nonce manager, fee engine, metrics server or daemon.
+Permission sources and protocol I/O wrap a host-supplied HTTP transport; pinned
+read batching wraps a host-supplied RPC transport and generated aggregate codec. A host implements `submission.Transport` over its existing sender.
 `Hold` fences every other job using that signer; `SendAsync` calls `Persist` on
 each signed original and replacement **before** broadcasting; `Release` follows
 SDK acknowledgement after durable business progress. Signed records retain
@@ -84,3 +85,39 @@ never share Multicall execution or temporary EVM state. The later closing header
 can batch both original and current headers. Submission batches initial owned-attempt
 receipts and opening confirmation evidence while retaining nonce ownership and durable
 transitions.
+
+`protocolio.StagedProvider` optionally supplies a pure `PlanPreparation` for a value-only
+provisional pin. It does no I/O and receives no fabricated recipe/root authority. A
+preparation-local resolver receives the authenticated snapshot and a bounded, lazy
+accessor for its own results. Exact chain/block/hash/time/executor/account/caller
+identity must match before resolution; providers should classify API eligibility
+before consuming getters. `keeper.Planner` automatically uses this optional contract.
+Nonstaged providers and direct `Provider.Prepare` calls remain compatible. Speculative
+batch member errors stay lazy; outer transport/shape failures are fatal before provider
+classification and never trigger single-call retries.
+
+`PrepareExecutionWithOptions` can stage these reads with initial metadata and accept a
+`RecipeCache`. The old `PrepareExecution` and standalone discovery APIs remain uncached.
+`NewRecipeCache(capacity, bytes)` bounds a mutex-protected FIFO by entries and conservative
+retained allocation bytes (including payloads, empty slice slots and fixed overhead).
+Hosts set capacity from configured strategies; a nil cache disables it. Only exact
+recipe bodies plus commitment, event block and event hash are retained under full
+chain-ID/executor keys. A hit rereads metadata and the canonical event header, validates
+the body hash/structure and retains every later role/simulation/canonical check. Bodies
+are copied on load/insert and separated from mutable build callbacks. Only fully closed,
+successful preparations can populate the cache; failed builds or guards cannot. No
+provider getter or mutable account state is cached. Invalidating a frozen hint uses an
+entry version so it cannot erase a concurrent replacement. Transient per-attempt copies
+are not part of the retained-byte budget.
+
+`keeper.Planner.PermissionSource` optionally supplies encoded permission JSON from
+context, a copied chain ID and the authenticated `recipes.Snapshot`. The SDK decodes
+the bytes and validates every leaf and proof, including unused leaves. Source responses
+must carry a matching nonnil chain ID and exact active root; an optional account must
+match too. Source errors must omit credentials, complete URLs and remote payloads;
+wrapped causes preserve cancellation. The callback runs only during new preparation,
+before providers, and cannot replace closing role/simulation/canonical guards. Saved
+submission recovery, presend validation and provider advancement do not fetch a new
+tree. Without this seam, existing local `keeper.Config.Tree` behavior is unchanged.
+Hosts must include source configuration and derived identities in their revision
+fingerprint and must not rewrite active jobs during migration.

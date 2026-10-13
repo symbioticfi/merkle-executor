@@ -82,6 +82,11 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	if e := parse.DecodeStrict(raw, &c); e != nil {
 		return nil, e
 	}
+	return New(c, deps)
+}
+
+// New consumes an immutable carrier derived from the authenticated claim leaf.
+func New(c Config, deps providerRegistry.Deps) (*Provider, error) {
 	if e := protocolio.Action(c.Action); e != nil {
 		return nil, e
 	}
@@ -167,6 +172,36 @@ func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, erro
 	return p, nil
 }
 func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.Output, error) {
+	return p.prepare(ctx, s, func() ([]multicall.Multicall3Result, error) { return p.readBatch(ctx, s) })
+}
+
+// PlanPreparation only encodes configured reads. The strict aggregate stays an
+// isolated eth_call; it must not be nested inside the host's safe-getter aggregate.
+func (p *Provider) PlanPreparation(pin protocolio.PreparationPin) (protocolio.PreparationPlan, error) {
+	if err := pin.Validate(); err != nil {
+		return protocolio.PreparationPlan{}, err
+	}
+	payload, err := p.batchPayload(pin.Account)
+	if err != nil {
+		return protocolio.PreparationPlan{}, err
+	}
+	return protocolio.PreparationPlan{
+		Requests: []protocolio.ReadRequest{protocolio.ContractRead(p.multicall, payload, new(big.Int).SetUint64(pin.BlockNumber), false)},
+		Resolve: func(ctx context.Context, s provider.Snapshot, read protocolio.ReadAccessor) (provider.Output, error) {
+			if !pin.Matches(s) {
+				return provider.Output{}, errors.New("Merkl staged identity mismatch")
+			}
+			return p.prepare(ctx, s, func() ([]multicall.Multicall3Result, error) {
+				raw, err := read(0).CallData()
+				if err != nil {
+					return nil, err
+				}
+				return p.decodeBatch(raw)
+			})
+		},
+	}, nil
+}
+func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, read func() ([]multicall.Multicall3Result, error)) (provider.Output, error) {
 	if e := protocolio.Snapshot(s); e != nil {
 		return provider.Output{}, e
 	}
@@ -215,7 +250,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 		}
 	}
 	a := binding.NewMerklDistributor()
-	results, e := p.readBatch(ctx, s)
+	results, e := read()
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -355,31 +390,41 @@ func (p *Provider) Advance(_ context.Context, _ provider.Snapshot, _ provider.Ou
 // Every getter is required to execute successfully; decoding the default recipient
 // stays lazy because explicit per-token recipients override that value.
 func (p *Provider) readBatch(ctx context.Context, s provider.Snapshot) ([]multicall.Multicall3Result, error) {
+	payload, err := p.batchPayload(s.Account)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := protocolio.CallData(ctx, p.deps.Chain, s, p.multicall, payload)
+	if err != nil {
+		return nil, err
+	}
+	return p.decodeBatch(raw)
+}
+func (p *Provider) batchPayload(account common.Address) ([]byte, error) {
 	distributor := binding.NewMerklDistributor()
 	calls := make([]multicall.Multicall3Call3, 0, 2+2*len(p.tokens))
 	add := func(data []byte) {
 		calls = append(calls, multicall.Multicall3Call3{Target: p.distributor, AllowFailure: false, CallData: data})
 	}
 	add(distributor.PackGetMerkleRoot())
-	add(distributor.PackClaimRecipient(s.Account, common.Address{}))
+	add(distributor.PackClaimRecipient(account, common.Address{}))
 	for _, token := range p.tokens {
-		add(distributor.PackClaimed(s.Account, token))
-		add(distributor.PackClaimRecipient(s.Account, token))
+		add(distributor.PackClaimed(account, token))
+		add(distributor.PackClaimRecipient(account, token))
 	}
 	aggregate := multicall.NewMulticall3()
 	payload, err := aggregate.TryPackAggregate3(calls)
 	if err != nil {
 		return nil, errors.New("encode Merkl aggregate reads")
 	}
-	raw, err := protocolio.CallData(ctx, p.deps.Chain, s, p.multicall, payload)
-	if err != nil {
-		return nil, err
-	}
-	results, err := aggregate.UnpackAggregate3(raw)
+	return payload, nil
+}
+func (p *Provider) decodeBatch(raw []byte) ([]multicall.Multicall3Result, error) {
+	results, err := multicall.NewMulticall3().UnpackAggregate3(raw)
 	if err != nil {
 		return nil, errors.New("invalid Merkl aggregate response")
 	}
-	if len(results) != len(calls) {
+	if len(results) != 2+2*len(p.tokens) {
 		return nil, errors.New("Merkl aggregate result count mismatch")
 	}
 	for _, result := range results {

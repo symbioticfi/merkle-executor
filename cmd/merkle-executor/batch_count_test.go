@@ -120,8 +120,9 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 	}
 	requests, arrays, methods := 0, 0, 0
 	currentHead := uint64(12)
-	advanceAfterEvidence := false
+	advanceOnValidation := false
 	simulationBlock := `"0xc"`
+	latestReads := 0
 	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var raw json.RawMessage
 		_ = json.NewDecoder(r.Body).Decode(&raw)
@@ -148,6 +149,12 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 			case "eth_chainId":
 				value = "0x1"
 			case "eth_getBlockByNumber":
+				if string(q.Params[0]) == `"latest"` {
+					latestReads++
+					if advanceOnValidation && latestReads == 2 {
+						currentHead = 13
+					}
+				}
 				n := currentHead
 				if string(q.Params[0]) != `"latest"` {
 					var encoded string
@@ -161,9 +168,7 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 				value = headers[n]
 			case "eth_getLogs":
 				value = []types.Log{log}
-				if advanceAfterEvidence {
-					currentHead = 13
-				}
+
 			case "eth_call":
 				var call struct {
 					To    common.Address
@@ -212,31 +217,41 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 
 	var previous []byte
 	for _, advanced := range []bool{false, true} {
+		planner.RecipeCache = recipes.NewRecipeCache(1, 1<<20)
 		t.Run(map[bool]string{false: "same", true: "advanced"}[advanced], func(t *testing.T) {
-			currentHead = 12
-			advanceAfterEvidence = advanced
-			simulationBlock = `"0xc"`
-			requests, arrays, methods = 0, 0, 0
-			plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []provider.Provider{p}})
-			wantMethods := 10
-			if advanced {
-				wantMethods = 12
-			}
-			if err != nil || requests != 7 || arrays != 5 || methods != wantMethods || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0].Actions["0:0"], claim) {
-				t.Fatalf("Merkl Prepare requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
-			}
-			if previous != nil && !bytes.Equal(previous, plan.Calldata) {
-				t.Fatal("head advance changed approved execution")
-			}
-			previous = bytes.Clone(plan.Calldata)
-			simulationBlock = `"latest"`
-			requests, arrays, methods = 0, 0, 0
-			wantMethods = 5
-			if advanced {
-				wantMethods = 6
-			}
-			if err := planner.Validate(t.Context(), plan); err != nil || requests != 3 || arrays != 3 || methods != wantMethods {
-				t.Fatalf("Validate requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
+			for _, warm := range []bool{false, true} {
+				t.Run(map[bool]string{false: "cold", true: "warm"}[warm], func(t *testing.T) {
+					latestReads = 0
+					currentHead = 12
+					advanceOnValidation = advanced
+					simulationBlock = `"0xc"`
+					requests, arrays, methods = 0, 0, 0
+					plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []provider.Provider{p}})
+					wantMethods := 10
+					if advanced {
+						wantMethods = 12
+					}
+					wantRequests, wantArrays := 6, 5
+					if warm {
+						wantRequests, wantArrays, wantMethods = 5, 4, wantMethods-1
+					}
+					if err != nil || requests != wantRequests || arrays != wantArrays || methods != wantMethods || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0].Actions["0:0"], claim) {
+						t.Fatalf("Merkl Prepare requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
+					}
+					if previous != nil && !bytes.Equal(previous, plan.Calldata) {
+						t.Fatal("head advance changed approved execution")
+					}
+					previous = bytes.Clone(plan.Calldata)
+					simulationBlock = `"latest"`
+					requests, arrays, methods = 0, 0, 0
+					wantMethods = 5
+					if advanced {
+						wantMethods = 6
+					}
+					if err := planner.Validate(t.Context(), plan); err != nil || requests != 3 || arrays != 3 || methods != wantMethods {
+						t.Fatalf("Validate requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
+					}
+				})
 			}
 		})
 	}

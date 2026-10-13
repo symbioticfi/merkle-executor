@@ -236,3 +236,14 @@ func (c TxManager) EngineConfig() engine.Config {
 			GasHeadroomBps: h.GasHeadroomBps, FallbackGasHeadroomBps: h.FallbackGasHeadroomBps,
 		}}
 }
+
+// validateRuntimePolicy permits old files only when their values match the fixed
+// profile. The absolute fee ceiling remains explicit because it is a spend limit.
+func (c TxManager) validateRuntimePolicy() error {
+	want := TxManager{Confirmations: DefaultConfirmations, PollInterval: DefaultTransactionPollInterval, MaxFeeGwei: c.MaxFeeGwei}
+	want.applyDefaults()
+	if c != want {
+		return errors.New("transaction timing, confirmations and horizon settings are fixed by the runtime policy; remove legacy overrides")
+	}
+	return nil
+}

@@ -57,15 +57,17 @@ func discoverForBuild(ctx context.Context, reader Reader, executor, expectedAcco
 	if err != nil {
 		return Snapshot{}, Recipe{}, err
 	}
-	if snapshot.RecipeHash == (common.Hash{}) {
-		return Snapshot{}, Recipe{}, errors.New("executor recipe is unconfigured")
-	}
-	if snapshot.RecipeBlock > snapshot.BlockNumber {
-		return Snapshot{}, Recipe{}, errors.New("recipe block is in the future")
+	recipe, _, err := discoverRecipe(ctx, reader, snapshot, header)
+	return snapshot, recipe, err
+}
+
+func discoverRecipe(ctx context.Context, reader Reader, snapshot Snapshot, header *types.Header) (Recipe, common.Hash, error) {
+	if err := validateRecipeMetadata(snapshot); err != nil {
+		return Recipe{}, common.Hash{}, err
 	}
 	eventBlock := new(big.Int).SetUint64(snapshot.RecipeBlock)
 	eventID := executorABI.GetABI().Events["SetRecipe"].ID
-	query := ethereum.FilterQuery{FromBlock: eventBlock, ToBlock: eventBlock, Addresses: []common.Address{executor}, Topics: [][]common.Hash{{eventID}}}
+	query := ethereum.FilterQuery{FromBlock: eventBlock, ToBlock: eventBlock, Addresses: []common.Address{snapshot.Executor}, Topics: [][]common.Hash{{eventID}}}
 	requests := []protocolio.ReadRequest{}
 	if snapshot.RecipeBlock != snapshot.BlockNumber {
 		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: eventBlock})
@@ -73,56 +75,66 @@ func discoverForBuild(ctx context.Context, reader Reader, executor, expectedAcco
 	requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadLogs, Filter: query})
 	evidence, err := protocolio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
-		return Snapshot{}, Recipe{}, errors.Errorf("read recipe evidence: %w", err)
+		return Recipe{}, common.Hash{}, errors.Errorf("read recipe evidence: %w", err)
 	}
 	eventHeader := header
 	if snapshot.RecipeBlock != snapshot.BlockNumber {
 		result := evidence.At(0)
 		if result.Err != nil {
-			return Snapshot{}, Recipe{}, errors.Errorf("recipe block header: %w", result.Err)
+			return Recipe{}, common.Hash{}, errors.Errorf("recipe block header: %w", result.Err)
 		}
 		eventHeader = result.Header
 		if err = validateHeader(eventHeader, eventBlock); err != nil {
-			return Snapshot{}, Recipe{}, err
+			return Recipe{}, common.Hash{}, err
 		}
 	}
 	result := evidence.At(len(requests) - 1)
 	if result.Err != nil {
-		return Snapshot{}, Recipe{}, errors.Errorf("read SetRecipe logs: %w", result.Err)
+		return Recipe{}, common.Hash{}, errors.Errorf("read SetRecipe logs: %w", result.Err)
 	}
 	logs := result.Logs
 	if len(logs) == 0 {
-		return Snapshot{}, Recipe{}, errors.New("SetRecipe event missing")
+		return Recipe{}, common.Hash{}, errors.New("SetRecipe event missing")
 	}
 	sort.Slice(logs, func(i, j int) bool { return logs[i].Index < logs[j].Index })
 	for i, log := range logs {
-		if log.Removed || log.Address != executor || log.BlockNumber != snapshot.RecipeBlock || log.BlockHash != eventHeader.Hash() || len(log.Topics) != 2 || log.Topics[0] != eventID {
-			return Snapshot{}, Recipe{}, errors.New("invalid or noncanonical SetRecipe log")
+		if log.Removed || log.Address != snapshot.Executor || log.BlockNumber != snapshot.RecipeBlock || log.BlockHash != eventHeader.Hash() || len(log.Topics) != 2 || log.Topics[0] != eventID {
+			return Recipe{}, common.Hash{}, errors.New("invalid or noncanonical SetRecipe log")
 		}
 		if i > 0 && logs[i-1].Index == log.Index {
-			return Snapshot{}, Recipe{}, errors.New("duplicate SetRecipe log index")
+			return Recipe{}, common.Hash{}, errors.New("duplicate SetRecipe log index")
 		}
 	}
 	latest := &logs[len(logs)-1]
 	if latest.Topics[1] != snapshot.RecipeHash {
-		return Snapshot{}, Recipe{}, errors.New("latest SetRecipe event differs from current commitment")
+		return Recipe{}, common.Hash{}, errors.New("latest SetRecipe event differs from current commitment")
 	}
 	event, err := executorABI.UnpackSetRecipeEvent(latest)
 	if err != nil {
-		return Snapshot{}, Recipe{}, errors.Errorf("decode SetRecipe: %w", err)
+		return Recipe{}, common.Hash{}, errors.Errorf("decode SetRecipe: %w", err)
 	}
 	recipe := Recipe{Queries: event.Queries, Steps: event.Steps}
 	hash, err := HashRecipe(recipe)
 	if err != nil {
-		return Snapshot{}, Recipe{}, err
+		return Recipe{}, common.Hash{}, err
 	}
 	if hash != snapshot.RecipeHash {
-		return Snapshot{}, Recipe{}, errors.New("SetRecipe body hash mismatch")
+		return Recipe{}, common.Hash{}, errors.New("SetRecipe body hash mismatch")
 	}
 	if _, err = Inspect(recipe); err != nil {
-		return Snapshot{}, Recipe{}, errors.Errorf("invalid committed recipe: %w", err)
+		return Recipe{}, common.Hash{}, errors.Errorf("invalid committed recipe: %w", err)
 	}
-	return snapshot, recipe, nil
+	return recipe, eventHeader.Hash(), nil
+}
+
+func validateRecipeMetadata(snapshot Snapshot) error {
+	if snapshot.RecipeHash == (common.Hash{}) {
+		return errors.New("executor recipe is unconfigured")
+	}
+	if snapshot.RecipeBlock > snapshot.BlockNumber {
+		return errors.New("recipe block is in the future")
+	}
+	return nil
 }
 
 func snapshotRequests(executor, expectedAccount common.Address, block *big.Int) []protocolio.ReadRequest {
