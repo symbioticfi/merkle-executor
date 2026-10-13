@@ -36,16 +36,27 @@ type Plan struct {
 	Outputs  []provider.Output `json:"outputs"`
 }
 
+// PermissionSource supplies encoded artifacts; the SDK validates every leaf and
+// proof itself. Errors must omit credentials, URLs and remote payloads.
+// It is called only during new preparation, never durable recovery.
+type PermissionSource interface {
+	PermissionTree(context.Context, *big.Int, recipes.Snapshot) ([]byte, error)
+}
+
 type Planner struct {
-	Chain         Backend
-	ChainID       *big.Int
-	Caller        common.Address
-	Confirmations uint64
-	RecipeCache   *recipes.RecipeCache
+	PermissionSource PermissionSource
+	Chain            Backend
+	ChainID          *big.Int
+	Caller           common.Address
+	Confirmations    uint64
+	RecipeCache      *recipes.RecipeCache
 }
 
 func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) {
 	var plan Plan
+	if p.PermissionSource != nil && (p.ChainID == nil || p.ChainID.Sign() <= 0 || p.ChainID.BitLen() > 256) {
+		return plan, errors.New("permission source requires valid chain ID")
+	}
 	var preparation *protocolio.Preparation
 	options := recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache, Stage: func(pin protocolio.PreparationPin) []protocolio.ReadRequest {
 		preparation = protocolio.PlanPreparation(strategy.Providers, pin)
@@ -55,14 +66,14 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 		if strategy.Config.RecipeHash != "" && snap.RecipeHash != common.HexToHash(strategy.Config.RecipeHash) {
 			return nil, nil, errors.New("configured recipe hash mismatch")
 		}
-		tree, err := recipes.LoadTree(strategy.Config.Tree)
+		tree, err := p.permissionTree(ctx, strategy.Config.Tree, snap)
 		if err != nil {
 			return nil, nil, errors.Errorf("load permission tree: %w", err)
 		}
 		if tree.Root != snap.Root {
 			return nil, nil, errors.New("permission tree does not match active account root")
 		}
-		if tree.ChainID != nil && tree.ChainID.Cmp(p.ChainID) != 0 {
+		if p.PermissionSource != nil && tree.ChainID == nil || tree.ChainID != nil && tree.ChainID.Cmp(p.ChainID) != 0 {
 			return nil, nil, errors.New("permission tree chain mismatch")
 		}
 		if tree.Account != nil && *tree.Account != snap.Account {
@@ -93,6 +104,20 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 		return plan.Calldata, plan.Leaves, nil
 	})
 	return plan, err
+}
+
+func (p *Planner) permissionTree(ctx context.Context, path string, snapshot recipes.Snapshot) (*recipes.Tree, error) {
+	if p.PermissionSource == nil {
+		return recipes.LoadTree(path)
+	}
+	if p.ChainID == nil || p.ChainID.Sign() <= 0 {
+		return nil, errors.New("permission source requires chain ID")
+	}
+	raw, err := p.PermissionSource.PermissionTree(ctx, new(big.Int).Set(p.ChainID), snapshot)
+	if err != nil {
+		return nil, errors.Errorf("permission source failed: %w", err)
+	}
+	return recipes.DecodeTree(raw)
 }
 
 func merge(inputs map[uint]string, actions map[string]hexutil.Bytes, skips *[]uint, out provider.Output) error {

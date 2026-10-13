@@ -108,3 +108,15 @@ successful preparations can populate the cache; failed builds or guards cannot. 
 provider getter or mutable account state is cached. Invalidating a frozen hint uses an
 entry version so it cannot erase a concurrent replacement. Transient per-attempt copies
 are not part of the retained-byte budget.
+
+`keeper.Planner.PermissionSource` optionally supplies encoded permission JSON from
+context, a copied chain ID and the authenticated `recipes.Snapshot`. The SDK decodes
+the bytes and validates every leaf and proof, including unused leaves. Source responses
+must carry a matching nonnil chain ID and exact active root; an optional account must
+match too. Source errors must omit credentials, complete URLs and remote payloads;
+wrapped causes preserve cancellation. The callback runs only during new preparation,
+before providers, and cannot replace closing role/simulation/canonical guards. Saved
+submission recovery, presend validation and provider advancement do not fetch a new
+tree. Without this seam, existing local `keeper.Config.Tree` behavior is unchanged.
+Hosts must include source configuration and derived identities in their revision
+fingerprint and must not rewrite active jobs during migration.
