@@ -70,11 +70,12 @@ type prepared struct {
 	Signature     string                  `json:"signature"`
 }
 type progressState struct {
-	Version   int         `json:"version"`
-	Digest    common.Hash `json:"digest"`
-	OrderID   string      `json:"orderId,omitempty"`
-	NextBlock uint64      `json:"nextBlock"`
-	Anchor    common.Hash `json:"anchor"`
+	Version   int          `json:"version"`
+	Digest    common.Hash  `json:"digest"`
+	OrderID   string       `json:"orderId,omitempty"`
+	NextBlock uint64       `json:"nextBlock"`
+	Anchor    common.Hash  `json:"anchor"`
+	Lookup    *lookupState `json:"lookup,omitempty"`
 }
 
 var uuid = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -364,6 +365,9 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 		if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
 			return provider.Progress{}, err
 		}
+		if done {
+			st.Lookup = nil
+		}
 		raw, err := json.Marshal(st)
 		return provider.Progress{Done: done, Outcome: name, Reference: st.OrderID, State: raw}, err
 	}
@@ -403,12 +407,15 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	if err != nil || allowance.Cmp(d.Request.AmountIn) < 0 {
 		return provider.Progress{}, errors.New("RFQ Reactor allowance unavailable")
 	}
-	found, err := p.lookup(ctx, s, d, &st)
+	found, complete, err := p.lookup(ctx, s, d, &st)
 	if err != nil {
 		return provider.Progress{}, err
 	}
 	if err = protocolio.Canonical(ctx, p.chain, s); err != nil {
 		return provider.Progress{}, err
+	}
+	if !complete {
+		return finish("lookup-scanning", false)
 	}
 	if found {
 		return finish("published", false)

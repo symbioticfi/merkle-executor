@@ -24,16 +24,14 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	multicall "github.com/symbioticfi/merkle-executor/api/bindings/multicall3"
 	"github.com/symbioticfi/merkle-executor/internal/chain"
-	registry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/data"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesData(t *testing.T) {
+func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) {
 	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
 		t.Skip("set MERKLE_ANVIL_TEST=1 for local batch integration")
 	}
@@ -219,25 +217,28 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesData(t *testing.T) {
 			mu.Unlock()
 		}
 	}
-	cfg := data.RPCConfig{Reads: []data.Read{
-		{Target: token.Hex(), Data: hexutil.Encode(tokenABI.PackTransfer(owners[1], big.NewInt(1))), Input: 0},
-		{Target: token.Hex(), Data: hexutil.Encode(tokenABI.PackApprove(owners[1], big.NewInt(1))), Input: 1},
-		{Target: token.Hex(), Data: hexutil.Encode(tokenABI.PackApprove(owners[1], big.NewInt(2))), Input: 2},
-	}}
-	reg := registry.NewRegistry()
-	data.Register(reg)
-	p, err := reg.New("rpc", serviceNode(t, cfg), registry.Deps{Chain: batched})
+	reset()
+	var calls []protocolio.ReadRequest
+	for _, data := range [][]byte{
+		tokenABI.PackTransfer(owners[1], big.NewInt(1)),
+		tokenABI.PackApprove(owners[1], big.NewInt(1)),
+		tokenABI.PackApprove(owners[1], big.NewInt(2)),
+	} {
+		calls = append(calls, protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: account, To: &token, Data: data}, Block: plan.Snapshot.BlockNumber})
+	}
+	reads, err := protocolio.ReadGroup(ctx, batched, calls...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reset()
-	out, err := p.Prepare(ctx, provider.Snapshot{ChainID: big.NewInt(31337), BlockNumber: plan.Snapshot.BlockNumber, Account: account})
-	if err != nil || out.Inputs[0] != "1" || out.Inputs[1] != "1" || out.Inputs[2] != "1" {
-		t.Fatalf("caller/isolation changed: %+v %v", out, err)
+	for i := range 3 {
+		raw, err := reads.At(i).CallData()
+		if err != nil || new(big.Int).SetBytes(raw).Cmp(big.NewInt(1)) != 0 {
+			t.Fatalf("caller/isolation changed: %x %v", raw, err)
+		}
 	}
 	mu.Lock()
 	if requests != 1 || arrays != 1 || methods != 3 || len(aggregateSizes) != 0 {
-		t.Errorf("data counts requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
+		t.Errorf("isolated calls requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
 	}
 	mu.Unlock()
 	for _, check := range []struct {

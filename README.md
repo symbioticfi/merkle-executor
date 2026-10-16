@@ -146,8 +146,8 @@ a fixed provider set; authenticated action layouts select the applicable protoco
 The keeper supplies unavailable proofs, request IDs and signatures. Runtime inputs
 use exact recipe-result anchors or the maximum permitted READ-derived bounds;
 unknown sources are rejected.
-Direct SDK users may still construct explicit configurable providers; those APIs do
-not enable manual provider configuration in the ordinary daemon.
+SDK hosts implement their own providers through the SDK provider interfaces;
+the daemon does not expose manual provider configuration.
 
 ## Lifecycle and recovery
 
@@ -244,8 +244,8 @@ Fill reconciliation. One ordinary ERC20 output to the derived account is support
 are validated before requesting a quote.
 
 Signed Liquid Lane discount acquisition and signatures belong to vault-solver. The
-daemon does not register the `liquidlane` signed-swap provider; its implementation
-and SDK primitives remain available in the repository. The `redemptions` issuer
+daemon does not include a signed-swap acquisition provider; the SDK exposes
+protocol-neutral provider interfaces for host integrations. The `redemptions` issuer
 request/claim provider remains registered. The recipe fixes identities, permitted
 layouts and economic constraints; protocol endpoints, expiry limits and preparation
 bounds use fixed policies. CoW uses its own automatic slippage calculation.
