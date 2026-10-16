@@ -38,7 +38,11 @@ func (r *permissionReader) CallContract(ctx context.Context, m ethereum.CallMsg,
 			r.t.Fatal("wrong prepared simulation")
 		}
 		r.simulations++
-		return nil, nil
+		if r.reorgOnSimulation {
+			r.header = types.CopyHeader(r.header)
+			r.header.Extra = []byte("reorg after simulation")
+		}
+		return r.returned, r.simulationErr
 	}
 	return r.validationReader.CallContract(ctx, m, b)
 }
@@ -53,7 +57,7 @@ func (*permissionProvider) Advance(context.Context, provider.Snapshot, provider.
 	return provider.Progress{Done: true}, nil
 }
 func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
-	for _, mode := range []string{"valid", "legacy", "source error", "empty", "missing chain", "null chain", "wrong chain", "root", "account", "invalid unused leaf", "invalid unused proof", "mutate chain", "root during HTTP", "reorg during HTTP"} {
+	for _, mode := range []string{"valid", "legacy", "source error", "empty", "missing chain", "null chain", "wrong chain", "root", "account", "invalid unused leaf", "invalid unused proof", "mutate chain", "root during HTTP", "reorg during HTTP", "reorg during simulation"} {
 		t.Run(mode, func(t *testing.T) {
 			header := &types.Header{Number: big.NewInt(12)}
 			recipe := recipes.Recipe{}
@@ -63,6 +67,8 @@ func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 			event := abi.GetABI().Events["SetRecipe"]
 			data, _ := event.Inputs.NonIndexed().Pack(recipe.Queries, recipe.Steps)
 			r := &permissionReader{validationReader: &validationReader{t: t, snapshot: snapshot, header: header, payload: abi.PackExecute(nil, nil, nil, nil)}, log: types.Log{Address: snapshot.Executor, BlockNumber: 12, BlockHash: header.Hash(), Topics: []common.Hash{event.ID, hash}, Data: data}}
+			r.returned, _ = abi.GetABI().Methods["execute"].Outputs.Pack([]*big.Int{})
+			r.reorgOnSimulation = mode == "reorg during simulation"
 			doc := map[string]any{"chainId": 1, "root": snapshot.Root.Hex(), "adapter": common.HexToAddress("0x999").Hex(), "leaves": []any{}}
 			switch mode {
 			case "missing chain":
@@ -122,7 +128,7 @@ func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 			strategy.Providers = []provider.Provider{pr}
 			_, err := planner.Prepare(t.Context(), strategy)
 			ok := mode == "valid" || mode == "legacy" || mode == "mutate chain"
-			if (err == nil) != ok {
+			if ok && !errors.Is(err, provider.ErrNotReady) || !ok && (err == nil || errors.Is(err, provider.ErrNotReady)) {
 				t.Fatalf("mode %s: %v", mode, err)
 			}
 			if planner.ChainID.Int64() != 1 {
@@ -131,7 +137,7 @@ func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 			if mode == "source error" && !errors.Is(err, context.Canceled) {
 				t.Fatal("source cancellation cause lost")
 			}
-			if !ok && mode != "root during HTTP" && mode != "reorg during HTTP" && pr.calls != 0 {
+			if !ok && mode != "root during HTTP" && mode != "reorg during HTTP" && mode != "reorg during simulation" && pr.calls != 0 {
 				t.Fatal("invalid tree reached provider")
 			}
 			if mode != "legacy" && calls != 1 {
@@ -159,7 +165,8 @@ func TestPlannerPermissionSourceRequiresValidChainBeforeReads(t *testing.T) {
 func TestPlannerValidationDoesNotFetchPermissions(t *testing.T) {
 	header := &types.Header{Number: big.NewInt(12)}
 	snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: common.HexToHash("0x04"), Root: common.HexToHash("0x05"), RecipeBlock: 11}
-	r := &validationReader{t: t, snapshot: snapshot, header: header, payload: []byte{1, 2, 3, 4}}
+	payload, returned := validationWork(t, true)
+	r := &validationReader{t: t, snapshot: snapshot, header: header, payload: payload, returned: returned}
 	planner := Planner{Chain: r, Caller: snapshot.Caller, PermissionSource: permissionSourceFunc(func(context.Context, *big.Int, recipes.Snapshot) ([]byte, error) {
 		t.Fatal("validation contacted unavailable permission source")
 		return nil, errors.New("source unavailable")
