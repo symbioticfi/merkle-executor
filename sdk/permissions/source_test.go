@@ -77,14 +77,14 @@ func TestSourceCancellationIdentity(t *testing.T) {
 		for _, want := range []error{context.Canceled, context.DeadlineExceeded} {
 			t.Run(phase+"/"+want.Error(), func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
-				if want == context.DeadlineExceeded {
+				if errors.Is(want, context.DeadlineExceeded) {
 					cancel()
 					ctx, cancel = context.WithTimeout(t.Context(), 100*time.Millisecond)
 				}
 				defer cancel()
 				transport := sourceRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 					fail := func() error {
-						if want == context.Canceled {
+						if errors.Is(want, context.Canceled) {
 							cancel()
 						}
 						<-r.Context().Done()

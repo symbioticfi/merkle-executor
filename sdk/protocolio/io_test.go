@@ -64,7 +64,7 @@ func testHTTPContextIdentity(t *testing.T, want error) {
 	for _, phase := range []string{"before-dispatch", "headers", "body"} {
 		t.Run(phase, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
-			if want == context.DeadlineExceeded {
+			if errors.Is(want, context.DeadlineExceeded) {
 				cancel()
 				deadline := time.Now().Add(100 * time.Millisecond)
 				if phase == "before-dispatch" {
@@ -79,14 +79,14 @@ func testHTTPContextIdentity(t *testing.T, want error) {
 			var body *httpFailureBody
 			transport := httpRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 				if phase == "headers" || phase == "before-dispatch" {
-					if want == context.Canceled {
+					if errors.Is(want, context.Canceled) {
 						cancel()
 					}
 					<-r.Context().Done()
 					return nil, errors.Errorf("synthetic-private-transport: %w", r.Context().Err())
 				}
 				body = &httpFailureBody{read: func(p []byte) (int, error) {
-					if want == context.Canceled {
+					if errors.Is(want, context.Canceled) {
 						cancel()
 					}
 					<-r.Context().Done()
@@ -194,7 +194,7 @@ func TestHTTPFailureCauseRedaction(t *testing.T) {
 					t.Fatalf("raw cause or wrong status: %d %v", status, err)
 				}
 				for _, sentinel := range []error{context.Canceled, context.DeadlineExceeded} {
-					if errors.Is(err, sentinel) != (want == sentinel) {
+					if errors.Is(err, sentinel) != errors.Is(want, sentinel) {
 						t.Fatalf("wrong safe sentinel: err=%v want=%v", err, want)
 					}
 				}
