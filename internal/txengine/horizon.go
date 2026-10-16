@@ -452,6 +452,14 @@ func (m *Manager) callGas(ctx context.Context, req Request, parent *types.Header
 	if req.GasLimit != 0 {
 		return req.GasLimit, nil
 	}
+	// The worker owns admitted work beyond caller cancellation. Bound the entire
+	// unsigned estimate, including the latest-state fallback, on that context.
+	deadline := time.Now().Add(m.gasEstimateTimeout())
+	if !req.Deadline.IsZero() && req.Deadline.Before(deadline) {
+		deadline = req.Deadline
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	gas, headroomBps, err := m.estimateHorizonGas(ctx, req, parent)
 	if err != nil {
 		if revert := executionRevert(err); revert != nil {

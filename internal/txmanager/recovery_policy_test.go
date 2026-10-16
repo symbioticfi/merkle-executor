@@ -9,7 +9,9 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"math/big"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/symbioticfi/merkle-executor/sdk/state"
@@ -172,6 +174,99 @@ func TestCancelledUnsignedAdmissionKeepsIdentityUntilCompletion(t *testing.T) {
 	if err != nil || !joined.Confirmed {
 		t.Fatalf("admitted job did not finish after caller cancellation: %+v %v", joined, err)
 	}
+}
+
+type timeoutUnsignedEstimate struct {
+	*fakeChain
+	entered   chan struct{}
+	completed chan struct{}
+	calls     atomic.Int64
+}
+
+func (b *timeoutUnsignedEstimate) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64, error) {
+	if b.calls.Add(1) == 1 {
+		close(b.entered)
+		<-ctx.Done()
+		close(b.completed)
+		return 0, ctx.Err()
+	}
+	return b.fakeChain.EstimateGas(ctx, msg)
+}
+
+func TestUnsignedEstimateTimeoutReleasesOnlyAfterOutcome(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store, err := state.Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		b := &timeoutUnsignedEstimate{fakeChain: newChain(), entered: make(chan struct{}), completed: make(chan struct{})}
+		m, err := New(b, testSigner(t), big.NewInt(1), store, Config{
+			MaxFeeGwei: 30, PollInterval: time.Millisecond, Confirmations: 2,
+			ReplacementInterval: 200 * time.Millisecond, ShutdownTimeout: 10 * time.Millisecond,
+		}, logr.Discard())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = m.Start(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
+		ctx, cancel := context.WithCancel(t.Context())
+		type response struct {
+			result Result
+			err    error
+		}
+		caller := make(chan response, 1)
+		go func() { got, sendErr := m.Send(ctx, request()); caller <- response{got, sendErr} }()
+		<-b.entered
+		cancel()
+		got := <-caller
+		if !errors.Is(got.err, context.Canceled) || !got.result.Pending || got.result.Hash != (common.Hash{}) || m.PendingID() != request().ID {
+			t.Fatalf("cancelled caller lost unsigned ownership: %+v, %v, owner %q", got.result, got.err, m.PendingID())
+		}
+		competing := request()
+		competing.ID = "healthy-after-timeout"
+		assertOwned := func() {
+			t.Helper()
+			if _, sendErr := m.Send(t.Context(), competing); !errors.Is(sendErr, ErrLaneBusy) {
+				t.Fatalf("competing request entered the unsigned lane: %v", sendErr)
+			}
+			if acknowledgeErr := m.Acknowledge(t.Context(), request().ID); acknowledgeErr == nil {
+				t.Fatal("unsigned admitted job acknowledged")
+			}
+		}
+		assertOwned()
+		select {
+		case <-b.completed:
+		case <-time.After(time.Second):
+			t.Fatal("initial unsigned estimate did not exhaust its production budget")
+		}
+		synctest.Wait()
+		// An available engine outcome does not release identity until a caller joins it.
+		assertOwned()
+		if m.PendingID() != request().ID {
+			t.Fatal("unsigned timeout released identity before joining the outcome")
+		}
+		joined, err := m.Send(t.Context(), request())
+		if !errors.Is(err, context.DeadlineExceeded) || joined.Pending || joined.Hash != (common.Hash{}) || m.PendingID() != "" {
+			t.Fatalf("unsigned timeout did not resolve after joining: %+v, %v, owner %q", joined, err, m.PendingID())
+		}
+		var saved record
+		if found, loadErr := store.Load(journalKey, &saved); loadErr != nil || found {
+			t.Fatalf("unsigned timeout created a signed journal: %+v, %v", saved, loadErr)
+		}
+		b.mu.Lock()
+		sends := len(b.sent)
+		b.mu.Unlock()
+		if sends != 0 {
+			t.Fatalf("unsigned timeout broadcast %d transactions", sends)
+		}
+		healthy, err := m.Send(t.Context(), competing)
+		if err != nil || !healthy.Confirmed || healthy.ID != competing.ID || b.calls.Load() != 2 {
+			t.Fatalf("healthy request was not admitted after timeout: %+v, %v, estimate calls %d", healthy, err, b.calls.Load())
+		}
+	})
 }
 
 type reincludedReceipt struct {
