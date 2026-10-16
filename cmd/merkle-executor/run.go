@@ -20,8 +20,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlanerfq"
 	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
-	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
-	"github.com/symbioticfi/merkle-executor/internal/providers/securitize"
 	"github.com/symbioticfi/merkle-executor/internal/signer"
 	"github.com/symbioticfi/merkle-executor/internal/txmanager"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
@@ -29,6 +27,13 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
+
+// Only external proofs, quotes and signatures need specialized providers.
+// On-chain readiness and completion checks remain in the committed recipe.
+var automaticProviders = []struct {
+	name string
+	new  func(providerRegistry.Deps) (provider.Provider, error)
+}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}}
 
 func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer) error {
 	return runBotWithHTTP(ctx, path, once, planOnly, out, nil)
@@ -94,10 +99,7 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	strategies := make([]keeper.Strategy, 0, len(cfg.Strategies))
 	for _, sc := range cfg.Strategies {
 		s := keeper.Strategy{Config: keeper.Config{Name: sc, Executor: sc, Account: accounts[common.HexToAddress(sc)].Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(sc, accounts[common.HexToAddress(sc)], caller)}}
-		for _, registration := range []struct {
-			name string
-			new  func(providerRegistry.Deps) (provider.Provider, error)
-		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}, {"redemptions", redemptions.NewAutomatic}, {"securitize", securitize.NewAutomatic}} {
+		for _, registration := range automaticProviders {
 			p, err := registration.new(providerRegistry.Deps{Chain: client, HTTP: httpClient, Log: log.WithValues("strategy", sc, "provider", registration.name), ConfigDir: configDir})
 			if err != nil {
 				return errors.Errorf("configure provider %s: %w", registration.name, err)

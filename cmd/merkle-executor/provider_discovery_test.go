@@ -4,12 +4,22 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
-
-	"os"
 )
+
+func TestAutomaticProvidersRequireExternalMaterial(t *testing.T) {
+	var names []string
+	for _, registration := range automaticProviders {
+		names = append(names, registration.name)
+	}
+	if want := []string{"cowswap", "merkl", "liquidlane-rfq"}; !reflect.DeepEqual(names, want) {
+		t.Fatalf("automatic providers: %v, want %v", names, want)
+	}
+}
 
 func TestDaemonRejectsManualRuntimeSources(t *testing.T) {
 	for _, name := range []string{"static", "rpc", "http", "merkl", "cowswap", "liquidlane", "liquidlane-rfq", "redemptions", "securitize"} {
