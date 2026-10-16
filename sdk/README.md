@@ -127,8 +127,12 @@ context, a copied chain ID and the authenticated `recipes.Snapshot`. The SDK dec
 the bytes and validates every leaf and proof, including unused leaves. Source responses
 must carry a matching nonnil chain ID and exact active root; an optional account must
 match too. Source errors must omit credentials, complete URLs and remote payloads;
-wrapped causes preserve cancellation. The callback runs only during new preparation,
-before providers, and cannot replace closing role/simulation/canonical guards. Saved
+wrapped causes preserve cancellation. Built-in HTTP transport and body-read failures
+retain only the public `context.Canceled` or `context.DeadlineExceeded` sentinel.
+Raw transport errors and custom cancellation causes remain redacted. HTTP status,
+response bounds, redirect refusal and timeout policy remain unchanged.
+The callback runs only during new preparation, before providers, and cannot replace
+closing role/simulation/canonical guards. Saved
 submission recovery, presend validation and provider advancement do not fetch a new
 tree. Without this seam, existing local `keeper.Config.Tree` behavior is unchanged.
 Hosts must include source configuration and derived identities in their revision

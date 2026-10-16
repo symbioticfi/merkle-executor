@@ -100,7 +100,7 @@ func (c *Client) JSON(ctx context.Context, method, path string, in, out any) (in
 	}
 	resp, e := c.http.Do(req)
 	if e != nil {
-		return 0, errors.New("protocol HTTP transport failed")
+		return 0, httpFailure(ctx, "protocol HTTP transport failed", e)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -108,7 +108,7 @@ func (c *Client) JSON(ctx context.Context, method, path string, in, out any) (in
 	}
 	b, e := io.ReadAll(io.LimitReader(resp.Body, c.limit+1))
 	if e != nil {
-		return resp.StatusCode, errors.New("read protocol response")
+		return resp.StatusCode, httpFailure(ctx, "read protocol response", e)
 	}
 	if int64(len(b)) > c.limit {
 		return resp.StatusCode, errors.New("protocol response exceeds configured bound")
@@ -120,6 +120,30 @@ func (c *Client) JSON(ctx context.Context, method, path string, in, out any) (in
 	}
 	return resp.StatusCode, nil
 }
+
+func httpFailure(ctx context.Context, message string, cause error) error {
+	// Only these public sentinels are safe to retain. Raw transport errors and
+	// context.Cause can include URLs, credentials or response/provider payloads.
+	var safe error
+	switch ctx.Err() {
+	case context.Canceled:
+		safe = context.Canceled
+	case context.DeadlineExceeded:
+		safe = context.DeadlineExceeded
+	default:
+		switch {
+		case errors.Is(cause, context.Canceled):
+			safe = context.Canceled
+		case errors.Is(cause, context.DeadlineExceeded):
+			safe = context.DeadlineExceeded
+		}
+	}
+	if safe != nil {
+		return errors.Errorf("%s: %w", message, safe)
+	}
+	return errors.New(message)
+}
+
 func Snapshot(s provider.Snapshot) error {
 	if s.ChainID == nil || s.ChainID.Sign() <= 0 || s.ChainID.BitLen() > 256 || s.BlockNumber == nil || s.BlockNumber.Sign() < 0 || s.Account == (common.Address{}) {
 		return errors.New("provider requires a pinned chain/account snapshot")
