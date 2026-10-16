@@ -412,6 +412,9 @@ func (p *automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 			if err != nil {
 				return provider.Output{}, err
 			}
+			if amount.Sign() == 0 {
+				return provider.Output{}, provider.ErrNotReady
+			}
 			cfg.Amount = amount.String()
 			cfg.AmountInput = route.Amount.Input
 		}
@@ -419,6 +422,9 @@ func (p *automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 			intermediate, err := recipes.EconomicResult(*route.Intermediate, results)
 			if err != nil {
 				return provider.Output{}, err
+			}
+			if intermediate.Sign() == 0 {
+				return provider.Output{}, provider.ErrNotReady
 			}
 			cfg.IntermediateAmount = intermediate.String()
 			cfg.IntermediateInput = route.Intermediate.Input

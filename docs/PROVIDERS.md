@@ -147,6 +147,13 @@ Centrifuge claims preserve that exact share amount and remain idle if
 committed literals or exact deterministic Results; an Input needs a preceding
 exact equality. The provider never chooses an arbitrary index from a range.
 
+A successfully resolved zero financial amount is normal idle work, including a
+zero required Figure intermediate amount. An idle selected route leaves the whole
+preparation idle with no partial action output. Missing or malformed economic
+results and unmet committed lower bounds remain errors. Zero claim request IDs
+and queue epochs retain their identity semantics; they are not empty budgets.
+Direct provider constructors still require positive configured financial amounts.
+
 Figure requires the ordered PRIME unwrap and wYLDS request, with a preview query
 bound to the exact unwrap field, including a derived bounded Input. Preparation
 checks that preview against the selected unwrap amount. A post-effect actual
@@ -169,7 +176,9 @@ Catalogue updates require explicit review; execution and recovery never fetch or
 adopt a new feed. VBILL on BNB has no published redemption route, and non-EVM
 entries are outside RecipeExecutor.
 
-Amounts use the recipe-derived budget policy above. Modern minimums require a
+Amounts use the recipe-derived budget policy above, including the normal idle
+classification for a successfully resolved zero amount. A zero minimum output does
+not by itself make a selected route idle. Modern minimums require a
 read-dependent Result or preceding result-based lower/equality guards. Legacy
 redemptions require an explicit payment-token balance-delta floor in the original
 recipe because their calldata has no minimum word. A floor Input is saved as a

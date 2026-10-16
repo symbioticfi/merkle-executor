@@ -144,6 +144,152 @@ func automaticRecipe(t *testing.T, cfg Config, s provider.Snapshot, reader provi
 	sealAutomaticTree(t, &recipe, tree)
 	return recipe, tree
 }
+func TestAutomaticIssuerZeroBudget(t *testing.T) {
+	initial := &issuerReader{t: t, block: big.NewInt(42), results: map[string][]byte{}}
+	raw, err := NewAutomatic(registry.Deps{Chain: initial})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, asset := range raw.(*automatic).assets {
+		for _, mode := range append(append([]string{}, asset.RequestModes...), asset.ClaimModes...) {
+			cfg := automaticConfig(asset, mode)
+			if cfg.Amount == "" {
+				continue // Request IDs and epochs are identities, not budgets.
+			}
+			for _, fault := range []string{"zero", "missing", "nil", "negative", "overflow", "lower bound", "intermediate zero"} {
+				if fault == "intermediate zero" && cfg.Family != "figure" {
+					continue
+				}
+				t.Run(asset.Symbol+"/"+mode+"/"+fault, func(t *testing.T) {
+					cfg := cfg
+					s, reader := issuerFixture(t, cfg)
+					p := &automatic{deps: registry.Deps{Chain: reader}, assets: raw.(*automatic).assets}
+					r, tree := automaticRecipe(t, cfg, s, reader)
+					results := map[uint]*big.Int{0: new(big.Int), 1: big.NewInt(125)}
+					switch fault {
+					case "missing":
+						delete(results, 0)
+					case "nil":
+						results[0] = nil
+					case "negative":
+						results[0] = big.NewInt(-1)
+					case "overflow":
+						results[0] = new(big.Int).Lsh(big.NewInt(1), 256)
+					case "intermediate zero":
+						results[0], results[1] = big.NewInt(100), new(big.Int)
+						reader.reply(common.HexToAddress(cfg.Token), erc4626.NewERC4626().GetABI(), "previewRedeem", []any{big.NewInt(100)}, new(big.Int))
+					case "lower bound":
+						at, offset := 1, uint32(4)
+						if cfg.Family == "figure" {
+							var e error
+							r.Queries[1], e = queryArguments.Pack(common.HexToAddress(cfg.Token), erc4626.NewERC4626().PackPreviewRedeem(new(big.Int)), []*big.Int{packedBinding(4, recipes.Input, 7)}, new(big.Int))
+							if e != nil {
+								t.Fatal(e)
+							}
+							guards := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("uint256")}}
+							manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
+							r.Steps = [][]byte{r.Steps[0], packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Literal, 1), packedValue(recipes.Input, 7)), r.Steps[1], packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(4, recipes.Input, 7)}}), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[1].Hash}, [][]*big.Int{{packedBinding(4, recipes.Result, 3)}})}
+							results[3] = results[1]
+							break
+						}
+						if cfg.Family == "midas" || cfg.Family == "openeden" || (cfg.Family == "noon" && mode == "redeem-usn") {
+							offset = 36
+						}
+						guards := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("uint256")}}
+						manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
+						steps := append([][]byte{}, r.Steps[:at]...)
+						steps = append(steps, packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Literal, 1), packedValue(recipes.Input, 7)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(offset, recipes.Input, 7)}}))
+						r.Steps = append(steps, r.Steps[at+1:]...)
+					}
+					if _, e := p.RecipeRequirements(s, r, tree); e != nil {
+						t.Fatalf("invalid boundary fixture: %v", e)
+					}
+					out, e := p.PrepareRecipe(t.Context(), s, r, tree, results)
+					idle := fault == "zero" || fault == "intermediate zero"
+					if idle && !errors.Is(e, provider.ErrNotReady) {
+						t.Fatalf("empty budget should be idle: %v", e)
+					}
+					if !idle && (e == nil || errors.Is(e, provider.ErrNotReady)) {
+						t.Fatalf("invalid economic witness should remain an error: %v", e)
+					}
+					if len(out.Actions)+len(out.Inputs)+len(out.SkipSteps)+len(out.Data) != 0 || reader.reads != 0 {
+						t.Fatalf("empty or invalid budget returned data or read protocol state: %+v reads=%d", out, reader.reads)
+					}
+					cfg.Amount = "0"
+					if _, e := New(cfg, registry.Deps{Chain: reader}); e == nil || errors.Is(e, provider.ErrNotReady) {
+						t.Fatalf("explicit zero must remain invalid constructor input: %v", e)
+					}
+				})
+			}
+		}
+	}
+	t.Run("zero claim identities", func(t *testing.T) {
+		for _, asset := range raw.(*automatic).assets {
+			mode := "queue-claim"
+			if asset.Family == "noon" && len(asset.ClaimModes) != 0 {
+				mode = "claim"
+			} else if asset.Family != "pareto" {
+				continue
+			}
+			cfg := automaticConfig(asset, mode)
+			if asset.Family == "noon" {
+				cfg.RequestID = "0"
+			} else {
+				cfg.Epoch = "0"
+			}
+			s, reader := issuerFixture(t, cfg)
+			if asset.Family == "noon" {
+				a := noonwithdrawalhandler.NewNoonWithdrawalHandler().GetABI()
+				reader.reply(common.HexToAddress(cfg.Target), a, "getWithdrawalRequest", []any{s.Account, new(big.Int)}, struct {
+					Amount    *big.Int
+					Timestamp *big.Int
+					Claimed   bool
+				}{big.NewInt(50), big.NewInt(100), false})
+				reader.reply(common.HexToAddress(cfg.Target), a, "withdrawPeriod", nil, big.NewInt(200))
+			}
+			r, tree := automaticRecipe(t, cfg, s, reader)
+			p := &automatic{deps: registry.Deps{Chain: reader}, assets: raw.(*automatic).assets}
+			out, e := p.PrepareRecipe(t.Context(), s, r, tree, map[uint]*big.Int{0: new(big.Int)})
+			if e != nil || len(out.Actions) != 1 {
+				t.Fatalf("zero %s claim identity changed semantics: %+v %v", asset.Family, out, e)
+			}
+		}
+	})
+}
+
+func TestAutomaticIssuerZeroBudgetDiscardsOtherRouteOutput(t *testing.T) {
+	for _, empty := range []uint{0, 2} {
+		t.Run(new(big.Int).SetUint64(uint64(empty)).String(), func(t *testing.T) {
+			initial := &issuerReader{t: t, block: big.NewInt(42), results: map[string][]byte{}}
+			raw, err := NewAutomatic(registry.Deps{Chain: initial})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := raw.(*automatic)
+			first := automaticConfig(p.assets[0], "request")
+			s, reader := issuerFixture(t, first)
+			p.deps.Chain = reader
+			r, tree := automaticRecipe(t, first, s, reader)
+			second := automaticConfig(p.assets[1], "request")
+			other, otherTree := automaticRecipe(t, second, s, reader)
+			r.Queries = append(r.Queries, other.Queries[0])
+			manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
+			r.Steps = append(r.Steps, packedStep(t, recipes.Read, readArguments, big.NewInt(1)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{otherTree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(36, recipes.Result, 2)}}))
+			tree.Leaves = append(tree.Leaves, otherTree.Leaves[0])
+			sealAutomaticTree(t, &r, tree)
+			results := map[uint]*big.Int{0: big.NewInt(100), 2: big.NewInt(100)}
+			results[empty] = new(big.Int)
+			out, err := p.PrepareRecipe(t.Context(), s, r, tree, results)
+			if !errors.Is(err, provider.ErrNotReady) || len(out.Actions)+len(out.Inputs)+len(out.SkipSteps)+len(out.Data) != 0 {
+				t.Fatalf("one empty route must leave the entire preparation idle: %+v %v", out, err)
+			}
+			if empty == 0 && reader.reads != 0 {
+				t.Fatal("empty first route reached protocol reads")
+			}
+		})
+	}
+}
+
 func TestAutomaticAllEmbeddedIssuerRoutes(t *testing.T) {
 	initial := &issuerReader{t: t, block: big.NewInt(42), results: map[string][]byte{}}
 	raw, err := NewAutomatic(registry.Deps{Chain: initial})
@@ -677,7 +823,7 @@ func TestAutomaticNativeNoonBudgetAndPreflight(t *testing.T) {
 			if _, e = p.PrepareRecipe(t.Context(), snapshot, lower, tree, map[uint]*big.Int{0: big.NewInt(40)}); e == nil || reader.reads != before {
 				t.Fatal("native minimum bound ignored/read", e)
 			}
-			if _, e = p.PrepareRecipe(t.Context(), snapshot, recipe, tree, map[uint]*big.Int{0: big.NewInt(0)}); e == nil || reader.reads != before {
+			if _, e = p.PrepareRecipe(t.Context(), snapshot, recipe, tree, map[uint]*big.Int{0: big.NewInt(0)}); !errors.Is(e, provider.ErrNotReady) || reader.reads != before {
 				t.Fatal("zero native derived amount accepted/read", e)
 			}
 		})

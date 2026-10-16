@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/go-errors/errors"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
@@ -127,6 +128,140 @@ func automaticRecipe(t *testing.T, cfg Config, s provider.Snapshot, reader provi
 	sealAutomaticTree(t, &recipe, tree)
 	return recipe, tree
 }
+func TestAutomaticSecuritizeZeroBudget(t *testing.T) {
+	for _, mode := range []string{"wallet", "modern", "legacy"} {
+		for _, fault := range []string{"zero", "missing", "nil", "negative", "overflow", "lower bound"} {
+			t.Run(mode+"/"+fault, func(t *testing.T) {
+				cfg, s, reader := fixture(t, mode)
+				counter := &preparationReadCounter{Reader: reader}
+				raw, err := NewAutomatic(registry.Deps{Chain: counter})
+				if err != nil {
+					t.Fatal(err)
+				}
+				p := raw.(*automatic)
+				asset := p.assets[0]
+				cfg.Token, cfg.Target = asset.Token, asset.RedemptionWallet
+				cfg.AmountInput, cfg.MinOutputInput = nil, nil
+				if mode != "wallet" {
+					for _, route := range asset.Offramps {
+						if route.Mode == mode {
+							cfg.Target, cfg.PaymentToken = route.Target, route.PaymentToken
+							break
+						}
+					}
+				}
+				reader.configure(cfg)
+				r, tree := automaticRecipe(t, cfg, s, reader)
+				results := map[uint]*big.Int{0: new(big.Int), 1: big.NewInt(50), 2: big.NewInt(50)}
+				switch fault {
+				case "missing":
+					delete(results, 0)
+				case "nil":
+					results[0] = nil
+				case "negative":
+					results[0] = big.NewInt(-1)
+				case "overflow":
+					results[0] = new(big.Int).Lsh(big.NewInt(1), 256)
+				case "lower bound":
+					at, offset := 1, uint32(36)
+					bindings := []*big.Int{packedBinding(offset, recipes.Input, 7)}
+					if mode != "wallet" {
+						at, offset = 2, 4
+						bindings = []*big.Int{packedBinding(offset, recipes.Input, 7), packedBinding(36, recipes.Result, 1)}
+					}
+					if mode == "legacy" {
+						at = 3
+						bindings = bindings[:1]
+					}
+					manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
+					steps := append([][]byte{}, r.Steps[:at]...)
+					steps = append(steps, packedStep(t, recipes.LessOrEqual, binaryArguments, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.LessOrEqual, binaryArguments, packedValue(recipes.Literal, 1), packedValue(recipes.Input, 7)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{bindings}))
+					if mode == "legacy" {
+						// The two inserted guards shift the post-redemption READ by two steps.
+						r.Steps[5] = packedStep(t, recipes.Sub, binaryArguments, packedValue(recipes.Result, 6), packedValue(recipes.Result, 1))
+						r.Steps[6] = packedStep(t, recipes.LessOrEqual, binaryArguments, packedValue(recipes.Result, 2), packedValue(recipes.Result, 7))
+					}
+					r.Steps = append(steps, r.Steps[at+1:]...)
+				}
+				if _, e := p.RecipeRequirements(s, r, tree); e != nil {
+					t.Fatalf("invalid boundary fixture: %v", e)
+				}
+				out, e := p.PrepareRecipe(t.Context(), s, r, tree, results)
+				if fault == "zero" && !errors.Is(e, provider.ErrNotReady) {
+					t.Fatalf("empty budget should be idle: %v", e)
+				}
+				if fault != "zero" && (e == nil || errors.Is(e, provider.ErrNotReady)) {
+					t.Fatalf("invalid economic witness should remain an error: %v", e)
+				}
+				if len(out.Actions)+len(out.Inputs)+len(out.SkipSteps)+len(out.Data) != 0 || counter.reads != 0 {
+					t.Fatalf("empty or invalid budget returned data or read protocol state: %+v reads=%d", out, counter.reads)
+				}
+				cfg.Amount = "0"
+				if _, e := New(cfg, registry.Deps{Chain: counter}); e == nil || errors.Is(e, provider.ErrNotReady) {
+					t.Fatalf("explicit zero must remain invalid constructor input: %v", e)
+				}
+			})
+		}
+	}
+}
+
+func TestAutomaticSecuritizeZeroBudgetDiscardsOtherRouteOutput(t *testing.T) {
+	cfg, s, reader := fixture(t, "wallet")
+	counter := &preparationReadCounter{Reader: reader}
+	raw, err := NewAutomatic(registry.Deps{Chain: counter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := raw.(*automatic)
+	var assets []Asset
+	for _, asset := range p.assets {
+		if asset.ChainID == 1 && asset.RedemptionWallet != "" {
+			assets = append(assets, asset)
+		}
+	}
+	if len(assets) < 2 {
+		t.Fatal("fixture needs two independent wallet routes")
+	}
+	cfg.AmountInput = nil
+	cfg.Token, cfg.Target = assets[0].Token, assets[0].RedemptionWallet
+	reader.configure(cfg)
+	r, tree := automaticRecipe(t, cfg, s, reader)
+	cfg.Token, cfg.Target = assets[1].Token, assets[1].RedemptionWallet
+	other, otherTree := automaticRecipe(t, cfg, s, reader)
+	r.Queries = append(r.Queries, other.Queries[0])
+	manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
+	r.Steps = append(r.Steps, packedStep(t, recipes.Read, unaryArguments, big.NewInt(1)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{otherTree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(36, recipes.Result, 2)}}))
+	tree.Leaves = append(tree.Leaves, otherTree.Leaves[0])
+	sealAutomaticTree(t, &r, tree)
+	out, err := p.PrepareRecipe(t.Context(), s, r, tree, map[uint]*big.Int{0: big.NewInt(100), 2: new(big.Int)})
+	if !errors.Is(err, provider.ErrNotReady) || len(out.Actions)+len(out.Inputs)+len(out.SkipSteps)+len(out.Data) != 0 || counter.reads != 1 {
+		t.Fatalf("one empty route must leave the entire preparation idle: %+v %v reads=%d", out, err, counter.reads)
+	}
+}
+
+func TestAutomaticSecuritizeZeroMinimumRemainsValidationError(t *testing.T) {
+	cfg, s, reader := fixture(t, "modern")
+	raw, err := NewAutomatic(registry.Deps{Chain: reader})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := raw.(*automatic)
+	asset := p.assets[0]
+	cfg.Token, cfg.AmountInput, cfg.MinOutputInput = asset.Token, nil, nil
+	for _, route := range asset.Offramps {
+		if route.Mode == "modern" {
+			cfg.Target, cfg.PaymentToken = route.Target, route.PaymentToken
+			break
+		}
+	}
+	reader.configure(cfg)
+	r, tree := automaticRecipe(t, cfg, s, reader)
+	out, err := p.PrepareRecipe(t.Context(), s, r, tree, map[uint]*big.Int{0: big.NewInt(100), 1: new(big.Int)})
+	if err == nil || errors.Is(err, provider.ErrNotReady) || len(out.Actions)+len(out.Inputs)+len(out.SkipSteps)+len(out.Data) != 0 {
+		t.Fatalf("zero minimum must retain strict validation instead of idle: %+v %v", out, err)
+	}
+}
+
 func TestAutomaticSecuritizeAllEmbeddedRoutes(t *testing.T) {
 	_, _, initial := fixture(t, "wallet")
 	raw, err := NewAutomatic(registry.Deps{Chain: initial})

@@ -260,6 +260,9 @@ func (p *automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		if err != nil {
 			return provider.Output{}, err
 		}
+		if amount.Sign() == 0 {
+			return provider.Output{}, provider.ErrNotReady
+		}
 		cfg.Amount = amount.String()
 		cfg.AmountInput = route.Amount.Input
 		minimum := new(big.Int)
