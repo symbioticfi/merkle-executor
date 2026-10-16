@@ -58,6 +58,10 @@ sender policy. Version 5 removes automatic issuer registration and classifies wo
 from successful original execution results. Old custom or prefixed
 journals remain inspectable and block new
 admission while unresolved; drain them with the previous binary and configuration.
+Before rollout, review issuer recipe commitments for the old providers' readiness,
+limit and payout policies. The generic runtime enforces only authenticated recipe
+conditions; moving a policy into the recipe may require owner reauthorization.
+Unavailable external issuer material still requires a specialized integration.
 At startup it pins a valid head, batches deduplicated account and caller getters,
 rejects any invalid member,
 and closes the same-number/hash guard before publishing the complete account map.

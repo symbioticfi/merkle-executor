@@ -83,6 +83,13 @@ jobs whose transaction journal remains occupied. Existing custom or prefixed key
 stay visible in `status` and block admission while unresolved. Journals are never
 migrated or aliased to the new address identifiers.
 
+Before adopting v5, review issuer recipes for every readiness, limit and payout
+condition previously enforced by an automatic issuer provider. Those conditions
+must be committed as reads, gates and checks in the recipe. The generic daemon
+enforces that program; it does not recreate the removed provider's issuer policy.
+Operations requiring unavailable off-chain issuer material still need an explicit
+provider integration. Historical catalogue coverage is not generic deployment evidence.
+
 The runtime uses fixed cache, timeout, polling, confirmation and fee-horizon
 policies. Legacy fields are accepted only when they match the fixed policy; remove
 custom overrides when migrating. Optional `signer.address` is an identity assertion,
