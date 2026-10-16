@@ -1,0 +1,754 @@
+{
+  "root": "0x9b91cf74fa0797ba58c7a2ec7d3377efefe237e8757d7731d6ccec0d5bb7dfbf",
+  "requirements": [],
+  "calls": [
+    {
+      "hash": "0x131370579d41d40341c5179ab530751a5df343f50b66162f8133b3c0802f5889",
+      "target": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "targetLabel": "Merkle adapter",
+      "value": "zero",
+      "fn": "push(uint256)",
+      "data": "0x959ac4840000000000000000000000000000000000000000000000000000000000000000",
+      "dataMask": "0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "summary": "Move USDC from the adapter to the strategy account",
+      "slots": [
+        {
+          "name": "amount",
+          "offset": 4,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        }
+      ],
+      "refs": [
+        {
+          "permission": "0x399adaa1c3ef0c9150c614ef02822f973e7678d234aedcf31cb9f4171b2e3f02",
+          "name": "push"
+        }
+      ],
+      "proof": [
+        "0x1ab704b34f7bde748bd59b652519f58c9551b91a18e00ad14a366e025e44394c",
+        "0x1aeb5dc6564c7d46a8857195a2b1216194f761b0a81bc8c1fec7aef5ca0e40b6",
+        "0xdf588d8e310b06741cf52296057b3f5c9579fabe410ea60d93079b2509c037ae"
+      ]
+    },
+    {
+      "hash": "0x1ab704b34f7bde748bd59b652519f58c9551b91a18e00ad14a366e025e44394c",
+      "target": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+      "targetLabel": "PPLUS",
+      "value": "zero",
+      "fn": "redeemShares(uint256,address)",
+      "data": "0x983c676d0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "dataMask": "0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000",
+      "summary": "Queue PPLUS withdrawal; Ember later pays USDC automatically",
+      "slots": [
+        {
+          "name": "shares",
+          "offset": 4,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        }
+      ],
+      "refs": [
+        {
+          "permission": "0x2015a5a3e04389e55d45d2e4ce323ceaa1afdb1fea437efc8052187fb9248f83",
+          "name": "request"
+        }
+      ],
+      "proof": [
+        "0x131370579d41d40341c5179ab530751a5df343f50b66162f8133b3c0802f5889",
+        "0x1aeb5dc6564c7d46a8857195a2b1216194f761b0a81bc8c1fec7aef5ca0e40b6",
+        "0xdf588d8e310b06741cf52296057b3f5c9579fabe410ea60d93079b2509c037ae"
+      ]
+    },
+    {
+      "hash": "0x514dd86095d8c7359e0d363c4f8b324c5a1fef618967d6a1b5b0e0e65aafd7f6",
+      "target": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+      "targetLabel": "PPLUS",
+      "value": "zero",
+      "fn": "approve(address,uint256)",
+      "data": "0x095ea7b3000000000000000000000000bc5d3722376d44f3bc316c6ea61c9bd553be8cbe0000000000000000000000000000000000000000000000000000000000000000",
+      "dataMask": "0x000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "summary": "Allow PPLUS withdrawal queue to take PPLUS",
+      "slots": [
+        {
+          "name": "amount",
+          "offset": 36,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        }
+      ],
+      "approve": {
+        "token": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+        "spender": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe"
+      },
+      "refs": [
+        {
+          "permission": "0x2015a5a3e04389e55d45d2e4ce323ceaa1afdb1fea437efc8052187fb9248f83",
+          "name": "approveShares"
+        }
+      ],
+      "proof": [
+        "0x64b5dc046438a91cac4bc930333b9307a146a80572d2205e75dbdbf81f61df6a",
+        "0x2d46a390c2674e79dc05c0dd4286ff7ad9f7cba4a9495c2f1771124ab5cdf55b",
+        "0xdf588d8e310b06741cf52296057b3f5c9579fabe410ea60d93079b2509c037ae"
+      ]
+    },
+    {
+      "hash": "0x64b5dc046438a91cac4bc930333b9307a146a80572d2205e75dbdbf81f61df6a",
+      "target": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+      "targetLabel": "PPLUS",
+      "value": "zero",
+      "fn": "deposit(uint256,address)",
+      "data": "0x6e553f650000000000000000000000000000000000000000000000000000000000000000000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "dataMask": "0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000",
+      "summary": "Deposit USDC for the strategy account",
+      "slots": [
+        {
+          "name": "amount",
+          "offset": 4,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        }
+      ],
+      "refs": [
+        {
+          "permission": "0x2015a5a3e04389e55d45d2e4ce323ceaa1afdb1fea437efc8052187fb9248f83",
+          "name": "deposit"
+        }
+      ],
+      "proof": [
+        "0x514dd86095d8c7359e0d363c4f8b324c5a1fef618967d6a1b5b0e0e65aafd7f6",
+        "0x2d46a390c2674e79dc05c0dd4286ff7ad9f7cba4a9495c2f1771124ab5cdf55b",
+        "0xdf588d8e310b06741cf52296057b3f5c9579fabe410ea60d93079b2509c037ae"
+      ]
+    },
+    {
+      "hash": "0xa65a80bae354437a358336d51d988bae2488a5baa8651fe65517b61306d03a74",
+      "target": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "targetLabel": "Merkle adapter",
+      "value": "zero",
+      "fn": "pull(uint256)",
+      "data": "0x4d0392a80000000000000000000000000000000000000000000000000000000000000000",
+      "dataMask": "0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "summary": "Return USDC from the strategy account to the adapter",
+      "slots": [
+        {
+          "name": "amount",
+          "offset": 4,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        }
+      ],
+      "refs": [
+        {
+          "permission": "0x399adaa1c3ef0c9150c614ef02822f973e7678d234aedcf31cb9f4171b2e3f02",
+          "name": "pull"
+        }
+      ],
+      "proof": [
+        "0xd8bb98d2a1b8c91b59a4d1f1001a1a932f6a9c67be1de9ea770f241be51402ad",
+        "0x0440a92413a81839d1e0656b11eb2e6d962d76b250f2f3cf288c65036249914e"
+      ]
+    },
+    {
+      "hash": "0xd8bb98d2a1b8c91b59a4d1f1001a1a932f6a9c67be1de9ea770f241be51402ad",
+      "target": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      "targetLabel": "USDC",
+      "value": "zero",
+      "fn": "approve(address,uint256)",
+      "data": "0x095ea7b3000000000000000000000000bc5d3722376d44f3bc316c6ea61c9bd553be8cbe0000000000000000000000000000000000000000000000000000000000000000",
+      "dataMask": "0x000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "summary": "Allow PPLUS to take USDC",
+      "slots": [
+        {
+          "name": "amount",
+          "offset": 36,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        }
+      ],
+      "approve": {
+        "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "spender": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe"
+      },
+      "refs": [
+        {
+          "permission": "0x2015a5a3e04389e55d45d2e4ce323ceaa1afdb1fea437efc8052187fb9248f83",
+          "name": "approve"
+        }
+      ],
+      "proof": [
+        "0xa65a80bae354437a358336d51d988bae2488a5baa8651fe65517b61306d03a74",
+        "0x0440a92413a81839d1e0656b11eb2e6d962d76b250f2f3cf288c65036249914e"
+      ]
+    }
+  ],
+  "permissions": [
+    {
+      "id": "0x399adaa1c3ef0c9150c614ef02822f973e7678d234aedcf31cb9f4171b2e3f02",
+      "type": "funding",
+      "typeVersion": 4,
+      "group": "Funding",
+      "title": "Strategy funding",
+      "subtitle": "USDC between the adapter and the strategy account",
+      "params": {},
+      "calls": [
+        {
+          "name": "push",
+          "hash": "0x131370579d41d40341c5179ab530751a5df343f50b66162f8133b3c0802f5889"
+        },
+        {
+          "name": "pull",
+          "hash": "0xa65a80bae354437a358336d51d988bae2488a5baa8651fe65517b61306d03a74"
+        }
+      ],
+      "operations": [
+        {
+          "id": "fund",
+          "label": "Fund strategy",
+          "steps": [
+            {
+              "call": "0x131370579d41d40341c5179ab530751a5df343f50b66162f8133b3c0802f5889",
+              "bind": {
+                "amount": {
+                  "input": "amount"
+                }
+              }
+            }
+          ],
+          "effects": [
+            {
+              "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+              "change": "increase",
+              "input": "amount",
+              "exact": true
+            }
+          ],
+          "inputs": [
+            {
+              "name": "amount",
+              "label": "Amount",
+              "kind": "amount",
+              "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+              "max": {
+                "min": [
+                  {
+                    "sub": [
+                      {
+                        "sub": [
+                          {
+                            "read": {
+                              "target": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                              "signature": "balanceOf(address) returns (uint256)",
+                              "args": [
+                                "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                              ]
+                            }
+                          },
+                          {
+                            "read": {
+                              "target": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                              "signature": "releasedLiquidity() returns (uint256)",
+                              "args": []
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "read": {
+                          "target": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                          "signature": "stagedLiquidity() returns (uint256)",
+                          "args": []
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "sub": [
+                      {
+                        "read": {
+                          "target": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                          "signature": "balanceOf(address) returns (uint256)",
+                          "args": [
+                            "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                          ]
+                        }
+                      },
+                      {
+                        "read": {
+                          "target": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                          "signature": "pendingDeallocation() returns (uint256)",
+                          "args": []
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "editable": true
+            }
+          ],
+          "runner": "wallet",
+          "kind": "manage"
+        },
+        {
+          "id": "return",
+          "label": "Return to adapter",
+          "steps": [
+            {
+              "call": "0xa65a80bae354437a358336d51d988bae2488a5baa8651fe65517b61306d03a74",
+              "bind": {
+                "amount": {
+                  "input": "amount"
+                }
+              }
+            }
+          ],
+          "effects": [
+            {
+              "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+              "change": "decrease",
+              "input": "amount",
+              "exact": true
+            }
+          ],
+          "inputs": [
+            {
+              "name": "amount",
+              "label": "Amount",
+              "kind": "amount",
+              "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+              "max": {
+                "read": {
+                  "target": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                  "signature": "balanceOf(address) returns (uint256)",
+                  "args": [
+                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  ]
+                }
+              },
+              "prefill": {
+                "context": "liquidityDue"
+              },
+              "editable": true
+            }
+          ],
+          "runner": "wallet",
+          "kind": "manage"
+        }
+      ],
+      "positions": [
+        {
+          "label": "Account idle",
+          "unit": "token",
+          "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+          "value": {
+            "read": {
+              "target": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+              "signature": "balanceOf(address) returns (uint256)",
+              "args": [
+                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              ]
+            }
+          },
+          "kind": "held"
+        }
+      ],
+      "contracts": [],
+      "display": {
+        "category": "Funding",
+        "protocol": "symbiotic",
+        "venue": {
+          "id": "account:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Strategy account",
+          "group": {
+            "id": "wallet",
+            "label": "Wallet"
+          }
+        },
+        "facts": [
+          {
+            "label": "Vault asset",
+            "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            "kind": "token"
+          },
+          {
+            "label": "Merkle adapter",
+            "address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "kind": "contract"
+          },
+          {
+            "label": "Strategy account",
+            "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "kind": "contract"
+          }
+        ]
+      }
+    },
+    {
+      "id": "0x2015a5a3e04389e55d45d2e4ce323ceaa1afdb1fea437efc8052187fb9248f83",
+      "type": "erc4626_vault",
+      "typeVersion": 4,
+      "group": "Vaults",
+      "title": "PPLUS",
+      "subtitle": "USDC deposits \u00b7 queued withdrawals",
+      "params": {
+        "vault": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe"
+      },
+      "calls": [
+        {
+          "name": "approve",
+          "hash": "0xd8bb98d2a1b8c91b59a4d1f1001a1a932f6a9c67be1de9ea770f241be51402ad"
+        },
+        {
+          "name": "approveShares",
+          "hash": "0x514dd86095d8c7359e0d363c4f8b324c5a1fef618967d6a1b5b0e0e65aafd7f6"
+        },
+        {
+          "name": "deposit",
+          "hash": "0x64b5dc046438a91cac4bc930333b9307a146a80572d2205e75dbdbf81f61df6a"
+        },
+        {
+          "name": "request",
+          "hash": "0x1ab704b34f7bde748bd59b652519f58c9551b91a18e00ad14a366e025e44394c"
+        }
+      ],
+      "operations": [
+        {
+          "id": "deposit",
+          "label": "Deposit",
+          "steps": [
+            {
+              "call": "0xd8bb98d2a1b8c91b59a4d1f1001a1a932f6a9c67be1de9ea770f241be51402ad",
+              "bind": {
+                "amount": {
+                  "input": "amount"
+                }
+              }
+            },
+            {
+              "call": "0x64b5dc046438a91cac4bc930333b9307a146a80572d2205e75dbdbf81f61df6a",
+              "bind": {
+                "amount": {
+                  "input": "amount"
+                }
+              }
+            },
+            {
+              "call": "0xd8bb98d2a1b8c91b59a4d1f1001a1a932f6a9c67be1de9ea770f241be51402ad",
+              "bind": {
+                "amount": {
+                  "value": "0"
+                }
+              }
+            }
+          ],
+          "effects": [
+            {
+              "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+              "change": "decrease",
+              "input": "amount",
+              "exact": true
+            },
+            {
+              "token": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+              "change": "increase"
+            }
+          ],
+          "inputs": [
+            {
+              "name": "amount",
+              "label": "Amount",
+              "kind": "amount",
+              "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+              "max": {
+                "min": [
+                  {
+                    "read": {
+                      "target": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                      "signature": "balanceOf(address) returns (uint256)",
+                      "args": [
+                        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                      ]
+                    }
+                  },
+                  {
+                    "read": {
+                      "target": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+                      "signature": "maxDeposit(address) returns (uint256)",
+                      "args": [
+                        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "hint": "Ember checks current pause, blacklist, deposit allowlist, parking lot and subaccount restrictions during simulation.",
+              "editable": true
+            }
+          ],
+          "runner": "wallet",
+          "kind": "manage"
+        },
+        {
+          "id": "requestWithdrawal",
+          "label": "Request withdrawal",
+          "summary": "Shares enter escrow. Ember automatically pays USDC after processing; this request creates no immediately spendable USDC.",
+          "steps": [
+            {
+              "call": "0x514dd86095d8c7359e0d363c4f8b324c5a1fef618967d6a1b5b0e0e65aafd7f6",
+              "bind": {
+                "amount": {
+                  "input": "shares"
+                }
+              }
+            },
+            {
+              "call": "0x1ab704b34f7bde748bd59b652519f58c9551b91a18e00ad14a366e025e44394c",
+              "bind": {
+                "shares": {
+                  "input": "shares"
+                }
+              }
+            },
+            {
+              "call": "0x514dd86095d8c7359e0d363c4f8b324c5a1fef618967d6a1b5b0e0e65aafd7f6",
+              "bind": {
+                "amount": {
+                  "value": "0"
+                }
+              }
+            }
+          ],
+          "payments": [
+            {
+              "token": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+              "amount": {
+                "input": "shares"
+              }
+            }
+          ],
+          "effects": [
+            {
+              "token": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+              "change": "decrease",
+              "input": "shares",
+              "exact": true
+            }
+          ],
+          "inputs": [
+            {
+              "name": "shares",
+              "label": "PPLUS shares",
+              "kind": "amount",
+              "token": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+              "max": {
+                "read": {
+                  "target": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+                  "signature": "balanceOf(address) returns (uint256)",
+                  "args": [
+                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  ]
+                }
+              },
+              "editable": true
+            },
+            {
+              "name": "minimumShares",
+              "label": "Minimum request",
+              "kind": "amount",
+              "token": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+              "editable": false,
+              "prefill": {
+                "read": {
+                  "target": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+                  "signature": "minWithdrawableShares() returns (uint256)",
+                  "args": []
+                }
+              }
+            }
+          ],
+          "runner": "wallet",
+          "kind": "manage"
+        },
+        {
+          "id": "requestAllWithdrawal",
+          "label": "Request all withdrawals",
+          "summary": "Queue all wallet shares; no immediate USDC or separate claim.",
+          "steps": [
+            {
+              "call": "0x514dd86095d8c7359e0d363c4f8b324c5a1fef618967d6a1b5b0e0e65aafd7f6",
+              "bind": {
+                "amount": {
+                  "input": "shares"
+                }
+              }
+            },
+            {
+              "call": "0x1ab704b34f7bde748bd59b652519f58c9551b91a18e00ad14a366e025e44394c",
+              "bind": {
+                "shares": {
+                  "input": "shares"
+                }
+              }
+            },
+            {
+              "call": "0x514dd86095d8c7359e0d363c4f8b324c5a1fef618967d6a1b5b0e0e65aafd7f6",
+              "bind": {
+                "amount": {
+                  "value": "0"
+                }
+              }
+            }
+          ],
+          "payments": [
+            {
+              "token": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+              "amount": {
+                "input": "shares"
+              }
+            }
+          ],
+          "effects": [
+            {
+              "token": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+              "change": "decrease",
+              "input": "shares",
+              "exact": true
+            }
+          ],
+          "inputs": [
+            {
+              "name": "shares",
+              "label": "PPLUS shares",
+              "kind": "amount",
+              "token": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+              "max": {
+                "read": {
+                  "target": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+                  "signature": "balanceOf(address) returns (uint256)",
+                  "args": [
+                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  ]
+                }
+              },
+              "editable": false,
+              "prefill": {
+                "read": {
+                  "target": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+                  "signature": "balanceOf(address) returns (uint256)",
+                  "args": [
+                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "minimumShares",
+              "label": "Minimum request",
+              "kind": "amount",
+              "token": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+              "editable": false,
+              "prefill": {
+                "read": {
+                  "target": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+                  "signature": "minWithdrawableShares() returns (uint256)",
+                  "args": []
+                }
+              }
+            }
+          ],
+          "runner": "wallet",
+          "kind": "manage"
+        }
+      ],
+      "positions": [
+        {
+          "label": "Deposited",
+          "unit": "token",
+          "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+          "value": {
+            "read": {
+              "target": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+              "signature": "maxWithdraw(address) returns (uint256)",
+              "args": [
+                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              ]
+            }
+          },
+          "kind": "supplied"
+        },
+        {
+          "label": "Shares",
+          "unit": "shares",
+          "token": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+          "value": {
+            "read": {
+              "target": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+              "signature": "balanceOf(address) returns (uint256)",
+              "args": [
+                "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              ]
+            }
+          },
+          "kind": "info"
+        }
+      ],
+      "contracts": [],
+      "display": {
+        "category": "Passive yield",
+        "protocol": "pplus",
+        "venue": {
+          "id": "vault:0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+          "label": "PPLUS",
+          "group": {
+            "id": "pplus",
+            "label": "Ember"
+          },
+          "url": "https://ember.so/earn/PPLUS"
+        },
+        "facts": [
+          {
+            "label": "Vault shares",
+            "address": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+            "kind": "token"
+          },
+          {
+            "label": "Deposit asset",
+            "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            "kind": "token"
+          }
+        ]
+      }
+    }
+  ],
+  "tokens": [
+    {
+      "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      "symbol": "USDC",
+      "decimals": 6
+    },
+    {
+      "address": "0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
+      "symbol": "PPLUS",
+      "decimals": 6
+    }
+  ],
+  "issues": [
+    {
+      "severity": "warning",
+      "code": "pplusQueuedExit",
+      "message": "PPLUS withdrawal requests escrow shares. Native processing uses the current rate and owner-specific fees, then pays USDC automatically. Deposit eligibility and minimum request size remain native contract checks.",
+      "permission": 0
+    }
+  ],
+  "chainId": 1,
+  "account": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "adapter": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
