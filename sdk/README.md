@@ -26,7 +26,12 @@ receipts for owned hashes and never replays a non-idempotent recipe. A recovered
 reservation must be restored before other host jobs start.
 
 `keeper.Config.Revision` fingerprints all host provider configuration. Removing
-or changing an active workflow is rejected. Store lifetime must extend past the
+or changing an active workflow is rejected. Each keeper tick collects account owners during its recovery scan and refreshes
+the current strategy from durable state before advancing another strategy. This
+keeps journal reads linear while retaining reservations after uncertain writes;
+an unreadable ownership refresh stops the tick.
+
+Store lifetime must extend past the
 host sender's shutdown drain: callbacks may still persist during that drain.
 
 Run `make check` and `make integration` here without a parent module/workspace.

@@ -59,9 +59,16 @@ func key(name string) string { return "strategy." + name + ".v1" }
 // CheckRecovery rejects an orphan transaction or changed workflow configuration.
 // A deployment must retain configured strategies until their durable work ends.
 func (k *Keeper) CheckRecovery() error {
+	_, err := k.checkRecovery()
+	return err
+}
+
+// checkRecovery also collects active account owners while each journal is read.
+func (k *Keeper) checkRecovery() (map[string]common.Address, error) {
+	owners := make(map[string]common.Address)
 	names, err := k.inventory()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	configured := make(map[string]Strategy)
 	for _, s := range k.Strategies {
@@ -76,30 +83,33 @@ func (k *Keeper) CheckRecovery() error {
 		var job Job
 		found, err := k.Store.Load(key(name), &job)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !found {
 			continue
 		}
+		if job.Phase == "prepared" || job.Phase == "authorized" {
+			owners[name] = job.Plan.Snapshot.Account
+		}
 		s, exists := configured[name]
 		if !exists {
 			if job.Phase != "settled" && job.Phase != "failed" {
-				return errors.Errorf("active strategy %s removed from configuration", name)
+				return nil, errors.Errorf("active strategy %s removed from configuration", name)
 			}
 		} else if err := validateJob(job, s); err != nil {
-			return err
+			return nil, err
 		}
 		if pending != "" && job.ID == pending {
 			if !exists {
-				return errors.Errorf("transaction owner strategy %s removed from configuration", name)
+				return nil, errors.Errorf("transaction owner strategy %s removed from configuration", name)
 			}
 			matched = true
 		}
 	}
 	if !matched {
-		return errors.New("unresolved transaction has no configured workflow; restore its strategy configuration")
+		return nil, errors.New("unresolved transaction has no configured workflow; restore its strategy configuration")
 	}
-	return nil
+	return owners, nil
 }
 
 // Inventory precedes job creation so removing a configured strategy cannot hide
@@ -126,27 +136,6 @@ func (k *Keeper) inventory() ([]string, error) {
 	return names, nil
 }
 
-func (k *Keeper) accountBusy(s Strategy) (bool, error) {
-	names, err := k.inventory()
-	if err != nil {
-		return false, err
-	}
-	for _, name := range names {
-		if name == s.Config.Name {
-			continue
-		}
-		var job Job
-		found, err := k.Store.Load(key(name), &job)
-		if err != nil {
-			return false, err
-		}
-		if found && job.Plan.Snapshot.Account == common.HexToAddress(s.Config.Account) && (job.Phase == "prepared" || job.Phase == "authorized") {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
 func validateJob(job Job, s Strategy) error {
 	switch job.Phase {
 	case "prepared", "authorized", "settled", "failed":
@@ -171,7 +160,8 @@ func validateJob(job Job, s Strategy) error {
 }
 
 func (k *Keeper) Tick(ctx context.Context) error {
-	if err := k.CheckRecovery(); err != nil {
+	owners, err := k.checkRecovery()
+	if err != nil {
 		return k.globalFailure(err)
 	}
 	// Recover the occupied nonce first, independently of configuration ordering.
@@ -195,8 +185,21 @@ func (k *Keeper) Tick(ctx context.Context) error {
 			return ctx.Err()
 		}
 		operation, cancel := context.WithTimeout(ctx, k.OperationTimeout)
-		err := k.tickStrategy(operation, s)
+		err := k.tickStrategy(operation, s, owners)
 		cancel()
+		if k.Mode != "simulate" {
+			// A write error can occur after rename. Reload the durable result
+			// before another strategy can use this account; unreadable state stops the tick.
+			var job Job
+			found, loadErr := k.Store.Load(key(s.Config.Name), &job)
+			if loadErr != nil {
+				return k.globalFailure(loadErr)
+			}
+			delete(owners, s.Config.Name)
+			if found && (job.Phase == "prepared" || job.Phase == "authorized") {
+				owners[s.Config.Name] = job.Plan.Snapshot.Account
+			}
+		}
 		outcome := "ok"
 		if errors.Is(err, provider.ErrNotReady) {
 			outcome = "idle"
@@ -213,7 +216,7 @@ func (k *Keeper) Tick(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
-func (k *Keeper) tickStrategy(ctx context.Context, s Strategy) error {
+func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, owners map[string]common.Address) error {
 	if k.Mode == "simulate" {
 		_, err := k.Planner.Prepare(ctx, s)
 		if err == nil {
@@ -261,12 +264,10 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy) error {
 		if k.Sender.PendingID() != "" {
 			return nil
 		}
-		busy, err := k.accountBusy(s)
-		if err != nil {
-			return err
-		}
-		if busy {
-			return nil
+		for name, account := range owners {
+			if name != s.Config.Name && account == common.HexToAddress(s.Config.Account) {
+				return nil
+			}
 		}
 		plan, err := k.Planner.Prepare(ctx, s)
 		if err != nil {
