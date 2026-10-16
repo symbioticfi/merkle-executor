@@ -64,16 +64,19 @@ func TestEnginePrefersIndependentOperationalBatches(t *testing.T) {
 	}
 }
 
-func TestConfirmationOpeningBatchKeepsFinalHeadFence(t *testing.T) {
-	b := &operationalBackend{mockBackend: newMockBackend()}
-	b.head = 102
-	b.latestHeads = []uint64{102, 100, 102, 102}
-	tx := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(1), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2), Gas: 21000, To: ptr(common.HexToAddress("0xabc"))})
-	receipt := successfulReceipt(tx, 100)
-	b.receipts[tx.Hash()] = receipt
+func TestConfirmationOpeningBatchKeepsFinalWitnessFence(t *testing.T) {
+	tx := types.NewTx(&types.DynamicFeeTx{Nonce: 7, To: ptr(common.Address{1})})
+	base := newWitnessBackend(tx, 2)
+	base.onNumber = func(_ *big.Int, calls int, header *types.Header) (*types.Header, error) {
+		if calls == 2 {
+			header.Extra = []byte("reorg at closing witness fence")
+		}
+		return header, nil
+	}
+	b := &witnessBatchBackend{base}
 	m := New(b, mustSigner(t), big.NewInt(1), Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard())
-	got, err := m.waitForConfirmations(t.Context(), tx.Hash(), receipt, 2)
-	if err != nil || got != receipt || b.confirmations != 2 || len(b.latestHeads) != 0 || b.headerHashReads != 4 {
-		t.Fatalf("batch or final fence: %v groups%d heads%v ancestry%d", err, b.confirmations, b.latestHeads, b.headerHashReads)
+	_, err := m.waitForConfirmations(t.Context(), tx.Hash(), b.receipts[tx.Hash()], 2)
+	if !errors.Is(err, errReceiptReorged) || b.batchReads != 1 || b.numberedReads != 2 || b.receiptReads != 2 || b.parentReads != 2 {
+		t.Fatalf("batch or final witness fence: err %v groups %d numbered %d receipts %d ancestry %d", err, b.batchReads, b.numberedReads, b.receiptReads, b.parentReads)
 	}
 }

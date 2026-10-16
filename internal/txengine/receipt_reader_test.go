@@ -77,11 +77,13 @@ type slowReceiptBackend struct {
 
 	delay   time.Duration
 	budgets []time.Duration
+	hashes  []common.Hash
 }
 
 func (b *slowReceiptBackend) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
 	deadline, _ := ctx.Deadline()
 	b.budgets = append(b.budgets, time.Until(deadline))
+	b.hashes = append(b.hashes, hash)
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -107,8 +109,21 @@ func TestReceiptSweepGivesEveryHashFullTimeout(t *testing.T) {
 		if result.Outcome != OutcomeConfirmed || result.Hash != pending.attempts[51].hash {
 			t.Fatalf("result: %+v", result)
 		}
-		if len(backend.budgets) != 52 {
-			t.Fatalf("reads=%d, want 52", len(backend.budgets))
+		const sweepReads, proofReads = 52, 3
+		if len(backend.budgets) != sweepReads+proofReads || len(backend.hashes) != sweepReads+proofReads {
+			t.Fatalf("reads=%d hashes=%d, want 52 sweep reads and 3 proof reads", len(backend.budgets), len(backend.hashes))
+		}
+		for i, hash := range backend.hashes[:sweepReads] {
+			if hash != pending.attempts[i].hash {
+				t.Fatalf("sweep read %d targeted %s, want distinct attempt %s", i, hash, pending.attempts[i].hash)
+			}
+		}
+		// Canonical inclusion rereads the winner once; the depth-zero final
+		// proof then reads it at opening and before its numbered closing fence.
+		for i, hash := range backend.hashes[sweepReads:] {
+			if hash != pending.attempts[51].hash {
+				t.Fatalf("proof read %d targeted %s instead of the winning hash", i, hash)
+			}
 		}
 		for i, budget := range backend.budgets {
 			if budget != 2*time.Second {
