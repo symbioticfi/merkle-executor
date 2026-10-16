@@ -4,9 +4,9 @@ Normal daemon `strategies` entries are full nonzero executor addresses, directly
 used as lowercase state, log and metric identifiers. Duplicate normalized addresses
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
-The address-only policy version is `address-only-v5`. Drain active work with the
-previous binary and configuration before upgrading. Old custom or prefixed keys
-remain inspectable and fence unresolved ownership; no journal migration occurs.
+The single supported pre-production policy is `address-only-v1`. There is no
+version compatibility or migration path. Unresolved journals fence ownership;
+their identity and configuration are never rewritten.
 The daemon installs automatic CoW, Merkl, Liquid Lane RFQ and recipe-input
 adapters in a fixed order. On-chain issuer actions use committed reads, bindings,
 Manage gates and postconditions through the generic SDK. The explicit issuer
@@ -205,7 +205,7 @@ unrelated Manage targets and later payment transfers remain available. The SDK
 checks this composition before provider reads and again on durable recovery.
 Saved catalogue policy, account, configuration, action bytes and input semantics
 are checked before network I/O; recovery does not rederive economics or rewrite a
-legacy journal. Full original recipe simulation remains required before signing.
+saved journal. Full original recipe simulation remains required before signing.
 
 ## Merkl cumulative account rewards
 
@@ -241,20 +241,19 @@ lookup/POST preserves the UID through ambiguity and restart; recovery uses only
 persisted config/order and canonical execution evidence. Partial fills stay owned,
 and terminal completion requires on-chain settlement evidence as well as API state.
 
-## Recovery and SDK compatibility
+## Recovery and SDK integration
 
 Automatic output envelopes persist the fully derived internal configuration, wire
 output and policy version, even for unmatched adapters. Startup adapter ordering and
-the runtime-policy fingerprint are durable identity. Drain active attempts with the
-old binary/config before upgrading; never rewrite a fingerprint, UID, nonce or
-provider index. Recovery validates envelopes, bounds and target ownership before
+the runtime-policy fingerprint are durable identity. Never rewrite a fingerprint,
+UID, nonce or provider index. Recovery validates envelopes, bounds and target ownership before
 network mutation. Already signed attempts retain their exact saved bytes and use canonical receipt
 and execution reconciliation; they do not repeat preparation/presend numerical
 simulation. Recovery fetches neither curator permissions nor new quotes for
 existing work.
 
-The SDK retains direct configurable provider constructors for other hosts and
-legacy fixture/recovery compatibility. Those constructors are not normal daemon
+The SDK exposes direct configurable provider constructors for explicit hosts and
+fixtures. Those constructors are not normal daemon
 inputs. Generic static/http/rpc data providers are not daemon-registered; deterministic
 recipe-constrained Inputs use `keeper.NewRecipeInputs()` and the shared lens.
 

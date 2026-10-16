@@ -2,7 +2,7 @@
 
 > **For agentic workers:** Use executing-plans for the SDK/controller task and parallel agents for independent repository changes. Follow test-driven-development and request a fresh review before PR delivery.
 
-**Goal:** Execute fully authenticated on-chain recipes without issuer recognition, with explicit conditional claims and immutable SDK adoption.
+**Goal:** Execute fully authenticated on-chain recipes without issuer recognition, with conditional claims as the single default and immutable SDK adoption.
 
 **Architecture:** Existing queries, numerical bindings, Manage gates and full simulation define readiness and checks. Generic work classification consumes successful simulation outputs; external providers remain isolated.
 
@@ -25,7 +25,7 @@
 - Mixed zero/positive groups still execute all required reads and preserve runtime positions.
 - A zero request ID with a positive gate is work.
 - Current state becoming idle must not discard an already signed attempt.
-- New conditional mode must preserve legacy claim bytes and all active-group economic checks.
+- The single conditional claim builder must retain all active-group economic checks; no legacy mode or unused overall-progress instructions remain.
 
 ### Task 1: Generic SDK work classification and daemon adoption
 
@@ -34,23 +34,23 @@ Interfaces: recipes.HasWork(calldata, returned []byte) (bool,error). It uses ori
 - [ ] Write table tests for literal/input/result gates, unknown selectors, IDs 0, mixed groups, Approve(0), Call, no actions, malformed vectors/references.
 - [ ] Observe failure, implement exact structural classifier, integrate after successful canonical preparation and unsigned presend validation.
 - [ ] Add planner/keeper/local Anvil regression proving unknown fully bound managed calls and idle behavior with no issuer provider.
-- [ ] Remove issuer startup imports/registration, bump daemon policy, update operator/design docs; preserve direct-host packages separately.
+- [ ] Remove issuer startup imports/registration, use the single address-only-v1 policy in both hosts, update operator/design docs; preserve direct-host packages separately.
 - [ ] Run executor gates; commit SDK, push branch, obtain immutable pseudo-version, update daemon pin, rerun consuming-boundary gates.
 
 ### Task 2: Adapter conditional claim builder
 
 Files: script/recipes/ClaimRecipe.sol, BuildRecipe.s.sol, example/manifest, recipe tests/docs.
-Interfaces: ClaimRecipe.buildConditional(address, Claim[]) returns the same recipe/layout types; JSON claim idleWhenEmpty defaults false.
-- [ ] Test legacy byte preservation, all-empty conditional success, mixed eligibility, zero IDs, fresh-output/debit/minimum/rollback errors.
-- [ ] Observe failure, implement shared internal builder with conditional final progress footer only; keep per-group checks.
-- [ ] Regenerate new example/manifest; validate recipe suites, unchanged executor/capability ABI and formatting; commit scoped changes and report signing/CI status.
+Interfaces: ClaimRecipe.build(address, Claim[]) is the only claim builder; no compatibility mode or idleWhenEmpty field.
+- [ ] Test the single default, all-empty success, mixed eligibility, zero IDs, fresh-output/debit/minimum/rollback errors.
+- [ ] Observe failure, make the default builder conditional; remove the overall footer and unused progress aggregation, keeping every per-group check.
+- [ ] Regenerate affected examples/manifests; validate recipe suites, unchanged executor/capability ABI and formatting; commit scoped changes and report signing/CI status.
 
 ### Task 3: Curator conditional claims authoring
 
 Files: claims.ts/config/tests, registry.ts template version/copy, current execution tests and docs.
-Interfaces: ClaimsConfig.idleWhenEmpty?: boolean defaults false. Registry's new claims version opts in; no ABI change.
-- [ ] Test default byte preservation, conditional parity with adapter example, all-empty/current-contract behavior, one ready group, invalid reads/economics, zero identity independence.
-- [ ] Observe failure, implement conditional footer and versioned default for new authoring.
+Interfaces: claims() is conditional without a mode flag. Every recipe template uses version 1; no ABI change or legacy compiler selection.
+- [ ] Test the current default and parity with adapter example, all-empty/current-contract behavior, one ready group, invalid reads/economics, zero identity independence.
+- [ ] Observe failure, remove the final progress footer and unused aggregation, and normalize the whole recipe catalogue to version 1.
 - [ ] Run required exact-branch full check, current-contract tests and bundle budgets; commit with NO-TASK convention.
 
 ### Task 4: Vault SDK consumer adoption
@@ -65,5 +65,5 @@ Interfaces: new immutable SDK version from Task 1; keep keeper.NewRecipeInputs a
 
 - [ ] Resolve design builder check and independent code review findings with focused regressions.
 - [ ] Verify exact remote bases/heads, scope and immutable dependency adoption; push owned branches.
-- [ ] Create and attach four stacked PRs with dependency links, validation boundaries and operational migration notes.
+- [ ] Create and attach four stacked PRs with dependency links, validation boundaries and current policy and ownership notes.
 - [ ] Verify hosted CI status; do not claim deployment or bypass missing private-module credentials.

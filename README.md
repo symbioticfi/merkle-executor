@@ -76,23 +76,19 @@ logs and metrics. Reordering does not change identity; duplicate addresses are
 rejected, including different checksum spellings. Strategy objects, labels and
 per-strategy options are rejected before network access.
 
-The runtime uses policy version `address-only-v5`, with generic on-chain work
-classification and no automatic issuer providers. Finish active jobs
-with the previous binary and configuration before upgrading, including terminal
-jobs whose transaction journal remains occupied. Existing custom or prefixed keys
-stay visible in `status` and block admission while unresolved. Journals are never
-migrated or aliased to the new address identifiers.
+The single pre-production runtime policy is `address-only-v1`, with generic on-chain
+work classification and no automatic issuer providers. There is no legacy policy
+or migration path. Every unresolved transaction journal blocks new admission and
+retains its original identity and configuration.
 
-Before adopting v5, review issuer recipes for every readiness, limit and payout
-condition previously enforced by an automatic issuer provider. Those conditions
-must be committed as reads, gates and checks in the recipe. The generic daemon
-enforces that program; it does not recreate the removed provider's issuer policy.
+Recipes must commit every required readiness, limit and payout condition as reads,
+gates and checks. The generic daemon enforces that program.
 Operations requiring unavailable off-chain issuer material still need an explicit
 provider integration. Historical catalogue coverage is not generic deployment evidence.
 
 The runtime uses fixed cache, timeout, polling, confirmation and fee-horizon
-policies. Legacy fields are accepted only when they match the fixed policy; remove
-custom overrides when migrating. Optional `signer.address` is an identity assertion,
+policies. Configuration values for these fields must match the fixed policy.
+Optional `signer.address` is an identity assertion,
 and `signer.keyEnv` may name an alternative key environment variable. Neither is
 required. Offline `check-config`, `status` and `reset-strategy` never read a key or
 contact RPC; state commands check the chain and saved caller identity, plus the
@@ -127,15 +123,10 @@ every leaf hash and sorted-pair proof is verified, including unused leaves. Back
 longer accept `account` or local `tree` fields. The SDK retains its optional local
 permission-file interface for other hosts.
 
-Before upgrading from a configuration with manual account/tree fields, finish all
-active jobs using the old binary and configuration, including combined workflows
-with some completed providers. Then add `curator` and remove those strategy fields.
-Remove every `strategy.providers` entry when adopting recipe-derived runtime providers;
-manual mappings and economic values are rejected. Finish active jobs using the old
-binary and configuration before this migration. Derived accounts and callers,
+Manual account/tree fields, provider mappings and economic values are rejected.
+Derived accounts and callers,
 chain identity, curator settings, the fixed runtime policy version and transaction
-fee policy are part of the recovery fingerprint. Before adopting a new policy
-version, finish active jobs with the previous binary and configuration. Existing
+fee policy are part of the recovery fingerprint. Existing
 journals are never rewritten to accept a configuration change. Curator access is
 required for new preparation; saved signed attempts and external settlement retain
 their existing recovery paths without fetching a new permission tree.
@@ -165,11 +156,10 @@ after metadata and canonical block checks. RPC, assertion and decoding failures
 remain errors. The check repeats before new unsigned submission; signed recovery
 keeps its original bytes and nonce ownership.
 
-The adapters conditional claim builder (`idleWhenEmpty: true`) omits only the
-overall positive-progress footer. Per-group caps, exact debits, fresh output and
-minimum-rate checks remain. All-empty conditional recipes may succeed as a no-op
-when called manually; the keeper detects no work and waits. Existing claim recipe
-bytes remain unchanged until an owner publishes a new commitment.
+The adapters claim builder is conditional by default, with no compatibility mode
+or overall progress aggregation. Per-group caps, exact debits, fresh output and
+minimum-rate checks remain. All-empty recipes may succeed as a no-op when called
+manually; the keeper detects no work and waits.
 
 ## Lifecycle and recovery
 
@@ -219,7 +209,7 @@ bin/merkle-executor reset-strategy --config config/operator.local.yaml --executo
 ```
 
 Use the executor address shown by `status` with `reset-strategy --executor`.
-Legacy custom or prefixed identifiers require the previous binary and configuration.
+Custom or prefixed identifiers are unsupported.
 Invalid or zero addresses fail before state opens.
 
 Reset is permitted only for terminal jobs after the transaction journal is clear.

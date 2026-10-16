@@ -53,14 +53,12 @@ use later claim recipes, configured independently from the request recipe.
 The daemon accepts a YAML list of executor addresses and registers fixed automatic
 providers at startup. Canonical lowercase executor addresses are the durable and
 log identifiers; duplicate addresses and old strategy objects are rejected. The
-`address-only-v5` policy binds chain, discovered account/caller, curator source and
-sender policy. Version 5 removes automatic issuer registration and classifies work
-from successful original execution results. Old custom or prefixed
-journals remain inspectable and block new
-admission while unresolved; drain them with the previous binary and configuration.
-Before rollout, review issuer recipe commitments for the old providers' readiness,
-limit and payout policies. The generic runtime enforces only authenticated recipe
-conditions; moving a policy into the recipe may require owner reauthorization.
+`address-only-v1` policy binds chain, discovered account/caller, curator source and
+sender policy. It classifies work from successful original execution results.
+There is one supported pre-production policy, with no compatibility or migration path.
+Unresolved journals block new admission regardless of their identifier.
+Recipes must commit every required readiness, limit and payout condition.
+The generic runtime enforces only authenticated recipe conditions.
 Unavailable external issuer material still requires a specialized integration.
 At startup it pins a valid head, batches deduplicated account and caller getters,
 rejects any invalid member,
@@ -79,8 +77,8 @@ HTTP is in flight. Other SDK hosts may omit the source and keep local tree loadi
 Only new preparation fetches permission bytes. Signed-attempt recovery and external
 provider advancement do not depend on curator availability. Runtime fingerprints bind
 the derived account and curator HTTP configuration (credential variable names only).
-Old active workflows must drain with the old binary/configuration before migration;
-there is no journal identity rewrite or fallback to a different tree source.
+An occupied journal retains its original identity and configuration; there is no
+journal rewrite or fallback to a different tree source.
 
 ## Lifecycle
 
@@ -97,9 +95,8 @@ are checked before classifying idle. Classification follows current metadata and
 both canonical closing guards and repeats before new unsigned admission. Assertion,
 read, RPC and decoding failures remain errors. Signed recovery bypasses replanning.
 
-Conditional claims retain every active-group economic check and omit only the
-final overall positive-progress assertion. This requires a new owner-published
-commitment; legacy builders preserve their bytes. All-empty conditional programs
+Claims use a single conditional builder with every active-group economic check
+and no overall positive-progress assertion or unused progress aggregation. All-empty programs
 can succeed manually, while the keeper treats them as idle. Mandatory queries
 still execute when the associated action gate is zero.
 
