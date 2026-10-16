@@ -53,7 +53,7 @@ type Observability struct {
 
 const (
 	// RuntimePolicyVersion changes when built-in preparation or timing semantics change.
-	RuntimePolicyVersion                  = "address-only-v4"
+	RuntimePolicyVersion                  = "address-only-v5"
 	DefaultKeyEnv                         = "MERKLE_EXECUTOR_PRIVATE_KEY"
 	DefaultRecipeCacheBytes        int64  = 16 << 20
 	DefaultPollInterval                   = 15 * time.Second

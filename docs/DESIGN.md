@@ -17,9 +17,10 @@ another module's internal packages or change the solver or adapters checkouts.
 
 - `recipes`: ABI codec, SetRecipe discovery, tree/role validation and runtime assembly.
 - `provider`: integration-neutral registry, snapshots, runtime outputs and asynchronous progress.
-- `providers`: protocol-specific adapters; generic static, RPC and HTTP data sources provide
-  extension points for lending markets, 3F and future integrations. `redemptions`
-  owns the documented LL issuer families; `securitize` owns wallet and offramp routes.
+- `providers`: specialized acquisition of external quotes, proofs and signatures.
+  On-chain operations use committed queries, bindings, Manage gates and checks.
+  Explicit issuer/static/RPC/HTTP packages remain for direct hosts and fixtures;
+  the daemon registers CoW, Merkl, Liquid Lane RFQ and recipe inputs only.
 - `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
 - `curator`: bounded HTTP acquisition of the exact active permission root; the SDK
   validates the returned bytes independently.
@@ -40,7 +41,7 @@ Only complete all-status lookup permits an idempotent retry. Bounded canonical e
 scan cursors survive restart; API statuses and used nonce bits are not settlement.
 
 Signed Liquid Lane discount/signature acquisition belongs to vault-solver; the daemon
-does not register that provider. Issuer redemptions remain registered. CoW authorization and settlement
+does not register that provider. On-chain issuer operations are generic recipes. CoW authorization and settlement
 are separate phases: submit the ERC-1271 order only after its authorization transaction
 confirms, persist its deterministic UID and reconcile it before retrying submission.
 Merkl reward proofs are protocol data, separate from account permission proofs. Claims
@@ -52,9 +53,9 @@ use later claim recipes, configured independently from the request recipe.
 The daemon accepts a YAML list of executor addresses and registers fixed automatic
 providers at startup. Canonical lowercase executor addresses are the durable and
 log identifiers; duplicate addresses and old strategy objects are rejected. The
-`address-only-v4` policy binds chain, discovered account/caller, curator source and
-sender policy. Version 4 adds authenticated native Noon USN redemption; its embedded
-issuer policy also binds the reviewed catalogue digest. Old custom or prefixed
+`address-only-v5` policy binds chain, discovered account/caller, curator source and
+sender policy. Version 5 removes automatic issuer registration and classifies work
+from successful original execution results. Old custom or prefixed
 journals remain inspectable and block new
 admission while unresolved; drain them with the previous binary and configuration.
 At startup it pins a valid head, batches deduplicated account and caller getters,
@@ -84,6 +85,20 @@ account, caller, recipe hash, leaf hashes, sorted-pair proofs and executor roles
 all 12 existing recipe operations. Build each Manage/Approve runtime slot exactly once;
 an explicitly skipped Manage slot remains empty and must pass full simulation.
 
+The full original simulation's result vector resolves committed Manage gates.
+Only nonempty groups with nonzero gates count as managed work. Call and Approve
+always count, even zero approvals; no protocol selector or arbitrary argument
+determines readiness. The complete program, inputs, runtime slots and output vector
+are checked before classifying idle. Classification follows current metadata and
+both canonical closing guards and repeats before new unsigned admission. Assertion,
+read, RPC and decoding failures remain errors. Signed recovery bypasses replanning.
+
+Conditional claims retain every active-group economic check and omit only the
+final overall positive-progress assertion. This requires a new owner-published
+commitment; legacy builders preserve their bytes. All-empty conditional programs
+can succeed manually, while the keeper treats them as idle. Mandatory queries
+still execute when the associated action gate is zero.
+
 Simulation-only operation requires no key. Sending is an explicit deployment mode.
 Persist prepared jobs, then signed transaction bytes before broadcasting. Ambiguous
 submission, timeouts, restarts and unconfirmed receipts retain nonce ownership. Only
@@ -93,7 +108,11 @@ responses enter logs. Failed/unknown external states never become successful com
 
 The transaction journal persists confirmed receipt identity and logs before nonce
 acknowledgement. Provider advancement receives that evidence with a fresh pinned
-snapshot and checks canonical headers before and after reconciliation. Issuer
+snapshot and checks canonical headers before and after reconciliation. Generic
+completion proves the program transaction and its committed on-chain checks,
+not later external settlement. Independent request and claim recipes express
+their own readiness and balance postconditions. Explicit issuer host packages
+retain their specialized reconciliation behavior: issuer
 providers match exact account `Manage` calls in receipt order; missing or skipped
 actions do not count as executed. A request finishes as `requested`, releasing the
 account lock while issuer-owned state retains the pending withdrawal. Independent

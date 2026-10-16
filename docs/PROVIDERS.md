@@ -4,11 +4,13 @@ Normal daemon `strategies` entries are full nonzero executor addresses, directly
 used as lowercase state, log and metric identifiers. Duplicate normalized addresses
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
-The address-only policy version is `address-only-v4`. Drain active work with the
+The address-only policy version is `address-only-v5`. Drain active work with the
 previous binary and configuration before upgrading. Old custom or prefixed keys
 remain inspectable and fence unresolved ownership; no journal migration occurs.
-The daemon always installs automatic CoW, Merkl, Liquid Lane RFQ,
-issuer-redemption, Securitize and recipe-input adapters in a fixed order. Legacy
+The daemon installs automatic CoW, Merkl, Liquid Lane RFQ and recipe-input
+adapters in a fixed order. On-chain issuer actions use committed reads, bindings,
+Manage gates and postconditions through the generic SDK. The explicit issuer
+packages documented below remain available to direct hosts and fixtures. Legacy
 `strategy.providers` configuration is rejected. Token pairs, amounts, minimum proceeds,
 action/input mappings, deployment targets and authorization shapes come from the
 authenticated recipe and its permission tree; they are not operator parameters.

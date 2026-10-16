@@ -108,7 +108,7 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 		case "claimed":
 			values = []any{big.NewInt(80), big.NewInt(900), root}
 		case "execute":
-			return nil
+			values = []any{[]*big.Int{new(big.Int)}}
 		default:
 			t.Fatalf("unexpected getter %s", method.Name)
 		}
