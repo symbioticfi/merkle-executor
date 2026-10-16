@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -156,6 +157,7 @@ type harness struct {
 	option              map[string]any
 	quotes, gets, posts int
 	requests            [][]byte
+	lookups             []url.Values
 	httpMode            string
 	pages               []wire.RfqOrdersResponse
 	server              *httptest.Server
@@ -185,6 +187,7 @@ func newHarness(t *testing.T) *harness {
 			_ = json.NewEncoder(w).Encode(map[string]any{"quotes": []any{h.option}})
 		case "/api/v1/orders":
 			h.gets++
+			h.lookups = append(h.lookups, r.URL.Query())
 			if h.httpMode == "missing cursor" {
 				_, _ = w.Write([]byte(`{"orders":[]}`))
 				return
@@ -436,7 +439,7 @@ func TestUncertainPublicationReconcilesExactIdentity(t *testing.T) {
 	}
 }
 func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
-	for _, mode := range []string{"missing orders", "missing cursor", "bad cursor", "repeated cursor", "exhausted", "wrong owner", "duplicate", "known missing", "unknown status"} {
+	for _, mode := range []string{"missing orders", "missing cursor", "bad cursor", "repeated cursor", "wrong owner", "duplicate", "known missing", "unknown status"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
@@ -452,7 +455,7 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 				h.httpMode = "missing cursor"
 			case "bad cursor":
 				page.Cursor = json.RawMessage(`"bad"`)
-			case "repeated cursor", "exhausted":
+			case "repeated cursor":
 				page.Cursor = json.RawMessage(`"oc_a"`)
 			case "known missing":
 				st.OrderID = orderID
@@ -470,9 +473,6 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 				}
 			}
 			h.pages = []wire.RfqOrdersResponse{page}
-			if mode == "exhausted" {
-				h.p.cfg.MaxLookupPages = 1
-			}
 			raw, _ := json.Marshal(st)
 			p, err := h.p.Advance(t.Context(), s, out, raw)
 			if err == nil || p.Done || h.posts != 0 {

@@ -17,8 +17,8 @@ another module's internal packages or change the solver or adapters checkouts.
 
 - `recipes`: ABI codec, SetRecipe discovery, tree/role validation and runtime assembly.
 - `provider`: integration-neutral registry, snapshots, runtime outputs and asynchronous progress.
-- `providers`: protocol-specific adapters; generic static, RPC and HTTP data sources provide
-  extension points for lending markets, 3F and future integrations. `redemptions`
+- `providers`: protocol-specific adapters selected from authenticated recipes.
+  SDK hosts supply additional integrations through the provider interfaces. `redemptions`
   owns the documented LL issuer families; `securitize` owns wallet and offramp routes.
 - `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
 - `curator`: bounded HTTP acquisition of the exact active permission root; the SDK

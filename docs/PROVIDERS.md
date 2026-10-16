@@ -127,7 +127,9 @@ Confirmed account authorization precedes idempotent consumer submission. Durable
 request/quote identity, signatures, usage/settlement progress and cursors survive
 restart. Completion requires canonical matching input/output transfers and Reactor
 usage evidence. Paginated lookup and bounded event scanning fail closed on missing,
-ambiguous or overly dense evidence. No new quote is obtained for an existing job.
+ambiguous or overly dense evidence. Lookup checkpoints after 10 API pages per tick
+and resumes across restarts, preserving duplicate checks and withholding publication
+until the scan completes. No new quote is obtained for an existing job.
 [Consumer wire schema and evidence](../api/schemas/LIQUID_LANE_RFQ.md).
 
 ## Liquid Lane issuer requests and claims
@@ -244,7 +246,7 @@ existing work.
 
 The SDK retains direct configurable provider constructors for other hosts and
 legacy fixture/recovery compatibility. Those constructors are not normal daemon
-inputs. Generic static/http/rpc data providers are not daemon-registered; deterministic
+inputs. Generic static/http/rpc data providers are not included in the daemon; deterministic
 recipe-constrained Inputs use `keeper.NewRecipeInputs()` and the shared lens.
 
 ## Evidence and generation
