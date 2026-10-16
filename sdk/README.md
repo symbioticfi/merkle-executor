@@ -29,6 +29,18 @@ reservation must be restored before other host jobs start.
 or changing an active workflow is rejected. Store lifetime must extend past the
 host sender's shutdown drain: callbacks may still persist during that drain.
 
+Each serialized keeper `Tick` loads and validates the complete historical job
+inventory once. Its private iteration view supplies sender-first recovery and
+account reservations; successful durable job saves and deletes update that view.
+Working jobs are copied so mutable provider maps and slices cannot change the
+view before persistence succeeds. Any uncertain write stops the iteration with
+one sanitized global failure; the next `Tick` reloads actual disk state, including
+a write that failed after replacement. No view survives between iterations, and
+public `CheckRecovery` always reads fresh state. This assumes the existing single
+keeper writer and serialized `Tick` contract; it is not a multi-record snapshot
+for concurrent writers. SDK source changes reach a daemon only after an authorized
+SDK release and an immutable consumer module pin update.
+
 Run `make check` and `make integration` here without a parent module/workspace.
 Root `make check` and `make integration` also check this module explicitly.
 Bindings regenerate from this module's ABI through the repository's pinned
