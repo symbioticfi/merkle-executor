@@ -22,7 +22,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
@@ -82,15 +81,6 @@ var uuid = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-
 var cursorPattern = regexp.MustCompile(`^oc_[A-Za-z0-9_-]{1,512}$`)
 
 const maxSafeInteger = uint64(1<<53 - 1)
-
-func Register(r *registry.Registry) error { return r.Register("liquidlane-rfq", Factory) }
-func Factory(raw yaml.Node, deps registry.Deps) (provider.Provider, error) {
-	c := Config{MaxLookupPages: 10, EventRangeBlocks: 2000}
-	if err := parse.DecodeStrict(raw, &c); err != nil {
-		return nil, err
-	}
-	return New(c, deps)
-}
 
 // New accepts the immutable carrier derived from an authenticated recipe.
 func New(c Config, deps registry.Deps) (*Provider, error) {

@@ -94,7 +94,15 @@ func TestPlannerExclusiveRecipePreflightBeforeProviderIO(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			reader := &exclusiveRecipeReader{permissionReader: &permissionReader{validationReader: &validationReader{t: t, snapshot: snapshot, header: header, payload: payload}, log: types.Log{Address: snapshot.Executor, BlockNumber: 12, BlockHash: header.Hash(), Topics: []common.Hash{event.ID, hash}, Data: data}}}
+			values := make([]*big.Int, len(recipe.Steps))
+			for i := range values {
+				values[i] = new(big.Int)
+			}
+			returned, err := e.GetABI().Methods["execute"].Outputs.Pack(values)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader := &exclusiveRecipeReader{permissionReader: &permissionReader{validationReader: &validationReader{t: t, snapshot: snapshot, header: header, payload: payload, returned: returned}, log: types.Log{Address: snapshot.Executor, BlockNumber: 12, BlockHash: header.Hash(), Topics: []common.Hash{event.ID, hash}, Data: data}}}
 			raw, _ := json.Marshal(map[string]any{"chainId": 1, "root": leaf.Hash.Hex(), "leaves": []any{map[string]any{"hash": leaf.Hash.Hex(), "target": target.Hex(), "value": "zero", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": []string{}}}})
 			planner := Planner{Chain: reader, ChainID: big.NewInt(1), Caller: snapshot.Caller, PermissionSource: permissionSourceFunc(func(context.Context, *big.Int, recipes.Snapshot) ([]byte, error) { return raw, nil })}
 			pr := &exclusiveRecipeProvider{target: target}

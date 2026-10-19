@@ -21,7 +21,7 @@ import (
 )
 
 func TestDerivedAccountAndCuratorChangesCannotRewriteActiveWork(t *testing.T) {
-	for _, change := range []string{"account", "caller", "chain", "url", "credential reference", "response bound"} {
+	for _, change := range []string{"account", "caller", "chain", "url", "credential reference"} {
 		t.Run(change, func(t *testing.T) {
 			cfg := testCLIConfig(t.TempDir())
 			original := cfg.Strategies[0]
@@ -39,8 +39,6 @@ func TestDerivedAccountAndCuratorChangesCannotRewriteActiveWork(t *testing.T) {
 				cfg.Curator.URL = "http://other.invalid/api/v1"
 			case "credential reference":
 				cfg.Curator.APIKeyEnv = "OTHER_CURATOR_KEY"
-			case "response bound":
-				cfg.Curator.MaxResponseBytes = 4096
 			}
 			current := keeper.Config{Name: original, Executor: original, Account: account.Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(original, account, caller)}
 			old := current
@@ -69,44 +67,44 @@ func TestDerivedAccountAndCuratorChangesCannotRewriteActiveWork(t *testing.T) {
 	}
 }
 
-type legacyIdentitySender struct{ pending string }
+type removedIdentitySender struct{ pending string }
 
-func (s *legacyIdentitySender) PendingID() string { return s.pending }
-func (*legacyIdentitySender) Send(context.Context, sdktx.Request) (sdktx.Result, error) {
+func (s *removedIdentitySender) PendingID() string { return s.pending }
+func (*removedIdentitySender) Send(context.Context, sdktx.Request) (sdktx.Result, error) {
 	panic("recovery must not send")
 }
-func (*legacyIdentitySender) Acknowledge(context.Context, string) error {
+func (*removedIdentitySender) Acknowledge(context.Context, string) error {
 	panic("recovery must not acknowledge")
 }
 
-func TestAddressOnlyHostFencesLegacyOwners(t *testing.T) {
+func TestRecoveryFencesRemovedExecutors(t *testing.T) {
 	cfg, err := config.Load(writeCLIConfig(t, t.TempDir(), testCLIConfig(t.TempDir())))
 	if err != nil {
 		t.Fatal(err)
 	}
 	executor := cfg.Strategies[0]
 	strategies := []keeper.Strategy{{Config: keeper.Config{Name: executor, Executor: executor, Interval: config.DefaultStrategyInterval}}}
-	for _, legacy := range []string{"old-custom", "executor-" + executor} {
+	for _, removed := range []string{strings.ToLower(common.HexToAddress("0x2222").Hex()), strings.ToLower(common.HexToAddress("0x3333").Hex())} {
 		for _, tc := range []struct {
 			phase   string
 			pending bool
 		}{{"prepared", false}, {"authorized", true}, {"settled", true}, {"failed", true}} {
-			t.Run(legacy+"/"+tc.phase, func(t *testing.T) {
+			t.Run(removed+"/"+tc.phase, func(t *testing.T) {
 				directory := t.TempDir()
 				store, err := state.Open(directory)
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer store.Close()
-				job := keeper.Job{ID: "legacy-owned", Phase: tc.phase, ConfigHash: "old-label-policy", Plan: keeper.Plan{Outputs: []provider.Output{{Data: json.RawMessage(`{"uid":"durable-order"}`)}}}}
-				key := "strategy." + legacy + ".v1"
-				if err := store.Save("strategies.v1", []string{legacy}); err != nil {
+				job := keeper.Job{ID: "removed-owned", Phase: tc.phase, ConfigHash: "removed-executor-policy", Plan: keeper.Plan{Outputs: []provider.Output{{Data: json.RawMessage(`{"uid":"durable-order"}`)}}}}
+				key := "strategy." + removed + ".v1"
+				if err := store.Save("strategies.v1", []string{removed}); err != nil {
 					t.Fatal(err)
 				}
 				if err := store.Save(key, job); err != nil {
 					t.Fatal(err)
 				}
-				sender := &legacyIdentitySender{}
+				sender := &removedIdentitySender{}
 				if tc.pending {
 					sender.pending = job.ID
 					if err := store.Save("txmanager.active.v1", map[string]string{"id": job.ID, "signed": "existing-signed-bytes"}); err != nil {
@@ -129,14 +127,14 @@ func TestAddressOnlyHostFencesLegacyOwners(t *testing.T) {
 				}
 				worker := keeper.Keeper{Store: store, Sender: sender, Strategies: strategies}
 				if err := worker.CheckRecovery(); err == nil || !strings.Contains(err.Error(), "removed from configuration") {
-					t.Fatalf("legacy owner admitted: %v", err)
+					t.Fatalf("removed owner admitted: %v", err)
 				}
 				if !bytes.Equal(before, bytesFor(key)) || tc.pending && (!bytes.Equal(signed, bytesFor("txmanager.active.v1")) || sender.pending != job.ID) {
-					t.Fatal("recovery rewrote legacy ownership")
+					t.Fatal("recovery rewrote removed ownership")
 				}
 				var inventory []string
-				if _, err := store.Load("strategies.v1", &inventory); err != nil || !slices.Contains(inventory, legacy) {
-					t.Fatal("legacy inventory identifier removed", err)
+				if _, err := store.Load("strategies.v1", &inventory); err != nil || !slices.Contains(inventory, removed) {
+					t.Fatal("removed inventory identifier removed", err)
 				}
 			})
 		}

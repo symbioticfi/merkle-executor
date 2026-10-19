@@ -68,7 +68,7 @@ that do not need speculative results. Missing members invalidate the whole group
 
 `recipes.DiscoverForAccount` groups executor metadata with the configured account
 root and verifies the returned account before accepting that root. Existing
-`Discover` remains compatible and reads the discovered root afterward. Standalone
+`Discover` reads the discovered root afterward. Standalone
 discovery, role checks and `ValidateSnapshot` retain their own canonical guards.
 Role checks deduplicate leaves.
 
@@ -81,6 +81,12 @@ hashes after all chunks. Through 250 unique roles this fits one 256-member group
 Roles are validated before simulation, then current metadata; opening canonical
 checks run first to pin the current reads. Metadata is always reread, including when
 the head hash is unchanged.
+
+`keeper.Planner` admits work only after successful full simulation, a valid result
+vector and both canonical closing guards. Recipes with every `Manage` gate closed
+and no `Call` or `Approve` return `provider.ErrNotReady`; zero-valued calls and
+approvals remain executable work. Unsigned admission repeats this check against
+latest state. Signed recovery keeps its original bytes and ownership.
 
 `recipes.ValidateExecution` groups current metadata with an isolated nil/latest
 simulation and closes both block guards afterward. Metadata errors take priority over
@@ -97,12 +103,12 @@ preparation-local resolver receives the authenticated snapshot and a bounded, la
 accessor for its own results. Exact chain/block/hash/time/executor/account/caller
 identity must match before resolution; providers should classify API eligibility
 before consuming getters. `keeper.Planner` automatically uses this optional contract.
-Nonstaged providers and direct `Provider.Prepare` calls remain compatible. Speculative
+Nonstaged providers and direct `Provider.Prepare` calls execute without staging. Speculative
 batch member errors stay lazy; outer transport/shape failures are fatal before provider
 classification and never trigger single-call retries.
 
 `PrepareExecutionWithOptions` can stage these reads with initial metadata and accept a
-`RecipeCache`. The old `PrepareExecution` and standalone discovery APIs remain uncached.
+`RecipeCache`. `PrepareExecution` and standalone discovery APIs do not use the cache.
 `NewRecipeCache(capacity, bytes)` bounds a mutex-protected FIFO by entries and conservative
 retained allocation bytes (including payloads, empty slice slots and fixed overhead).
 Hosts set capacity from configured strategies; a nil cache disables it. Only exact
@@ -123,6 +129,6 @@ match too. Source errors must omit credentials, complete URLs and remote payload
 wrapped causes preserve cancellation. The callback runs only during new preparation,
 before providers, and cannot replace closing role/simulation/canonical guards. Saved
 submission recovery, presend validation and provider advancement do not fetch a new
-tree. Without this seam, existing local `keeper.Config.Tree` behavior is unchanged.
+tree. Hosts without a source load the local `keeper.Config.Tree`.
 Hosts must include source configuration and derived identities in their revision
-fingerprint and must not rewrite active jobs during migration.
+fingerprint. Recovery must preserve the identity of active jobs.

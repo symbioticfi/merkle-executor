@@ -1641,7 +1641,7 @@ func (m *Manager) waitForConfirmations(
 }
 
 // Both independent opening reads get the full per-read budget from the same
-// start time. Legacy backends keep their separate sequential timeout contexts.
+// start time. Single-call backends keep their separate sequential timeout contexts.
 func (m *Manager) confirmationOpening(ctx context.Context, hash common.Hash) (*types.Header, *types.Receipt, error, error) {
 	if _, ok := m.backend.(protocolio.BatchReader); !ok {
 		head, he := m.confirmationHead(ctx)

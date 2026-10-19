@@ -69,31 +69,3 @@ func TestSourceFetchesExactActiveRootWithBoundedFailures(t *testing.T) {
 		})
 	}
 }
-
-func TestFixedHostPolicyKeepsLibraryOverridesSeparate(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		timeout int
-		limit   int64
-		invalid bool
-	}{
-		{"omitted", 0, 0, false}, {"fixed", HostTimeoutSeconds, HostMaxResponseBytes, false}, {"custom timeout", 11, 0, true}, {"custom limit", 0, 4096, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := protocolio.HTTPConfig{URL: "http://127.0.0.1:1/api/v1", TimeoutSeconds: tc.timeout, MaxResponseBytes: tc.limit}
-			if err := ValidateConfig(cfg); err != nil {
-				t.Fatalf("flexible library config rejected: %v", err)
-			}
-			fixed, err := NormalizeHostConfig(cfg)
-			if tc.invalid {
-				if err == nil {
-					t.Fatal("host override accepted")
-				}
-				return
-			}
-			if err != nil || fixed.TimeoutSeconds != HostTimeoutSeconds || fixed.MaxResponseBytes != HostMaxResponseBytes {
-				t.Fatalf("host policy %+v %v", fixed, err)
-			}
-		})
-	}
-}

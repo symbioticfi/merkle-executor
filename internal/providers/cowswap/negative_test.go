@@ -46,7 +46,7 @@ func (*negativeChain) CallContract(_ context.Context, m ethereum.CallMsg, _ *big
 	return ab.NewMerkleAccount().GetABI().Methods["signatures"].Outputs.Pack(true)
 }
 func negativeConfig(url string) Config {
-	return Config{HTTP: protocolio.HTTPConfig{URL: url}, Settlement: addr(4).Hex(), SellToken: addr(1).Hex(), BuyToken: addr(2).Hex(), SellAmount: "1000", MinBuyAmount: "1800", SlippageBPS: 100, ValiditySeconds: 600, AppData: (common.Hash{}).Hex(), Action: "1:0"}
+	return Config{HTTP: protocolio.HTTPConfig{URL: url}, Settlement: addr(4).Hex(), SellToken: addr(1).Hex(), BuyToken: addr(2).Hex(), SellAmount: "1000", MinBuyAmount: "1800", ValiditySeconds: 600, Action: "1:0"}
 }
 func negativeSnapshot() provider.Snapshot {
 	return provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000, BlockHash: testHeader(big.NewInt(12)).Hash()}
@@ -87,7 +87,7 @@ func TestPrepareRejectsIncompatibleQuotesWithoutOrderPost(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(wire.CowQuoteResponse{Quote: q, ID: 1, Verified: true})
 			}))
 			defer srv.Close()
-			p, err := fixtureFactory(node(t, negativeConfig(srv.URL)), providerRegistry.Deps{Chain: &negativeChain{}, HTTP: srv.Client()})
+			p, err := fixtureProvider(negativeConfig(srv.URL), providerRegistry.Deps{Chain: &negativeChain{}, HTTP: srv.Client()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -170,7 +170,7 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			p, err := fixtureFactory(node(t, negativeConfig(srv.URL)), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
+			p, err := fixtureProvider(negativeConfig(srv.URL), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -192,7 +192,7 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 			snap.BlockNumber = big.NewInt(13)
 			snap.BlockHash = testHeader(snap.BlockNumber).Hash()
 			for range 2 { // recreate provider: retries retain the same authorized UID/order.
-				p, err = fixtureFactory(node(t, negativeConfig(srv.URL)), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
+				p, err = fixtureProvider(negativeConfig(srv.URL), providerRegistry.Deps{Chain: chain, HTTP: srv.Client()})
 				if err != nil {
 					t.Fatal(err)
 				}
