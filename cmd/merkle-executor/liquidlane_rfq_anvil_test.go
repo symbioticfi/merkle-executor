@@ -220,7 +220,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := plans[cfg.Strategies[0]]
-	if len(plan.Outputs) != 4 || !bytes.Equal(plan.Outputs[2].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
+	if len(plan.Outputs) != 6 || !bytes.Equal(plan.Outputs[2].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
 		t.Fatal("plan did not preserve exact sign or published early")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
@@ -242,7 +242,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	}
 	run()
 	job := load()
-	if job.Phase != "authorized" || len(job.Progress) != 4 || job.Progress[2].Outcome != "publication-uncertain" || job.Result.Execution == nil || posts.Load() != 1 || quotes.Load() != 2 {
+	if job.Phase != "authorized" || len(job.Progress) != 6 || job.Progress[2].Outcome != "publication-uncertain" || job.Result.Execution == nil || posts.Load() != 1 || quotes.Load() != 2 {
 		t.Fatalf("ambiguous publication lost ownership: phase=%s progress=%+v posts=%d quotes=%d", job.Phase, job.Progress, posts.Load(), quotes.Load())
 	}
 	originalData := bytes.Clone(job.Plan.Outputs[2].Data)

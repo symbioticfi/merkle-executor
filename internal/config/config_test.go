@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
@@ -83,23 +84,27 @@ func TestTransactionHorizonDefaultsAndInvalidLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defaults.TxManager.Horizon.MaxBlocks != 6 || defaults.TxManager.Horizon.BlockTimeMs != 12000 || defaults.TxManager.PendingTimeoutMs != 300000 {
+	if defaults.TxManager.EngineConfig().Horizon.MaxBlocks != 6 || defaults.TxManager.EngineConfig().Horizon.BlockTime != 12*time.Second || defaults.TxManager.EngineConfig().PendingTimeout != 5*time.Minute {
 		t.Fatal("unexpected transaction defaults")
 	}
 	for name, block := range map[string]string{
-		"legacy static fee":         "maxFeePerGas: '30000000000'",
-		"removed passive timeout":   "lateReceiptTimeoutMs: 600000",
-		"removed passive hash cap":  "lateReceiptMaxHashes: 1024",
-		"negative fee":              "maxFeeGwei: -1",
-		"nan fee":                   "maxFeeGwei: .nan",
-		"infinite fee":              "maxFeeGwei: .inf",
-		"negative broadcast":        "broadcastTimeoutMs: -1",
-		"overflow broadcast":        "broadcastTimeoutMs: 9223372036854775807",
-		"pending shorter than bump": "pendingTimeoutMs: 1000",
-		"horizon too long":          "horizon: {maxBlocks: 13}",
-		"nan percentile":            "horizon: {congestedRewardPercentile: .nan}",
-		"tip ordering":              "horizon: {tipFloorGwei: 16}",
-		"gas headroom":              "horizon: {gasHeadroomBps: 2000, fallbackGasHeadroomBps: 1000}",
+		"fixed confirmations":          "confirmations: 2",
+		"fixed polling":                "pollIntervalMs: 2000",
+		"fixed broadcast":              "broadcastTimeoutMs: 5000",
+		"fixed horizon":                "horizon: {maxBlocks: 6}",
+		"unsupported static fee":       "maxFeePerGas: '30000000000'",
+		"unsupported passive timeout":  "lateReceiptTimeoutMs: 600000",
+		"unsupported passive hash cap": "lateReceiptMaxHashes: 1024",
+		"negative fee":                 "maxFeeGwei: -1",
+		"nan fee":                      "maxFeeGwei: .nan",
+		"infinite fee":                 "maxFeeGwei: .inf",
+		"negative broadcast":           "broadcastTimeoutMs: -1",
+		"overflow broadcast":           "broadcastTimeoutMs: 9223372036854775807",
+		"pending shorter than bump":    "pendingTimeoutMs: 1000",
+		"horizon too long":             "horizon: {maxBlocks: 13}",
+		"nan percentile":               "horizon: {congestedRewardPercentile: .nan}",
+		"tip ordering":                 "horizon: {tipFloorGwei: 16}",
+		"gas headroom":                 "horizon: {gasHeadroomBps: 2000, fallbackGasHeadroomBps: 1000}",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeConfig(t, validConfig+"txManager:\n  "+block+"\n")); err == nil {
@@ -113,7 +118,7 @@ func TestGlobalMulticallAddressIsFixed(t *testing.T) {
 	for _, tc := range []struct {
 		value string
 		valid bool
-	}{{"", true}, {StandardMulticall3, true}, {"0x0000000000000000000000000000000000000005", false}, {"0x0000000000000000000000000000000000000000", false}, {"not-address", false}} {
+	}{{"", true}, {StandardMulticall3, false}, {"0x0000000000000000000000000000000000000005", false}, {"0x0000000000000000000000000000000000000000", false}, {"not-address", false}} {
 		t.Run(tc.value, func(t *testing.T) {
 			text := validConfig
 			if tc.value != "" {
@@ -127,29 +132,14 @@ func TestGlobalMulticallAddressIsFixed(t *testing.T) {
 	}
 }
 
-func TestRecipeCacheBudgetConfiguration(t *testing.T) {
-	for _, tc := range []struct {
-		name, yaml string
-		valid      bool
-	}{
-		{"default", "", true}, {"disabled", "recipeCacheBytes: 0\n", false}, {"bounded", "recipeCacheBytes: 4096\n", false}, {"negative", "recipeCacheBytes: -1\n", false},
+func TestRuntimePolicyFieldsAreNotConfiguration(t *testing.T) {
+	for _, field := range []string{
+		"recipeCacheBytes: 0", "recipeCacheBytes: 16777216",
+		"pollInterval: 15s", "operationTimeout: 30s", "httpTimeout: 15s",
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := Load(writeConfig(t, validConfig+tc.yaml))
-			if (err == nil) != tc.valid {
-				t.Fatalf("cache budget: %v", err)
-			}
-			if err == nil {
-				want := int64(16 << 20)
-				if tc.name == "disabled" {
-					want = 0
-				}
-				if tc.name == "bounded" {
-					want = 4096
-				}
-				if cfg.RecipeCacheBytes != want {
-					t.Fatalf("budget=%d want%d", cfg.RecipeCacheBytes, want)
-				}
+		t.Run(field, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, validConfig+field+"\n")); err == nil {
+				t.Fatal("fixed runtime field accepted")
 			}
 		})
 	}
@@ -166,8 +156,8 @@ func TestExecutorOnlyStrategyUsesRequiredCurator(t *testing.T) {
 
 func TestCuratorValidationRejectsObsoleteAndUnsafeConfiguration(t *testing.T) {
 	for name, raw := range map[string]string{
-		"old account":      strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    account: '0x0000000000000000000000000000000000000003'\n"),
-		"old file":         strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    tree: permissions.json\n"),
+		"account mapping":  strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    account: '0x0000000000000000000000000000000000000003'\n"),
+		"file mapping":     strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    tree: permissions.json\n"),
 		"missing curator":  strings.Replace(validConfig, "curator:\n  url: http://127.0.0.1:1/api/v1\n", "", 1),
 		"credential URL":   strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "https://user:secret@example.invalid/api/v1", 1),
 		"query URL":        strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "http://example.invalid/api/v1?token=private", 1),
@@ -193,14 +183,14 @@ func TestMinimalConfigurationDerivesSignerAndUsesStandardConstants(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.Signer.Address != "" || cfg.Signer.KeyEnv != DefaultKeyEnv || cfg.Chain.Multicall3 != StandardMulticall3 {
+			if cfg.Signer.Address != "" || cfg.Signer.KeyEnv != DefaultKeyEnv {
 				t.Fatalf("unexpected defaults: %+v", cfg)
 			}
 		})
 	}
 }
 
-func TestRuntimePolicyRejectsLegacyOverrides(t *testing.T) {
+func TestRuntimePolicyRejectsFixedFields(t *testing.T) {
 	for name, override := range map[string]string{
 		"poll": "pollInterval: 1s\n", "operation": "operationTimeout: 1s\n", "http": "httpTimeout: 1s\n",
 		"confirmations": "txManager: {confirmations: 1}\n", "transaction poll": "txManager: {pollInterval: 1s}\n",
@@ -208,7 +198,7 @@ func TestRuntimePolicyRejectsLegacyOverrides(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeConfig(t, validConfig+override)); err == nil {
-				t.Fatal("legacy runtime policy override accepted")
+				t.Fatal("non-configurable runtime setting accepted")
 			}
 		})
 	}
@@ -231,21 +221,21 @@ func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
 		name, fields string
 		invalid      bool
 	}{
-		{"omitted", "", false}, {"zero", "  timeoutSeconds: 0\n  maxResponseBytes: 0\n", false}, {"fixed", "  timeoutSeconds: 10\n  maxResponseBytes: 2097152\n", false}, {"different timeout", "  timeoutSeconds: 11\n", true}, {"different bound", "  maxResponseBytes: 1048576\n", true},
+		{"omitted", "", false}, {"zero", "  timeoutSeconds: 0\n  maxResponseBytes: 0\n", true}, {"fixed", "  timeoutSeconds: 10\n  maxResponseBytes: 2097152\n", true}, {"different timeout", "  timeoutSeconds: 11\n", true}, {"different bound", "  maxResponseBytes: 1048576\n", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := strings.Replace(validConfig, "curator:\n", "curator:\n"+tc.fields, 1)
 			cfg, err := Load(writeConfig(t, raw))
 			if tc.invalid {
 				if err == nil {
-					t.Fatal("legacy curator transport override accepted")
+					t.Fatal("non-configurable curator transport setting accepted")
 				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.Curator.TimeoutSeconds != permissions.HostTimeoutSeconds || cfg.Curator.MaxResponseBytes != permissions.HostMaxResponseBytes {
+			if cfg.Curator.HTTPConfig().TimeoutSeconds != permissions.HostTimeoutSeconds || cfg.Curator.HTTPConfig().MaxResponseBytes != permissions.HostMaxResponseBytes {
 				t.Fatalf("effective curator policy %+v", cfg.Curator)
 			}
 			got := cfg.StrategyFingerprint(cfg.Strategies[0], common.HexToAddress("0x03"), common.HexToAddress("0x01"))

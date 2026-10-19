@@ -7,10 +7,9 @@ simulation, canonical evidence and durable workflow/submission recovery.
 
 Vault-solver imports an immutable SDK module version and supplies its existing
 transaction manager. Its adapter does not construct another manager or signer.
-Signed originals and replacements are journaled before broadcast. A durable
-transaction reserves the common signer lane; uncertain results and restart retain
-it until canonical evidence and durable transaction acknowledgement permit release.
-External provider progress can retain the account workflow lock afterward.
+Signed originals and replacements are journaled before broadcast. A durable job
+reserves the common signer lane; uncertain results and restart retain it until
+canonical evidence and durable workflow acknowledgement permit release.
 
 The repository contains two modules. `make check` and `make integration` test
 both explicitly. For local SDK editing, an untracked Go workspace can include
@@ -22,21 +21,6 @@ provider bindings remain under `api`.
 SDK extraction does not add auction discovery, pricing, reservations, LL RFQ
 signing-domain compatibility or 3F offer lifecycle behavior. These stay in host
 integrations, which implement the SDK's Prepare/Advance provider contracts.
-
-The generic planner accepts unknown selectors when their mutable fields have
-authenticated bindings or an owning provider. Readiness comes from the successful
-full original simulation: `recipes.HasWork` resolves committed Manage gates from
-its complete result vector. Unconditional Call/Approve always count as work,
-including Approve(0). No active actions returns `provider.ErrNotReady` only after
-current metadata and canonical closing guards succeed. Failed assertions, malformed
-results and RPC errors remain errors. `recipes.ExecutionHasWork` performs the
-corresponding current-state check before new unsigned submission. Signed recovery
-keeps the exact prepared transaction and never replans from readiness.
-
-Completion means canonical execution of committed on-chain postconditions.
-Later external settlement requires its own provider or independently committed
-claim recipe. The daemon's automatic issuer providers are no longer installed;
-the specialized packages remain available to explicit hosts and local fixtures.
 
 Private module reads use normal local GitHub credentials with
 `GOPRIVATE=github.com/symbioticfi/merkle-executor`. CI uses this repository's

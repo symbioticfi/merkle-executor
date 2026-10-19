@@ -67,37 +67,6 @@ func NewAutomatic(deps registry.Deps) (provider.Provider, error) {
 func (p *automatic) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
 	return provider.Output{}, errors.New("Securitize requires authenticated recipe")
 }
-func template(action recipes.ManagedAction, expected []byte, offsets ...int) error {
-	if action.Leaf.Value == nil || action.Leaf.Value.Sign() != 0 || len(action.Leaf.Data) != len(expected) {
-		return errors.New("Securitize template has incorrect native value or calldata shape")
-	}
-	allowed := map[int]bool{}
-	for _, at := range offsets {
-		allowed[at] = true
-	}
-	for _, binding := range action.Bindings {
-		if !allowed[int(binding.Offset)] {
-			return errors.New("Securitize binding changes identity")
-		}
-	}
-	for i := 0; i < len(expected); {
-		if allowed[i] {
-			i += 32
-			continue
-		}
-		start := i
-		for i < len(expected) && !allowed[i] {
-			i++
-		}
-		if err := action.Pinned(start, i-start); err != nil {
-			return err
-		}
-		if !bytes.Equal(action.Leaf.Data[start:i], expected[start:i]) {
-			return errors.New("Securitize identity differs from known issuer route")
-		}
-	}
-	return nil
-}
 func match(action recipes.ManagedAction, target common.Address, data []byte) bool {
 	return action.Leaf.Target == target && len(action.Leaf.Data) >= 4 && bytes.Equal(action.Leaf.Data[:4], data[:4])
 }
@@ -151,7 +120,7 @@ func (p *automatic) selectRoutes(s provider.Snapshot, r recipes.Recipe, t *recip
 				if route.Mode == "wallet" && len(action.Leaf.Data) == 68 && action.Pinned(4, 32) == nil && !bytes.Equal(action.Leaf.Data[4:36], data[4:36]) {
 					continue
 				}
-				if err = template(action, data, offsets...); err != nil {
+				if err = derived.NumericTemplate(action, data, offsets...); err != nil {
 					return nil, err
 				}
 				value, err := action.Field(amountOffset)
@@ -350,8 +319,8 @@ func (p *automatic) restore(out provider.Output) ([]*Provider, []provider.Output
 	actions := map[string]hexutil.Bytes{}
 	targets := map[common.Address]bool{}
 	for _, route := range bundle.Routes {
-		if route.Config.Catalog != "" || route.Config.Symbol != "" || route.Decimals > 77 {
-			return nil, nil, errors.New("persisted Securitize route requires external catalogue")
+		if route.Decimals > 77 {
+			return nil, nil, errors.New("persisted Securitize route has invalid decimals")
 		}
 		if err := p.validateKnownRoute(route.Config, route.Decimals); err != nil {
 			return nil, nil, err

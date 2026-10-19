@@ -204,7 +204,7 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 	}
 	defer backend.Close()
 	cfg := merkl.Config{HTTP: protocolio.HTTPConfig{URL: rewards.URL}, Distributor: dist.Hex(), Multicall3: aggregate.Hex(), Tokens: []string{token.Hex()}, ProofLengths: []int{0}, Action: "0:0", CalldataBytes: len(claim), MinClaimable: "1"}
-	p, err := merkl.Factory(serviceNode(t, cfg), registry.Deps{Chain: backend, HTTP: rewards.Client()})
+	p, err := merkl.New(cfg, registry.Deps{Chain: backend, HTTP: rewards.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}

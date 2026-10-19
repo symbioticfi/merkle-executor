@@ -6,7 +6,6 @@ import (
 	"io"
 	"math/big"
 	"net/http"
-	"path/filepath"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -20,6 +19,8 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlanerfq"
 	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
+	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
+	"github.com/symbioticfi/merkle-executor/internal/providers/securitize"
 	"github.com/symbioticfi/merkle-executor/internal/signer"
 	"github.com/symbioticfi/merkle-executor/internal/txmanager"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
@@ -27,13 +28,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
-
-// Only external proofs, quotes and signatures need specialized providers.
-// On-chain readiness and completion checks remain in the committed recipe.
-var automaticProviders = []struct {
-	name string
-	new  func(providerRegistry.Deps) (provider.Provider, error)
-}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}}
 
 func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer) error {
 	return runBotWithHTTP(ctx, path, once, planOnly, out, nil)
@@ -49,17 +43,13 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	if planOnly {
 		cfg.Mode = "simulate"
 	}
-	configDir, err := filepath.Abs(filepath.Dir(path))
-	if err != nil {
-		return errors.Errorf("resolve configuration directory: %w", err)
-	}
 	log, flush, err := observability.NewLogger(cfg.Observability.Debug)
 	if err != nil {
 		return err
 	}
 	defer flush()
 	chainID := new(big.Int).SetUint64(cfg.Chain.ChainID)
-	startup, cancel := context.WithTimeout(ctx, cfg.OperationTimeout)
+	startup, cancel := context.WithTimeout(ctx, config.DefaultOperationTimeout)
 	client, err := chain.Dial(startup, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID, common.HexToAddress(config.StandardMulticall3))
 	cancel()
 	if err != nil {
@@ -67,9 +57,9 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	}
 	defer client.Close()
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: cfg.HTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		httpClient = &http.Client{Timeout: config.DefaultHTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
-	source, err := curator.New(cfg.Curator, httpClient)
+	source, err := curator.New(cfg.Curator.HTTPConfig(), httpClient)
 	if err != nil {
 		return err
 	}
@@ -77,7 +67,7 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	for i, sc := range cfg.Strategies {
 		targets[i] = common.HexToAddress(sc)
 	}
-	discovery, cancel := context.WithTimeout(ctx, cfg.OperationTimeout)
+	discovery, cancel := context.WithTimeout(ctx, config.DefaultOperationTimeout)
 	accounts, caller, err := discoverIdentity(discovery, client, targets)
 	cancel()
 	if err != nil {
@@ -99,8 +89,11 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	strategies := make([]keeper.Strategy, 0, len(cfg.Strategies))
 	for _, sc := range cfg.Strategies {
 		s := keeper.Strategy{Config: keeper.Config{Name: sc, Executor: sc, Account: accounts[common.HexToAddress(sc)].Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(sc, accounts[common.HexToAddress(sc)], caller)}}
-		for _, registration := range automaticProviders {
-			p, err := registration.new(providerRegistry.Deps{Chain: client, HTTP: httpClient, Log: log.WithValues("strategy", sc, "provider", registration.name), ConfigDir: configDir})
+		for _, registration := range []struct {
+			name string
+			new  func(providerRegistry.Deps) (provider.Provider, error)
+		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}, {"redemptions", redemptions.NewAutomatic}, {"securitize", securitize.NewAutomatic}} {
+			p, err := registration.new(providerRegistry.Deps{Chain: client, HTTP: httpClient})
 			if err != nil {
 				return errors.Errorf("configure provider %s: %w", registration.name, err)
 			}
@@ -109,11 +102,11 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 		s.Providers = append(s.Providers, keeper.NewRecipeInputs())
 		strategies = append(strategies, s)
 	}
-	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: cfg.TxManager.Confirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), cfg.RecipeCacheBytes)}
+	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}
 	if planOnly {
 		plans := make(map[string]keeper.Plan)
 		for _, s := range strategies {
-			operation, cancel := context.WithTimeout(ctx, cfg.OperationTimeout)
+			operation, cancel := context.WithTimeout(ctx, config.DefaultOperationTimeout)
 			p, err := planner.Prepare(operation, s)
 			cancel()
 			if err != nil {
@@ -134,7 +127,7 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 		return err
 	}
 	metrics := observability.NewMetrics()
-	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: strategies, Mode: cfg.Mode, OperationTimeout: cfg.OperationTimeout, Log: log}
+	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: strategies, Mode: cfg.Mode, OperationTimeout: config.DefaultOperationTimeout, Log: log}
 	if cfg.Mode == "send" {
 		txm, err := txmanager.NewWithMetrics(client, txSigner, chainID, store, cfg.TxManager.EngineConfig(), log, metrics.Registerer())
 		if err != nil {
@@ -176,7 +169,7 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 		if ctx.Err() != nil {
 			return nil
 		}
-		timer := time.NewTimer(cfg.PollInterval)
+		timer := time.NewTimer(config.DefaultPollInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

@@ -41,6 +41,10 @@ func stateCommands() []*cobra.Command {
 		}
 		rows := make([]row, 0, len(names))
 		for _, name := range names {
+			address, err := parse.Address(name)
+			if err != nil || strings.ToLower(address.Hex()) != name {
+				return errors.New("invalid saved executor address")
+			}
 			var job keeper.Job
 			found, err := load("strategy."+name+".v1", &job)
 			if err != nil {

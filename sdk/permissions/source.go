@@ -13,25 +13,9 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-// Fixed host policy matches protocolio.NewHTTP's established defaults. Normal
-// service hosts normalize omitted fields and reject legacy transport overrides.
+// Default resource bounds for the daemon's permission service.
 const HostTimeoutSeconds = 10
 const HostMaxResponseBytes int64 = 2 << 20
-
-func NormalizeHostConfig(c protocolio.HTTPConfig) (protocolio.HTTPConfig, error) {
-	if err := ValidateConfig(c); err != nil {
-		return protocolio.HTTPConfig{}, err
-	}
-	if c.TimeoutSeconds != 0 && c.TimeoutSeconds != HostTimeoutSeconds {
-		return protocolio.HTTPConfig{}, errors.New("curator.timeoutSeconds is fixed to 10")
-	}
-	if c.MaxResponseBytes != 0 && c.MaxResponseBytes != HostMaxResponseBytes {
-		return protocolio.HTTPConfig{}, errors.New("curator.maxResponseBytes is fixed to 2097152")
-	}
-	c.TimeoutSeconds = HostTimeoutSeconds
-	c.MaxResponseBytes = HostMaxResponseBytes
-	return c, nil
-}
 
 // ValidateConfig performs no network or environment access. Construction with
 // New reads the configured credential only when a run/plan actually starts.

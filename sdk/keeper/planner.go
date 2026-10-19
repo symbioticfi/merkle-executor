@@ -212,7 +212,7 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 	if err != nil {
 		return plan, err
 	}
-	// Readiness is meaningful only after full simulation and both canonical guards.
+	// Readiness follows full simulation and both canonical closing guards.
 	work, err := recipes.HasWork(plan.Calldata, returned)
 	if err != nil {
 		return plan, err

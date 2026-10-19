@@ -31,7 +31,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const CatalogueSHA256 = "feb6e87fb457070c10d3b644ca16173303494411cad4cb4c1f1f76daefe6f0e0"
+const CatalogueSHA256 = "e11e2ce31f0e1864d158fd5ecfdd6a6e3624304f8b2bb546601eb5a870f6bb2d"
 const PolicyVersion = "issuer-recipes-v1-" + CatalogueSHA256
 
 //go:embed catalogue/liquid-lane.yaml
@@ -52,6 +52,7 @@ type issuerAsset struct {
 	RedeemVault  string   `yaml:"redeemVault"`
 	CDO          string   `yaml:"cdo"`
 	Strategy     string   `yaml:"strategy"`
+	Tranche      string   `yaml:"tranche"`
 }
 type automatic struct {
 	deps   registry.Deps
@@ -109,37 +110,6 @@ func (p *automatic) Prepare(context.Context, provider.Snapshot) (provider.Output
 	return provider.Output{}, errors.New("issuer automatic provider requires authenticated recipe")
 }
 
-func numericTemplate(action recipes.ManagedAction, expected []byte, offsets ...int) error {
-	if action.Leaf.Value == nil || action.Leaf.Value.Sign() != 0 || len(action.Leaf.Data) != len(expected) {
-		return errors.New("issuer template has wrong value or calldata shape")
-	}
-	allowed := map[int]bool{}
-	for _, at := range offsets {
-		allowed[at] = true
-	}
-	for _, b := range action.Bindings {
-		if !allowed[int(b.Offset)] {
-			return errors.New("issuer binding changes an identity field")
-		}
-	}
-	for i := 0; i < len(expected); {
-		if allowed[i] {
-			i += 32
-			continue
-		}
-		start := i
-		for i < len(expected) && !allowed[i] {
-			i++
-		}
-		if err := action.Pinned(start, i-start); err != nil {
-			return err
-		}
-		if !bytes.Equal(action.Leaf.Data[start:i], expected[start:i]) {
-			return errors.New("issuer token, recipient or mode differs from committed route")
-		}
-	}
-	return nil
-}
 func exactAmount(recipe recipes.Recipe, action recipes.ManagedAction, offset int) (*recipes.EconomicValue, error) {
 	value, err := action.Field(offset)
 	if err != nil {
@@ -199,7 +169,7 @@ func (p *automatic) selectRoutes(s provider.Snapshot, r recipes.Recipe, t *recip
 			cdo := common.HexToAddress(asset.CDO)
 			modes := append(append([]string{}, asset.RequestModes...), asset.ClaimModes...)
 			for _, mode := range modes {
-				cfg := Config{Family: asset.Family, Mode: mode, ChainID: asset.ChainID, Token: token.Hex(), OutputAsset: output.Hex(), Target: target.Hex(), Action: action.Key, CDO: asset.CDO, Strategy: asset.Strategy}
+				cfg := Config{Family: asset.Family, Mode: mode, ChainID: asset.ChainID, Token: token.Hex(), OutputAsset: output.Hex(), Target: target.Hex(), Action: action.Key, CDO: asset.CDO, Strategy: asset.Strategy, Tranche: asset.Tranche}
 				destination := target
 				var data []byte
 				at := -1
@@ -221,6 +191,13 @@ func (p *automatic) selectRoutes(s provider.Snapshot, r recipes.Recipe, t *recip
 				case "figure":
 					destination = token
 					data = erc4626.NewERC4626().PackRedeem(new(big.Int), s.Account, s.Account)
+					at = 4
+				case "hastra":
+					if mode == "unwrap" {
+						data = erc4626.NewERC4626().PackRedeem(new(big.Int), s.Account, s.Account)
+					} else {
+						data = figure.NewFigureYieldVault().PackRequestRedeem(new(big.Int))
+					}
 					at = 4
 				case "noon":
 					switch mode {
@@ -260,12 +237,22 @@ func (p *automatic) selectRoutes(s provider.Snapshot, r recipes.Recipe, t *recip
 				if len(data) == 0 || !selectorMatches(action, destination, data) {
 					continue
 				}
+				// The combined Figure route owns both calls when present. An
+				// independent unwrap instead settles in the wrapper's asset.
+				if asset.Family == "figure" && len(figureRequests(actions, action.Step, target)) == 0 {
+					continue
+				}
+				if asset.Family == "hastra" && mode == "unwrap" && len(figureRequests(actions, action.Step, output)) > 0 {
+					continue
+				}
 				offsets := []int{}
 				if at >= 0 {
 					offsets = append(offsets, at)
 				}
-				if err := numericTemplate(action, data, offsets...); err != nil {
-					return nil, err
+				if err := derived.NumericTemplate(action, data, offsets...); err != nil {
+					// One venue can admit several committed output assets. Reject
+					// only after every identity candidate has been considered.
+					continue
 				}
 				route := selectedRoute{Config: cfg, Actions: []recipes.ManagedAction{action}}
 				if at >= 0 {
@@ -282,18 +269,13 @@ func (p *automatic) selectRoutes(s provider.Snapshot, r recipes.Recipe, t *recip
 					}
 				}
 				if asset.Family == "figure" {
-					var seconds []recipes.ManagedAction
 					secondData := figure.NewFigureYieldVault().PackRequestRedeem(new(big.Int))
-					for _, second := range actions {
-						if second.Step > action.Step && selectorMatches(second, target, secondData) {
-							seconds = append(seconds, second)
-						}
-					}
+					seconds := figureRequests(actions, action.Step, target)
 					if len(seconds) != 1 {
 						return nil, errors.New("Figure requires exactly one ordered output request")
 					}
 					second := seconds[0]
-					if err = numericTemplate(second, secondData, 4); err != nil {
+					if err = derived.NumericTemplate(second, secondData, 4); err != nil {
 						return nil, err
 					}
 					route.Intermediate, err = exactAmount(r, second, 4)
@@ -336,6 +318,17 @@ func (p *automatic) selectRoutes(s provider.Snapshot, r recipes.Recipe, t *recip
 		}
 	}
 	return selected, nil
+}
+
+func figureRequests(actions []recipes.ManagedAction, after uint, target common.Address) []recipes.ManagedAction {
+	var requests []recipes.ManagedAction
+	data := figure.NewFigureYieldVault().PackRequestRedeem(new(big.Int))
+	for _, action := range actions {
+		if action.Step > after && selectorMatches(action, target, data) {
+			requests = append(requests, action)
+		}
+	}
+	return requests
 }
 
 func protocolSnapshot(s provider.Snapshot) error {

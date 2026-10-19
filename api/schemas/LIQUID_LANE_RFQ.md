@@ -56,8 +56,9 @@ quoteId and `0x00`.
 `GET /orders` uses all-status swapper pagination (`limit=100`), or saved `orderId`.
 No quoteId or nonce filter is assumed. A complete bounded lookup is required before
 POST. Null/missing arrays, repeated or malformed cursors, duplicate IDs/quote matches,
-identity mismatches and exhausted pages fail closed. API terminal statuses do not
-prove settlement. Ordinary order views lack the full encoded Request and filler.
+and identity mismatches fail closed. Exhausting a tick's page budget checkpoints
+lookup progress without publication; the next tick resumes the same quote scan.
+API terminal statuses do not prove settlement. Ordinary order views lack the full encoded Request and filler.
 
 ## Authorization and settlement
 
@@ -93,7 +94,10 @@ complete bounded range can checkpoint. A single block exceeding 1,024 relevant
 query results fails explicitly; events are never truncated. RPC errors do not cause
 individual retries or adaptive retries. Canonical range anchors survive restart
 and rewind on orphaning. Incomplete scans checkpoint with nil error even when the
-head nonce is used, and prevent both POST and expiry. Lookup defaults to 10 pages
-(1..100); each page contains at most 100 orders. An operator needing different
-bounds must finish active jobs before changing provider YAML, because configuration
-is part of recovery identity. No saved identity or journal migration is performed.
+head nonce is used, and prevent both POST and expiry. The automatic provider scans
+at most 10 API pages per tick, with at most 100 orders per page. Cursor, seen order
+IDs/cursors and a possible quote match survive restart, preserving duplicate checks
+across tick boundaries. Only a complete scan permits publication. A completed
+lookup is discarded; an ambiguous POST response starts a fresh lookup next tick.
+The fixed automatic bounds cannot be changed through daemon YAML. Recovery
+validates the version `1` checkpoint and preserves its saved order identity.

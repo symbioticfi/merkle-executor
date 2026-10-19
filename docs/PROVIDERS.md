@@ -4,15 +4,12 @@ Normal daemon `strategies` entries are full nonzero executor addresses, directly
 used as lowercase state, log and metric identifiers. Duplicate normalized addresses
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
-The single supported pre-production policy is `address-only-v1`. There is no
-version compatibility or migration path. Unresolved journals fence ownership;
-their identity and configuration are never rewritten.
-The daemon installs automatic CoW, Merkl, Liquid Lane RFQ and recipe-input
-adapters in a fixed order. On-chain issuer actions use committed reads, bindings,
-Manage gates and postconditions through the generic SDK. The explicit issuer
-packages documented below remain available to direct hosts and fixtures. Legacy
-`strategy.providers` configuration is rejected. Token pairs, amounts, minimum proceeds,
-action/input mappings, deployment targets and authorization shapes come from the
+Runtime policy version `1` binds the current configuration and built-in provider
+policies. The daemon installs automatic CoW, Merkl, Liquid Lane RFQ,
+issuer-redemption, Securitize and recipe-input adapters in a fixed order. Typed
+provider settings are internal recipe and recovery data.
+Token pairs, amounts, minimum proceeds, action/input mappings, deployment targets
+and authorization shapes come from the
 authenticated recipe and its permission tree; they are not operator parameters.
 Unmatched adapters produce an empty durable output and finish normally.
 
@@ -106,7 +103,7 @@ count. Opening/canonical headers, recipe event evidence, current metadata/roles 
 original full simulation remain necessary separate stages. The 16 MiB recipe cache
 retains only canonical event bodies, never balances, roots, roles or quotes.
 
-Legacy SDK fixture counts in `batch_count_test.go` and `batch_anvil_test.go` measure
+SDK fixture counts in `batch_count_test.go` and `batch_anvil_test.go` measure
 explicitly configured providers: 6 cold / 5 warm preparation requests and 3 presend
 requests for their small recipes. They are not counts for the normal automatic
 daemon. `TestAnvilAutomaticMerklClaimFeedsRecipeBalance` verifies the normal daemon
@@ -129,13 +126,16 @@ Confirmed account authorization precedes idempotent consumer submission. Durable
 request/quote identity, signatures, usage/settlement progress and cursors survive
 restart. Completion requires canonical matching input/output transfers and Reactor
 usage evidence. Paginated lookup and bounded event scanning fail closed on missing,
-ambiguous or overly dense evidence. No new quote is obtained for an existing job.
+ambiguous or overly dense evidence. Lookup checkpoints after 10 API pages per tick
+and resumes across restarts, preserving duplicate checks and withholding publication
+until the scan completes. No new quote is obtained for an existing job.
 [Consumer wire schema and evidence](../api/schemas/LIQUID_LANE_RFQ.md).
 
 ## Liquid Lane issuer requests and claims
 
-Issuer support is registered automatically. The embedded catalogue covers the 15
-published Liquid Lane assets, Noon sUSN and native USN. The authenticated recipe
+Issuer support is registered automatically. The embedded catalogue covers 54 routes over 38 tokens: the original Liquid
+Lane assets and Noon routes plus the current frontend Midas/Centrifuge routes,
+independent Hastra actions and FalconX BB requests. The authenticated recipe
 determines
 the family, mode, action keys, exact addresses and recipients; no provider YAML or
 runtime catalogue path is accepted. [Issuer catalogue and lifecycle guide](LIQUID-LANE-ASSETS.md)
@@ -149,14 +149,10 @@ Centrifuge claims preserve that exact share amount and remain idle if
 committed literals or exact deterministic Results; an Input needs a preceding
 exact equality. The provider never chooses an arbitrary index from a range.
 
-A successfully resolved zero financial amount is normal idle work, including a
-zero required Figure intermediate amount. An idle selected route leaves the whole
-preparation idle with no partial action output. Missing or malformed economic
-results and unmet committed lower bounds remain errors. Zero claim request IDs
-and queue epochs retain their identity semantics; they are not empty budgets.
-Direct provider constructors still require positive configured financial amounts.
-
-Figure requires the ordered PRIME unwrap and wYLDS request, with a preview query
+Hastra supports separate PRIME/AUTO unwraps into wYLDS and a later wYLDS request
+for USDC. An unwrap checks its live asset; a request also checks the account has
+no pending redemption. The combined Figure route retains the ordered wrapper
+unwrap and wYLDS request, with a preview query
 bound to the exact unwrap field, including a derived bounded Input. Preparation
 checks that preview against the selected unwrap amount. A post-effect actual
 balance cannot substitute for that preview link. Free or masked token pairs,
@@ -178,9 +174,7 @@ Catalogue updates require explicit review; execution and recovery never fetch or
 adopt a new feed. VBILL on BNB has no published redemption route, and non-EVM
 entries are outside RecipeExecutor.
 
-Amounts use the recipe-derived budget policy above, including the normal idle
-classification for a successfully resolved zero amount. A zero minimum output does
-not by itself make a selected route idle. Modern minimums require a
+Amounts use the recipe-derived budget policy above. Modern minimums require a
 read-dependent Result or preceding result-based lower/equality guards. Legacy
 redemptions require an explicit payment-token balance-delta floor in the original
 recipe because their calldata has no minimum word. A floor Input is saved as a
@@ -204,7 +198,7 @@ they can invoke account `manage` indirectly. Approvals, reads, arithmetic,
 unrelated Manage targets and later payment transfers remain available. The SDK
 checks this composition before provider reads and again on durable recovery.
 Saved catalogue policy, account, configuration, action bytes and input semantics
-are checked before network I/O; recovery does not rederive economics or rewrite a
+are checked before network I/O; recovery does not rederive economics or rewrite the
 saved journal. Full original recipe simulation remains required before signing.
 
 ## Merkl cumulative account rewards
@@ -241,20 +235,19 @@ lookup/POST preserves the UID through ambiguity and restart; recovery uses only
 persisted config/order and canonical execution evidence. Partial fills stay owned,
 and terminal completion requires on-chain settlement evidence as well as API state.
 
-## Recovery and SDK integration
+## Recovery and provider interfaces
 
 Automatic output envelopes persist the fully derived internal configuration, wire
 output and policy version, even for unmatched adapters. Startup adapter ordering and
-the runtime-policy fingerprint are durable identity. Never rewrite a fingerprint,
-UID, nonce or provider index. Recovery validates envelopes, bounds and target ownership before
+the runtime-policy fingerprint are durable identity. Recovery requires that
+identity to match; it never rewrites a fingerprint, UID, nonce or provider index. Recovery validates envelopes, bounds and target ownership before
 network mutation. Already signed attempts retain their exact saved bytes and use canonical receipt
 and execution reconciliation; they do not repeat preparation/presend numerical
 simulation. Recovery fetches neither curator permissions nor new quotes for
 existing work.
 
-The SDK exposes direct configurable provider constructors for explicit hosts and
-fixtures. Those constructors are not normal daemon
-inputs. Generic static/http/rpc data providers are not daemon-registered; deterministic
+Direct typed provider constructors serve recipe derivation, saved output
+validation and focused tests. They are not daemon configuration inputs. Generic static/http/rpc data providers are not included in the daemon; deterministic
 recipe-constrained Inputs use `keeper.NewRecipeInputs()` and the shared lens.
 
 ## Evidence and generation

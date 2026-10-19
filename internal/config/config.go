@@ -22,22 +22,27 @@ import (
 )
 
 type Config struct {
-	Curator          protocolio.HTTPConfig `yaml:"curator"`
-	RecipeCacheBytes int64                 `yaml:"recipeCacheBytes"`
-	Mode             string                `yaml:"mode"`
-	Chain            Chain                 `yaml:"chain"`
-	Signer           Signer                `yaml:"signer"`
-	TxManager        TxManager             `yaml:"txManager"`
-	StateDir         string                `yaml:"stateDir"`
-	PollInterval     time.Duration         `yaml:"pollInterval"`
-	OperationTimeout time.Duration         `yaml:"operationTimeout"`
-	HTTPTimeout      time.Duration         `yaml:"httpTimeout"`
-	Observability    Observability         `yaml:"observability"`
-	Strategies       []string              `yaml:"strategies"`
+	Curator       Curator       `yaml:"curator"`
+	Mode          string        `yaml:"mode"`
+	Chain         Chain         `yaml:"chain"`
+	Signer        Signer        `yaml:"signer"`
+	TxManager     TxManager     `yaml:"txManager"`
+	StateDir      string        `yaml:"stateDir"`
+	Observability Observability `yaml:"observability"`
+	Strategies    []string      `yaml:"strategies"`
+}
+
+// Curator contains the operator-supplied permission service settings.
+type Curator struct {
+	URL       string `yaml:"url"`
+	APIKeyEnv string `yaml:"apiKeyEnv,omitempty"`
+}
+
+func (c Curator) HTTPConfig() protocolio.HTTPConfig {
+	return protocolio.HTTPConfig{URL: c.URL, APIKeyEnv: c.APIKeyEnv, TimeoutSeconds: permissions.HostTimeoutSeconds, MaxResponseBytes: permissions.HostMaxResponseBytes}
 }
 
 type Chain struct {
-	Multicall3  string `yaml:"multicall3"`
 	RPCURL      string `yaml:"rpcUrl"`
 	WriteRPCURL string `yaml:"writeRpcUrl"`
 	ChainID     uint64 `yaml:"chainId"`
@@ -52,8 +57,8 @@ type Observability struct {
 }
 
 const (
-	// RuntimePolicyVersion identifies the single supported pre-production runtime policy.
-	RuntimePolicyVersion                  = "address-only-v1"
+	// RuntimePolicyVersion changes when built-in preparation or timing semantics change.
+	RuntimePolicyVersion                  = "1"
 	DefaultKeyEnv                         = "MERKLE_EXECUTOR_PRIVATE_KEY"
 	DefaultRecipeCacheBytes        int64  = 16 << 20
 	DefaultPollInterval                   = 15 * time.Second
@@ -70,7 +75,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, errors.Errorf("read configuration: %w", err)
 	}
-	cfg := Config{RecipeCacheBytes: DefaultRecipeCacheBytes}
+	var cfg Config
 	d := yaml.NewDecoder(bytes.NewReader(raw))
 	d.KnownFields(true)
 	if err := d.Decode(&cfg); err != nil {
@@ -86,27 +91,8 @@ func Load(path string) (*Config, error) {
 	if cfg.Mode == "" {
 		cfg.Mode = "simulate"
 	}
-	if cfg.PollInterval == 0 {
-		cfg.PollInterval = DefaultPollInterval
-	}
-	if cfg.OperationTimeout == 0 {
-		cfg.OperationTimeout = DefaultOperationTimeout
-	}
-	if cfg.HTTPTimeout == 0 {
-		cfg.HTTPTimeout = DefaultHTTPTimeout
-	}
-	if cfg.TxManager.PollInterval == 0 {
-		cfg.TxManager.PollInterval = DefaultTransactionPollInterval
-	}
-	if cfg.TxManager.Confirmations == 0 {
-		cfg.TxManager.Confirmations = DefaultConfirmations
-	}
-	cfg.TxManager.applyDefaults()
 	if cfg.Signer.KeyEnv == "" {
 		cfg.Signer.KeyEnv = DefaultKeyEnv
-	}
-	if cfg.Chain.Multicall3 == "" {
-		cfg.Chain.Multicall3 = StandardMulticall3
 	}
 	base, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
@@ -125,21 +111,11 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
-	curator, err := permissions.NormalizeHostConfig(c.Curator)
-	if err != nil {
+	if err := permissions.ValidateConfig(c.Curator.HTTPConfig()); err != nil {
 		return err
-	}
-	c.Curator = curator
-	if c.RecipeCacheBytes < 0 {
-		return errors.New("recipeCacheBytes must be nonnegative")
 	}
 	if c.Mode != "simulate" && c.Mode != "send" {
 		return errors.New("mode must be simulate or send")
-	}
-	if c.Chain.Multicall3 != "" {
-		if _, err := parse.Address(c.Chain.Multicall3); err != nil || common.HexToAddress(c.Chain.Multicall3) != common.HexToAddress(StandardMulticall3) {
-			return errors.New("chain.multicall3 is fixed to the standard Multicall3 address")
-		}
 	}
 	if c.Chain.ChainID == 0 {
 		return errors.New("positive chainId required")
@@ -161,28 +137,15 @@ func (c *Config) Validate() error {
 			return errors.New("signer.address must be a nonzero address when used as an assertion")
 		}
 	}
-	if c.PollInterval <= 0 || c.OperationTimeout <= 0 || c.HTTPTimeout <= 0 || c.TxManager.PollInterval <= 0 {
-		return errors.New("timeouts and intervals must be positive")
-	}
 	if len(c.Strategies) == 0 || len(c.Strategies) > 256 {
 		return errors.New("configure 1..256 strategies")
-	}
-	if c.TxManager.Confirmations > 1024 {
-		return errors.New("confirmation count exceeds limit")
 	}
 	if c.Mode == "send" {
 		if c.Signer.KeyEnv == "" {
 			return errors.New("send mode requires signer.keyEnv")
 		}
-
 	}
 	if err := c.TxManager.validate(c.Mode == "send"); err != nil {
-		return err
-	}
-	if c.RecipeCacheBytes != DefaultRecipeCacheBytes || c.PollInterval != DefaultPollInterval || c.OperationTimeout != DefaultOperationTimeout || c.HTTPTimeout != DefaultHTTPTimeout {
-		return errors.New("recipe cache, polling and timeout settings are fixed by the runtime policy; remove legacy overrides")
-	}
-	if err := c.TxManager.validateRuntimePolicy(); err != nil {
 		return err
 	}
 	seen := make(map[string]bool, len(c.Strategies))
@@ -202,7 +165,7 @@ func (c *Config) Validate() error {
 }
 
 // StrategyFingerprint binds the canonical executor, derived deployment identity
-// and effective runtime policy to durable work. Existing journals are never migrated.
+// and effective runtime policy to durable work.
 func (c *Config) StrategyFingerprint(executor string, account, caller common.Address) string {
 	raw, _ := json.Marshal(struct {
 		Policy    string
@@ -210,7 +173,7 @@ func (c *Config) StrategyFingerprint(executor string, account, caller common.Add
 		Account   common.Address
 		Caller    common.Address
 		ChainID   uint64
-		Curator   protocolio.HTTPConfig
+		Curator   Curator
 		TxManager TxManager
 	}{RuntimePolicyVersion, common.HexToAddress(executor), account, caller, c.Chain.ChainID, c.Curator, c.TxManager})
 	return crypto.Keccak256Hash(raw).Hex()

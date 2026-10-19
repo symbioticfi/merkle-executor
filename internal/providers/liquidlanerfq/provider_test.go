@@ -7,13 +7,13 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 	reactor "github.com/symbioticfi/merkle-executor/api/bindings/liquidlanereactor"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
@@ -21,7 +21,6 @@ import (
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"gopkg.in/yaml.v3"
 )
 
 var addr = func(n int64) common.Address { return common.BigToAddress(big.NewInt(n)) }
@@ -156,6 +155,7 @@ type harness struct {
 	option              map[string]any
 	quotes, gets, posts int
 	requests            [][]byte
+	lookups             []url.Values
 	httpMode            string
 	pages               []wire.RfqOrdersResponse
 	server              *httptest.Server
@@ -185,6 +185,7 @@ func newHarness(t *testing.T) *harness {
 			_ = json.NewEncoder(w).Encode(map[string]any{"quotes": []any{h.option}})
 		case "/api/v1/orders":
 			h.gets++
+			h.lookups = append(h.lookups, r.URL.Query())
 			if h.httpMode == "missing cursor" {
 				_, _ = w.Write([]byte(`{"orders":[]}`))
 				return
@@ -219,15 +220,11 @@ func newHarness(t *testing.T) *harness {
 	}))
 	t.Cleanup(h.server.Close)
 	h.cfg = Config{HTTP: protocolio.HTTPConfig{URL: h.server.URL + "/api/v1"}, Reactor: addr(0x11).Hex(), Protocol: addr(0x55).Hex(), TokenIn: addr(0x33).Hex(), TokenOut: addr(0x44).Hex(), AmountIn: "1000", MinAmountOut: "900", MinValiditySeconds: 60, MaxValiditySeconds: 1200, Action: "0:0", MaxLookupPages: 3, EventRangeBlocks: 2000}
-	var node yaml.Node
-	if err := node.Encode(h.cfg); err != nil {
-		t.Fatal(err)
-	}
-	pr, err := Factory(node, registry.Deps{Chain: h.c, HTTP: h.server.Client(), Log: logr.Discard()})
+	pr, err := New(h.cfg, registry.Deps{Chain: h.c, HTTP: h.server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.p = pr.(*Provider)
+	h.p = pr
 	header, _ := h.c.HeaderByNumber(t.Context(), big.NewInt(10))
 	h.s = provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(10), BlockHash: header.Hash(), Timestamp: header.Time, Account: addr(0x22), Executor: addr(0x66), Caller: addr(0x77)}
 	return h
@@ -436,7 +433,7 @@ func TestUncertainPublicationReconcilesExactIdentity(t *testing.T) {
 	}
 }
 func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
-	for _, mode := range []string{"missing orders", "missing cursor", "bad cursor", "repeated cursor", "exhausted", "wrong owner", "duplicate", "known missing", "unknown status"} {
+	for _, mode := range []string{"missing orders", "missing cursor", "bad cursor", "repeated cursor", "wrong owner", "duplicate", "known missing", "unknown status"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
@@ -452,7 +449,7 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 				h.httpMode = "missing cursor"
 			case "bad cursor":
 				page.Cursor = json.RawMessage(`"bad"`)
-			case "repeated cursor", "exhausted":
+			case "repeated cursor":
 				page.Cursor = json.RawMessage(`"oc_a"`)
 			case "known missing":
 				st.OrderID = orderID
@@ -470,9 +467,6 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 				}
 			}
 			h.pages = []wire.RfqOrdersResponse{page}
-			if mode == "exhausted" {
-				h.p.cfg.MaxLookupPages = 1
-			}
 			raw, _ := json.Marshal(st)
 			p, err := h.p.Advance(t.Context(), s, out, raw)
 			if err == nil || p.Done || h.posts != 0 {
@@ -641,7 +635,7 @@ func TestOrphanedScanCursorRewinds(t *testing.T) {
 	}
 }
 func TestConfigRejectsUnsafePolicy(t *testing.T) {
-	for _, mode := range []string{"zero address", "equal tokens", "zero amount", "negative", "validity", "index", "duplicate index", "pages", "range", "solver", "alias", "unknown", "no reader"} {
+	for _, mode := range []string{"zero address", "equal tokens", "zero amount", "negative", "validity", "index", "duplicate index", "pages", "range", "solver", "no reader"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			c := h.cfg
@@ -670,20 +664,11 @@ func TestConfigRejectsUnsafePolicy(t *testing.T) {
 			case "solver":
 				c.SolverIDs = []string{"a", "a"}
 			}
-			var node yaml.Node
-			_ = node.Encode(c)
-			if mode == "alias" {
-				_ = yaml.Unmarshal([]byte("action: &x '0:0'\nreactor: *x"), &node)
-			}
-			if mode == "unknown" {
-				data, _ := yaml.Marshal(c)
-				_ = yaml.Unmarshal(append(data, []byte("unexpected: true\n")...), &node)
-			}
 			deps := registry.Deps{Chain: h.c, HTTP: h.server.Client()}
 			if mode == "no reader" {
 				deps.Chain = nil
 			}
-			if _, err := Factory(node, deps); err == nil {
+			if _, err := New(c, deps); err == nil {
 				t.Fatal("unsafe config accepted")
 			}
 		})

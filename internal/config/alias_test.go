@@ -1,6 +1,8 @@
 package config
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestProviderAliasesCannotBypassDurableFingerprint(t *testing.T) {
 	for _, inputs := range []string{"{0: &x '1', 1: '2', 2: *x}", "{0: '1', 1: &x '2', 2: *x}"} {

@@ -27,7 +27,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/go-errors/errors"
-	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
@@ -206,15 +205,6 @@ func serviceSeedTransaction(t *testing.T, ctx context.Context, client *ethclient
 	}
 }
 
-func serviceNode(t *testing.T, value any) yaml.Node {
-	t.Helper()
-	var node yaml.Node
-	if err := node.Encode(value); err != nil {
-		t.Fatal(err)
-	}
-	return node
-}
-
 func serviceRecipe(t *testing.T, leaf common.Hash, token, account common.Address) recipes.Recipe {
 	t.Helper()
 	result := func(index int64) *big.Int {
@@ -334,7 +324,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 			t.Fatal(err)
 		}
 		plan, exists := plans[cfg.Strategies[0]]
-		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 4 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
+		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 6 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
 			t.Fatal("plan lost configuration, provider output or transaction")
 		}
 	}
@@ -398,7 +388,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if found, err := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); err != nil || !found {
 		t.Fatalf("durable job missing: %v", err)
 	}
-	if job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || job.Result.Hash == (common.Hash{}) || len(job.Progress) != 4 || job.FinishedAt.IsZero() {
+	if job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || job.Result.Hash == (common.Hash{}) || len(job.Progress) != 6 || job.FinishedAt.IsZero() {
 		t.Fatalf("job did not settle: %+v", job.Result)
 	}
 	for _, progress := range job.Progress {

@@ -17,8 +17,8 @@ one serialized transaction sender. [Design and comparison](docs/DESIGN.md).
 | Flow | Implementation |
 | --- | --- |
 | Ordered Morpho/Aave funding, caps and overflow deposits | Execute the committed on-chain recipe. Read-derived values resolve through the shared lens, including authenticated preceding effects. |
-| On-chain requests, claims and routing | Committed reads, bindings, action gates and postconditions execute through the generic SDK, without issuer or selector recognition. |
-| Explicit issuer integrations | The `redemptions` and `securitize` packages remain for direct hosts and fixtures. The daemon no longer installs them. [Historical coverage](docs/LIQUID-LANE-ASSETS.md), [Securitize limits](docs/SECURITIZE-ASSETS.md). |
+| All 15 documented LL assets plus sUSN and USN | `redemptions` provider prepares Midas, Centrifuge, OpenEden, Figure, Pareto and Noon requests, eligible claims and native USN → USDC redemption. [Catalogue and lifecycle](docs/LIQUID-LANE-ASSETS.md). |
+| Securitize EVM assets | `securitize` provider prepares wallet requests and legacy/modern atomic offramps for all 10 symbols in the public feed. [Deployment coverage and limits](docs/SECURITIZE-ASSETS.md). |
 | CoW Swap | Quote, build account ERC-1271 authorization, wait for its confirmed transaction, submit/reconcile deterministic order UID, verify full fill on-chain. |
 | Merkl reward claims | Read V4 rewards, use cumulative amounts, verify effective distributor root/proof and recipient, encode an approved bounded claim. |
 | 3F reads and other protocols | Recipe reads and arithmetic determine numeric inputs. Additional off-chain protocol data requires an authenticated provider implementation. |
@@ -76,18 +76,12 @@ logs and metrics. Reordering does not change identity; duplicate addresses are
 rejected, including different checksum spellings. Strategy objects, labels and
 per-strategy options are rejected before network access.
 
-The single pre-production runtime policy is `address-only-v1`, with generic on-chain
-work classification and no automatic issuer providers. There is no legacy policy
-or migration path. Every unresolved transaction journal blocks new admission and
-retains its original identity and configuration.
+The runtime policy version is `1`. Its recovery fingerprint binds the executor,
+chain, discovered account and caller, curator source, provider policies and sender
+fee ceiling. Active work must match that fingerprint before it can resume.
 
-Recipes must commit every required readiness, limit and payout condition as reads,
-gates and checks. The generic daemon enforces that program.
-Operations requiring unavailable off-chain issuer material still need an explicit
-provider integration. Historical catalogue coverage is not generic deployment evidence.
-
-The runtime uses fixed cache, timeout, polling, confirmation and fee-horizon
-policies. Configuration values for these fields must match the fixed policy.
+Cache, timeout, polling, confirmation and fee-horizon policies are fixed in code.
+Their fields are not configuration inputs.
 Optional `signer.address` is an identity assertion,
 and `signer.keyEnv` may name an alternative key environment variable. Neither is
 required. Offline `check-config`, `status` and `reset-strategy` never read a key or
@@ -100,8 +94,7 @@ Independent reads use bounded JSON-RPC arrays on the read endpoint. Caller-indep
 source-verified getters aggregate through the standard Multicall3 address,
 `0xcA11bde05977b3631167028862bE2a173976CA11`. An unavailable or incompatible
 deployment fails the preparation; it never triggers a fallback to individual
-reads. `chain.multicall3`, if present in an old configuration, must equal that
-constant. Arbitrary data reads and ERC-1271 checks preserve their original caller
+reads. Arbitrary data reads and ERC-1271 checks preserve their original caller
 and separate `eth_call` execution. Full simulations remain isolated EVM calls
 while sharing JSON arrays with getters.
 Dependent reads and the later closing canonical checks remain ordered.
@@ -119,17 +112,14 @@ For every new preparation, the daemon fetches `/merkle-trees/{acceptedRoot}?chai
 from the configured curator backend. The root comes from the authenticated on-chain
 snapshot. The response must identify the configured chain and exact active root;
 every leaf hash and sorted-pair proof is verified, including unused leaves. Backend
-`adapter`, actions and display metadata do not authorize execution. Strategies no
-longer accept `account` or local `tree` fields. The SDK retains its optional local
+`adapter`, actions and display metadata do not authorize execution. Strategies contain only executor addresses. The SDK retains its optional local
 permission-file interface for other hosts.
 
-Manual account/tree fields, provider mappings and economic values are rejected.
-Derived accounts and callers,
-chain identity, curator settings, the fixed runtime policy version and transaction
-fee policy are part of the recovery fingerprint. Existing
-journals are never rewritten to accept a configuration change. Curator access is
-required for new preparation; saved signed attempts and external settlement retain
-their existing recovery paths without fetching a new permission tree.
+Derived accounts and callers, chain identity, curator settings, the runtime policy
+version and transaction fee policy are part of the recovery fingerprint. Recovery
+validates the saved configuration and never rewrites journal identity. Curator
+access is required for new preparation; saved signed attempts and external
+settlement resume without fetching a new permission tree.
 
 `SetRecipe` fixes instructions and runtime slot ordering. Providers output input
 indices and/or replacement calldata keyed by `stepIndex:actionIndex`. Replacement
@@ -141,25 +131,11 @@ Manage step still occupies a runtime slot and must pass full simulation.
 For a claim → Morpho-cap → Aave-overflow recipe, commit the claim and issuer
 operations, balance reads and routing arithmetic in the recipe. Startup registers
 a fixed provider set; authenticated action layouts select the applicable protocols.
-The keeper supplies unavailable external proofs, quotes and signatures. On-chain
-request IDs and readiness belong in committed reads and bindings. Runtime inputs
+The keeper supplies unavailable proofs, request IDs and signatures. Runtime inputs
 use exact recipe-result anchors or the maximum permitted READ-derived bounds;
 unknown sources are rejected.
-Direct SDK users may still construct explicit configurable providers; those APIs do
-not enable manual provider configuration in the ordinary daemon.
-
-Readiness comes from a successful full simulation of the original executor.
-An active nonempty Manage group is work. Call and Approve are unconditional work,
-including Approve(0); arbitrary zero arguments and request ID 0 do not mean idle.
-Only reads/checks and zero-gated Manage groups return the ordinary idle outcome,
-after metadata and canonical block checks. RPC, assertion and decoding failures
-remain errors. The check repeats before new unsigned submission; signed recovery
-keeps its original bytes and nonce ownership.
-
-The adapters claim builder is conditional by default, with no compatibility mode
-or overall progress aggregation. Per-group caps, exact debits, fresh output and
-minimum-rate checks remain. All-empty recipes may succeed as a no-op when called
-manually; the keeper detects no work and waits.
+SDK hosts implement their own providers through the SDK provider interfaces;
+the daemon does not expose manual provider configuration.
 
 ## Lifecycle and recovery
 
@@ -188,11 +164,16 @@ lifecycle, fee, replacement and sender-account metrics. Gas/fee counters cover
 receipts observed during active engine tracking. Recovery after tracking ends is
 owned by the durable journal and reported through its terminal logs and keeper outcomes.
 
-A canonical successful receipt records execution of the committed program and
-its on-chain postconditions. It does not prove later issuer settlement. Requests
-and claims use separate recipes; each claim recipe reads current eligibility and
-checks its own balance changes. Explicit issuer-host packages retain their
-specialized reconciliation contracts outside the daemon provider set.
+Issuer providers require the account's confirmed `Manage` logs to match their
+prepared calls, so a skipped recipe group cannot count as a request. Request jobs
+finish as `requested` and release the account for later claim recipes. This records
+submission, not issuer payout. Receipt evidence survives restarts. Securitize wallet
+requests additionally require exact token delivery; atomic offramps require payment
+evidence. Native Noon redemption requires the account's separate USN whitelist,
+fresh full-amount quote, remaining block budget, and treasury USDC balance plus
+allowance. Its receipt must prove the exact managed redemption, USN burn and
+account USDC payment before finishing as `redeemed`. Issuer enrollment and
+external settlement remain issuer-controlled.
 
 After authorization confirms, external progress is checkpointed separately.
 CoW API status alone is insufficient to finish a trade. Full on-chain fill or
@@ -209,7 +190,6 @@ bin/merkle-executor reset-strategy --config config/operator.local.yaml --executo
 ```
 
 Use the executor address shown by `status` with `reset-strategy --executor`.
-Custom or prefixed identifiers are unsupported.
 Invalid or zero addresses fail before state opens.
 
 Reset is permitted only for terminal jobs after the transaction journal is clear.
@@ -251,9 +231,9 @@ Fill reconciliation. One ordinary ERC20 output to the derived account is support
 are validated before requesting a quote.
 
 Signed Liquid Lane discount acquisition and signatures belong to vault-solver. The
-daemon does not register the `liquidlane` signed-swap provider; its implementation
-and SDK primitives remain available in the repository. Issuer request/claim
-operations use the generic recipe path. The recipe fixes identities, permitted
+daemon does not include a signed-swap acquisition provider; the SDK exposes
+protocol-neutral provider interfaces for host integrations. The `redemptions` issuer
+request/claim provider remains registered. The recipe fixes identities, permitted
 layouts and economic constraints; protocol endpoints, expiry limits and preparation
 bounds use fixed policies. CoW uses its own automatic slippage calculation.
 

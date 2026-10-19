@@ -10,52 +10,60 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
-	"github.com/symbioticfi/merkle-executor/internal/providers/data"
-	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlane"
 	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
 	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
 	"github.com/symbioticfi/merkle-executor/internal/providers/securitize"
-	"gopkg.in/yaml.v3"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
 type unusedReader struct{}
 
 func (unusedReader) CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
-	panic("factory must not read chain")
+	panic("constructor must not read chain")
 }
 func TestEveryProviderInputIndexBoundary(t *testing.T) {
-	r := registry.NewRegistry()
-	for _, register := range []func(*registry.Registry) error{data.Register, cowswap.Register, liquidlane.Register, merkl.Register, redemptions.Register, securitize.Register} {
-		if err := register(r); err != nil {
-			t.Fatal(err)
-		}
-	}
-	a, b := "'0x0000000000000000000000000000000000000001'", "'0x0000000000000000000000000000000000000002'"
-	hash := "'0x0000000000000000000000000000000000000000000000000000000000000000'"
-	cow := "http: {url: 'http://localhost'}\nsettlement: " + a + "\nsellToken: " + a + "\nbuyToken: " + b + "\nsellAmount: '1000'\nminBuyAmount: '1'\nvaliditySeconds: 600\nappData: " + hash + "\naction: '0:0'\n"
-	ll := "http: {url: 'http://localhost'}\nformat: connector-v1\nconnector: " + a + "\ntoken: " + a + "\noutputAsset: " + b + "\nrecipient: " + a + "\nprotocol: " + a + "\ndiscountId: " + hash + "\namountIn: '1'\nmaxAmountOut: '1'\naction: '0:0'\ncalldataBytes: 4\n"
-	rewards := "http: {url: 'http://localhost'}\nmulticall3: " + b + "\ndistributor: " + a + "\ntokens: [" + a + "]\nproofLengths: [0]\naction: '0:0'\ncalldataBytes: 4\n"
-	redemption := "family: figure\nmode: request\nchainId: 1\ntoken: " + a + "\noutputAsset: " + b + "\ntarget: " + b + "\namount: '1'\naction: '0:0'\nsecondAction: '1:0'\n"
-	sec := "mode: modern\nchainId: 1\ntoken: " + a + "\ntarget: " + b + "\npaymentToken: " + b + "\namount: '1'\nminOutput: '1'\naction: '0:0'\n"
-	for _, tc := range []struct{ name, base, field string }{
-		{"static", "", "inputs: {%d: '1'}"},
-		{"http", "url: http://localhost\n", "inputs: {%d: /value}"},
-		{"rpc", "", "reads: [{target: " + a + ", data: '0x12345678', input: %d}]"},
-		{"rpc", "reads: [{target: " + a + ", data: '0x12345678', input: 0}]\n", "actions: {'0:0': {data: '0x12345678', words: [{offset: 4, input: %d}]}}"},
-		{"cowswap", cow, "sellAmountInput: %d"}, {"cowswap", cow, "buyAmountInput: %d"},
-		{"liquidlane", ll, "amountInInput: %d"}, {"liquidlane", ll, "amountOutInput: %d"},
-		{"merkl", rewards, "amountInputs: [%d]"}, {"merkl", rewards, "claimableInputs: [%d]"},
-		{"redemptions", redemption, "amountInput: %d"}, {"redemptions", redemption, "intermediateInput: %d"},
-		{"securitize", sec, "amountInput: %d"}, {"securitize", sec, "minOutputInput: %d"},
+	a, b := "0x0000000000000000000000000000000000000001", "0x0000000000000000000000000000000000000002"
+	deps := registry.Deps{Chain: unusedReader{}, HTTP: http.DefaultClient}
+	for _, tc := range []struct {
+		name string
+		new  func(*uint) error
+	}{
+		{"cowswap/sell", func(i *uint) error {
+			_, err := cowswap.New(cowswap.Config{HTTP: protocolio.HTTPConfig{URL: "http://localhost"}, Settlement: a, SellToken: a, BuyToken: b, SellAmount: "1000", MinBuyAmount: "1", Action: "0:0", SellAmountInput: i}, deps)
+			return err
+		}},
+		{"cowswap/buy", func(i *uint) error {
+			_, err := cowswap.New(cowswap.Config{HTTP: protocolio.HTTPConfig{URL: "http://localhost"}, Settlement: a, SellToken: a, BuyToken: b, SellAmount: "1000", MinBuyAmount: "1", Action: "0:0", BuyAmountInput: i}, deps)
+			return err
+		}},
+		{"merkl/amount", func(i *uint) error {
+			_, err := merkl.New(merkl.Config{HTTP: protocolio.HTTPConfig{URL: "http://localhost"}, Multicall3: b, Distributor: a, Tokens: []string{a}, ProofLengths: []int{0}, Action: "0:0", CalldataBytes: 4, AmountInputs: []uint{*i}}, deps)
+			return err
+		}},
+		{"merkl/claimable", func(i *uint) error {
+			_, err := merkl.New(merkl.Config{HTTP: protocolio.HTTPConfig{URL: "http://localhost"}, Multicall3: b, Distributor: a, Tokens: []string{a}, ProofLengths: []int{0}, Action: "0:0", CalldataBytes: 4, ClaimableInputs: []uint{*i}}, deps)
+			return err
+		}},
+		{"redemptions/amount", func(i *uint) error {
+			_, err := redemptions.New(redemptions.Config{Family: "figure", Mode: "request", ChainID: 1, Token: a, OutputAsset: b, Target: b, Amount: "1", Action: "0:0", SecondAction: "1:0", AmountInput: i}, deps)
+			return err
+		}},
+		{"redemptions/intermediate", func(i *uint) error {
+			_, err := redemptions.New(redemptions.Config{Family: "figure", Mode: "request", ChainID: 1, Token: a, OutputAsset: b, Target: b, Amount: "1", Action: "0:0", SecondAction: "1:0", IntermediateInput: i}, deps)
+			return err
+		}},
+		{"securitize/amount", func(i *uint) error {
+			_, err := securitize.New(securitize.Config{Mode: "modern", ChainID: 1, Token: a, Target: b, PaymentToken: b, Amount: "1", MinOutput: "1", Action: "0:0", AmountInput: i}, deps)
+			return err
+		}},
+		{"securitize/minimum", func(i *uint) error {
+			_, err := securitize.New(securitize.Config{Mode: "modern", ChainID: 1, Token: a, Target: b, PaymentToken: b, Amount: "1", MinOutput: "1", Action: "0:0", MinOutputInput: i}, deps)
+			return err
+		}},
 	} {
-		for _, index := range []int{4095, 4096} {
-			t.Run(fmt.Sprintf("%s/%s/%d", tc.name, tc.field, index), func(t *testing.T) {
-				var raw yaml.Node
-				if err := yaml.Unmarshal([]byte(tc.base+fmt.Sprintf(tc.field, index)), &raw); err != nil {
-					t.Fatal(err)
-				}
-				_, err := r.New(tc.name, raw, registry.Deps{Chain: unusedReader{}, HTTP: http.DefaultClient})
-				if (err == nil) != (index == 4095) {
+		for _, index := range []uint{4095, 4096} {
+			t.Run(fmt.Sprintf("%s/%d", tc.name, index), func(t *testing.T) {
+				if err := tc.new(&index); (err == nil) != (index == 4095) {
 					t.Fatalf("input %d: %v", index, err)
 				}
 			})

@@ -8,7 +8,7 @@ permission package, simulates the exact transaction and manages its lifecycle.
 ## Repository alignment
 
 Studied `../vault-solver` at `c5cae70`: Cobra entrypoints under `cmd`, generic
-infrastructure under `internal`, isolated protocol packages, opaque YAML provider
+infrastructure under `internal`, isolated protocol packages, strict YAML
 configuration, Go 1.27.1, go-errors, logr/zap, generated abigen v2 bindings, and
 context-aware I/O. The new service is independently buildable. It does not import
 another module's internal packages or change the solver or adapters checkouts.
@@ -16,11 +16,12 @@ another module's internal packages or change the solver or adapters checkouts.
 ## Boundaries
 
 - `recipes`: ABI codec, SetRecipe discovery, tree/role validation and runtime assembly.
-- `provider`: integration-neutral registry, snapshots, runtime outputs and asynchronous progress.
-- `providers`: specialized acquisition of external quotes, proofs and signatures.
-  On-chain operations use committed queries, bindings, Manage gates and checks.
-  Explicit issuer/static/RPC/HTTP packages remain for direct hosts and fixtures;
-  the daemon registers CoW, Merkl, Liquid Lane RFQ and recipe inputs only.
+- SDK `provider`: integration-neutral snapshots, runtime outputs and asynchronous progress.
+  The daemon keeps only shared chain/HTTP dependencies in `internal/provider`; startup
+  installs its fixed automatic providers directly. There is no manual YAML factory registry.
+- `providers`: protocol-specific adapters selected from authenticated recipes.
+  SDK hosts supply additional integrations through the provider interfaces. `redemptions`
+  owns the documented LL issuer families; `securitize` owns wallet and offramp routes.
 - `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
 - `curator`: bounded HTTP acquisition of the exact active permission root; the SDK
   validates the returned bytes independently.
@@ -41,7 +42,7 @@ Only complete all-status lookup permits an idempotent retry. Bounded canonical e
 scan cursors survive restart; API statuses and used nonce bits are not settlement.
 
 Signed Liquid Lane discount/signature acquisition belongs to vault-solver; the daemon
-does not register that provider. On-chain issuer operations are generic recipes. CoW authorization and settlement
+does not register that provider. Issuer redemptions remain registered. CoW authorization and settlement
 are separate phases: submit the ERC-1271 order only after its authorization transaction
 confirms, persist its deterministic UID and reconcile it before retrying submission.
 Merkl reward proofs are protocol data, separate from account permission proofs. Claims
@@ -52,14 +53,9 @@ use later claim recipes, configured independently from the request recipe.
 
 The daemon accepts a YAML list of executor addresses and registers fixed automatic
 providers at startup. Canonical lowercase executor addresses are the durable and
-log identifiers; duplicate addresses and old strategy objects are rejected. The
-`address-only-v1` policy binds chain, discovered account/caller, curator source and
-sender policy. It classifies work from successful original execution results.
-There is one supported pre-production policy, with no compatibility or migration path.
-Unresolved journals block new admission regardless of their identifier.
-Recipes must commit every required readiness, limit and payout condition.
-The generic runtime enforces only authenticated recipe conditions.
-Unavailable external issuer material still requires a specialized integration.
+log identifiers; duplicate addresses and strategy objects are rejected. Runtime
+policy version `1` binds chain, discovered account/caller, curator source and sender
+policy. The issuer policy also binds the reviewed catalogue digest.
 At startup it pins a valid head, batches deduplicated account and caller getters,
 rejects any invalid member,
 and closes the same-number/hash guard before publishing the complete account map.
@@ -77,8 +73,8 @@ HTTP is in flight. Other SDK hosts may omit the source and keep local tree loadi
 Only new preparation fetches permission bytes. Signed-attempt recovery and external
 provider advancement do not depend on curator availability. Runtime fingerprints bind
 the derived account and curator HTTP configuration (credential variable names only).
-An occupied journal retains its original identity and configuration; there is no
-journal rewrite or fallback to a different tree source.
+Recovery requires the saved fingerprint to match; it never rewrites journal
+identity or selects a different tree source.
 
 ## Lifecycle
 
@@ -86,19 +82,6 @@ Read recipe and active account root at a single pinned block. Verify configured 
 account, caller, recipe hash, leaf hashes, sorted-pair proofs and executor roles. Preserve
 all 12 existing recipe operations. Build each Manage/Approve runtime slot exactly once;
 an explicitly skipped Manage slot remains empty and must pass full simulation.
-
-The full original simulation's result vector resolves committed Manage gates.
-Only nonempty groups with nonzero gates count as managed work. Call and Approve
-always count, even zero approvals; no protocol selector or arbitrary argument
-determines readiness. The complete program, inputs, runtime slots and output vector
-are checked before classifying idle. Classification follows current metadata and
-both canonical closing guards and repeats before new unsigned admission. Assertion,
-read, RPC and decoding failures remain errors. Signed recovery bypasses replanning.
-
-Claims use a single conditional builder with every active-group economic check
-and no overall positive-progress assertion or unused progress aggregation. All-empty programs
-can succeed manually, while the keeper treats them as idle. Mandatory queries
-still execute when the associated action gate is zero.
 
 Simulation-only operation requires no key. Sending is an explicit deployment mode.
 Persist prepared jobs, then signed transaction bytes before broadcasting. Ambiguous
@@ -109,11 +92,7 @@ responses enter logs. Failed/unknown external states never become successful com
 
 The transaction journal persists confirmed receipt identity and logs before nonce
 acknowledgement. Provider advancement receives that evidence with a fresh pinned
-snapshot and checks canonical headers before and after reconciliation. Generic
-completion proves the program transaction and its committed on-chain checks,
-not later external settlement. Independent request and claim recipes express
-their own readiness and balance postconditions. Explicit issuer host packages
-retain their specialized reconciliation behavior: issuer
+snapshot and checks canonical headers before and after reconciliation. Issuer
 providers match exact account `Manage` calls in receipt order; missing or skipped
 actions do not count as executed. A request finishes as `requested`, releasing the
 account lock while issuer-owned state retains the pending withdrawal. Independent

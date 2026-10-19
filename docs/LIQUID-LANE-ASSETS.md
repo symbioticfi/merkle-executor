@@ -4,14 +4,21 @@ This catalogue covers issuer requests and claims. Public RFQ consumer redemption
 use the separate [liquidlane-rfq provider](PROVIDERS.md#liquid-lane-rfq-consumer-redemptions);
 signed connector discount production remains vault-solver.
 
-The [asset catalogue](../config/assets/liquid-lane.yaml) covers all **15 asset
-factories** listed under Liquid Lane on the [official addresses page](https://docs.symbiotic.fi/get-started/resources/addresses),
-checked on 2026-09-28, plus the additional **sUSN** native issuer route from the
-adapters source and the native USN → USDC route reviewed on 2026-10-12. The
-separate AccountRegistry entry is not an asset. The
-catalogue is embedded discovery data. An authenticated action leaf still supplies
-the authority to execute; the catalogue supplies no account, signer, approval,
-permission tree or amount.
+The [asset catalogue](../internal/providers/redemptions/catalogue/liquid-lane.yaml) now contains **54 routes
+over 38 tokens**. It retains the 15 published Liquid Lane assets and Noon routes,
+adds the current frontend's 24 Midas products and additional redemption venues,
+six Centrifuge products across nine asset-specific vaults, independent Hastra
+unwraps/requests, and FalconX BB direct requests. The 2026-10-19 refresh compares
+local frontend/NAV sources; it is not a new live topology capture. Source hashes
+are retained in [the catalogue provenance](../internal/providers/redemptions/catalogue/SOURCE.md).
+The authenticated recipe and permission proof grant execution authority; the
+catalogue supplies no account, signer, approval, permission tree or amount.
+
+This is the automatic issuer-preparation scope, rather than a copy of the NAV
+inventory. Other committed actions, including Aave V4, Morpho loan-token supply,
+TBILL and utility configuration calls, use the existing generic recipe VM and
+its result-derived inputs. Valuation coverage does not create an automatic
+provider for external request selection, signatures or unconstrained inputs.
 
 Issuer calls originate from the MerkleAccount. The published LL account factories
 identify the documented asset inventory; the provider does not transfer assets to
@@ -21,11 +28,11 @@ MerkleAccount redemption.
 
 | Family | Assets | Provider modes | Proceeds |
 | --- | --- | --- | --- |
-| Midas | mF-ONE, mROX, mHYPER, CarryTradeUSDTRYLeverage, StockMarketTRBasisTrade, mM1-USD, mGLO, mGLOBAL | `request` | Issuer pushes the requested output asset after approval. |
-| Centrifuge ERC-7540 | JAAA, JTRSY, HYB, deJAAA, deJTRSY | `request`, `claim` | Account claims fulfilled shares from its asset-specific vault. |
+| Midas | 24 frontend products, including additional venues and BTC/WETH settlement assets | `request` | Issuer pushes the requested output asset after approval. |
+| Centrifuge ERC-7540 | JAAA, JTRSY, HYB, deJAAA, deJTRSY, ACRDX | `request`, `claim` | Account claims fulfilled shares from its asset-specific vault. |
 | OpenEden | HYBOND | `request` | Issuer processes its queue and pushes USDC. |
-| Figure/Hastra | PRIME | `request` | PRIME is redeemed to wYLDS; the issuer later pushes USDC for the wYLDS request. |
-| Pareto | AA_FalconXUSDC | `queue-request`, `direct-request`, `queue-claim`, `direct-claim`, `instant-claim` | Account claims an eligible queue epoch or CDO receipt. |
+| Figure/Hastra | PRIME, AUTO, wYLDS | `unwrap`, `request` | Separate unwraps settle in wYLDS; a wYLDS request later pays USDC. The ordered combined wrapper/request flow is retained. |
+| Pareto | AA_FalconXUSDC, BB_FalconXUSDC | `queue-request`, `direct-request`, `queue-claim`, `direct-claim`, `instant-claim` | Account claims an eligible queue epoch or CDO receipt. |
 | Noon | sUSN | `request`, `claim` | Account claims the fixed USN entitlement after the current withdrawal period. |
 | Noon | USN | `redeem-usn` | Separately whitelisted account burns USN and receives USDC atomically. |
 
@@ -51,7 +58,10 @@ is smaller. Pareto and Noon complete-request claims have no amount field. Their
 epoch or request ID must be a committed literal or exact deterministic Result.
 An Input needs a preceding exact equality; a range-bound arbitrary index is invalid.
 
-Figure requires an ordered PRIME `redeem` and wYLDS `requestRedeem`, with the
+Independent Hastra unwraps use PRIME/AUTO `redeem` and settle in wYLDS. A separate
+wYLDS `requestRedeem` uses the account's selected read-derived wYLDS balance and
+waits while an existing request is pending. The combined Figure flow retains an
+ordered wrapper `redeem` and wYLDS `requestRedeem`, with the
 second amount linked to the first through the committed `previewRedeem` query.
 The original recipe retains its output and balance guards. A read depending on
 an earlier effect is unsupported until its actual result can be resolved safely;
@@ -64,7 +74,7 @@ claim belongs to a separate approved recipe.
 
 The checked-in catalogue is copied exactly into
 `internal/providers/redemptions/catalogue/liquid-lane.yaml`, SHA-256
-`feb6e87fb457070c10d3b644ca16173303494411cad4cb4c1f1f76daefe6f0e0`.
+`e11e2ce31f0e1864d158fd5ecfdd6a6e3624304f8b2bb546601eb5a870f6bb2d`.
 Tests enforce byte-for-byte equality with the reviewed source. A catalogue update
 requires deliberate review, copy and policy-version update. Recovery validates
 stored configuration, account, action bytes and numerical inputs against this
@@ -120,7 +130,10 @@ embedded policy before I/O; it does not discover a new route or amount.
   not create privileges. USDT, USN minting, request discovery and ID scheduling
   remain outside this integration.
 - **Pareto:** validate the queue's `tranche()`, `underlying()`, `idleCDOEpoch()`
-  and `strategy()`. During a running epoch use queue `requestWithdraw(amount)`;
+  and `strategy()` for queue operations. Direct requests validate the CDO/strategy
+  and the selected AA or BB tranche without consulting the AA queue. BB supports
+  only direct requests; claim calls remain account-level and use the canonical AA
+  route. During a running epoch use queue `requestWithdraw(amount)`;
   between epochs use CDO `requestWithdraw(amount, token)`. A queue claim requires
   positive `userWithdrawalsEpochs(account, epoch)`, a positive
   `epochWithdrawPrice(epoch)` and zero `epochPendingClaims(epoch)`, then calls
@@ -142,13 +155,13 @@ settlement.
 
 ## Provenance and verification boundary
 
-Factory addresses come from the official page. Token and issuer addresses come
+Historical factory addresses come from the official page. The original token and issuer addresses come
 from adapters revision `bd5e235899de5e175a0001a913d47596f6f4f801`, principally
 `src/interfaces/ll-adapter/tokens-to-redeem/`,
 `script/deploy/adapters/DeployLiquidLane2.s.sol` and
 `test/adapters/merkle-adapter/RecipeRedemptionsMainnet.t.sol`.
 
-The five Centrifuge USDC vault addresses, Pareto strategy address and wYLDS output
+The original five Centrifuge USDC vault addresses, Pareto strategy address and wYLDS output
 asset were also read through public Ethereum RPC at block **26,074,706**, hash
 `0xb942e450ee9fa50321f5f54530b9cce7a03a2ef30bf9b8fbfe0cd30e3e1a9bc3`.
 These are topology checks; they do not verify any configured account's KYC,
@@ -242,4 +255,7 @@ permission-enforcing account fixture with local burnable token/oracle fixtures.
 They prove local burn/payment/cleanup and fail-closed execution; they do not
 establish live issuer enrollment, treasury liquidity or production token behavior.
 
-mGLO uses its own Ethereum token, redemption vault and account factory in both catalogues. Only `redeemRequest(USDC, amount)` is authored: the issuer must greenlist the strategy account and later pushes settlement. Held mGLO uses unadjusted NAV. Instant redemption and its deferred 7% holdback have no admitted recipe or ledger here. The Liquid Lane account calendar is separate from direct issuer calls.
+The mGLO standard USDC request route retains the Liquid Lane account factory
+`0x2FB3B8321951954b18cE5bF06Da1cF5a6363bC0a`, captured at Ethereum block 26227234.
+Deployment identity is recorded in [core PR #21](https://github.com/symbioticfi/core-mirror/pull/21).
+The factory field is catalogue metadata; direct issuer execution uses the admitted token and target.
