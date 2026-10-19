@@ -64,7 +64,7 @@ claim belongs to a separate approved recipe.
 
 The checked-in catalogue is copied exactly into
 `internal/providers/redemptions/catalogue/liquid-lane.yaml`, SHA-256
-`be54e202c2a12fd0cf4fc5d67a0aea9a3b56b8c51ce894cd526c43d9662f2348`.
+`feb6e87fb457070c10d3b644ca16173303494411cad4cb4c1f1f76daefe6f0e0`.
 Tests enforce byte-for-byte equality with the reviewed source. A catalogue update
 requires deliberate review, copy and policy-version update. Recovery validates
 stored configuration, account, action bytes and numerical inputs against this
