@@ -1,8 +1,9 @@
 # Securitize asset routes
 
 The `securitize` provider supports the published EVM redemption routes in the
-[reviewed catalog](../config/assets/securitize.yaml). The catalog is a snapshot of
-Securitize's [public asset feed](https://public-feed.securitize.io/asset-info), read
+[reviewed catalog](../internal/providers/securitize/catalogue/securitize.yaml).
+The embedded catalog is the single source; no runtime file loader is used. It is a
+snapshot of Securitize's [public asset feed](https://public-feed.securitize.io/asset-info), read
 on **2026-09-28**. It contains ten symbols and 26 EVM deployments. Every address is
 chain-specific. There are 25 wallet routes and four atomic offramps; VBILL on BNB
 has no published redemption wallet or offramp and is explicitly unavailable.

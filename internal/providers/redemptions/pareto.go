@@ -15,22 +15,31 @@ import (
 
 func (p *Provider) pareto(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {
 	queue, cdo, strategy := paretoqueue.NewParetoQueue(), paretocdo.NewParetoCDO(), paretostrategy.NewParetoStrategy()
-	checks := []struct {
+	type addressCheck struct {
 		target   common.Address
 		data     []byte
 		unpack   func([]byte) (common.Address, error)
 		expected common.Address
-	}{
-		{p.target, queue.PackTranche(), queue.UnpackTranche, p.token},
-		{p.target, queue.PackUnderlying(), queue.UnpackUnderlying, p.asset},
-		{p.target, queue.PackIdleCDOEpoch(), queue.UnpackIdleCDOEpoch, p.cdo},
-		{p.target, queue.PackStrategy(), queue.UnpackStrategy, p.strategy},
+	}
+	checks := []addressCheck{
 		{p.cdo, cdo.PackAATranche(), cdo.UnpackAATranche, p.token},
 		{p.cdo, cdo.PackToken(), cdo.UnpackToken, p.asset},
 		{p.cdo, cdo.PackStrategy(), cdo.UnpackStrategy, p.strategy},
 		{p.strategy, strategy.PackIdleCDO(), strategy.UnpackIdleCDO, p.cdo},
 		{p.strategy, strategy.PackToken(), strategy.UnpackToken, p.asset},
 	}
+	if p.cfg.Tranche == "bb" {
+		checks[0].data, checks[0].unpack = cdo.PackBBTranche(), cdo.UnpackBBTranche
+	}
+	if p.cfg.Mode == "queue-request" || p.cfg.Mode == "queue-claim" {
+		checks = append(checks,
+			addressCheck{p.target, queue.PackTranche(), queue.UnpackTranche, p.token},
+			addressCheck{p.target, queue.PackUnderlying(), queue.UnpackUnderlying, p.asset},
+			addressCheck{p.target, queue.PackIdleCDOEpoch(), queue.UnpackIdleCDOEpoch, p.cdo},
+			addressCheck{p.target, queue.PackStrategy(), queue.UnpackStrategy, p.strategy},
+		)
+	}
+	base := len(checks)
 	requests := make([]protocolio.ReadRequest, 0, 14)
 	for _, check := range checks {
 		requests = append(requests, protocolio.ContractRead(check.target, check.data, s.BlockNumber, true))
@@ -68,21 +77,21 @@ func (p *Provider) pareto(ctx context.Context, s provider.Snapshot, out *provide
 	}
 	switch p.cfg.Mode {
 	case "queue-request", "direct-request":
-		defaulted, err := readResult(group.At(9), cdo.UnpackDefaulted)
+		defaulted, err := readResult(group.At(base), cdo.UnpackDefaulted)
 		if err != nil {
 			return nil, err
 		}
 		if defaulted {
 			return nil, idle("Pareto vault defaulted")
 		}
-		allowed, err := readResult(group.At(10), cdo.UnpackIsWalletAllowed)
+		allowed, err := readResult(group.At(base+1), cdo.UnpackIsWalletAllowed)
 		if err != nil {
 			return nil, err
 		}
 		if !allowed {
 			return nil, idle("account is not eligible for Pareto requests")
 		}
-		running, err := readResult(group.At(11), cdo.UnpackIsEpochRunning)
+		running, err := readResult(group.At(base+2), cdo.UnpackIsEpochRunning)
 		if err != nil {
 			return nil, err
 		}
@@ -96,18 +105,18 @@ func (p *Provider) pareto(ctx context.Context, s provider.Snapshot, out *provide
 		}
 		return p.amount, nil
 	case "queue-claim":
-		amount, err := readResult(group.At(9), queue.UnpackUserWithdrawalsEpochs)
+		amount, err := readResult(group.At(base), queue.UnpackUserWithdrawalsEpochs)
 		if err != nil {
 			return nil, err
 		}
 		if amount.Sign() == 0 {
 			return nil, idle("no Pareto queue request for account and epoch")
 		}
-		price, err := readResult(group.At(10), queue.UnpackEpochWithdrawPrice)
+		price, err := readResult(group.At(base+1), queue.UnpackEpochWithdrawPrice)
 		if err != nil {
 			return nil, err
 		}
-		pending, err := readResult(group.At(11), queue.UnpackEpochPendingClaims)
+		pending, err := readResult(group.At(base+2), queue.UnpackEpochPendingClaims)
 		if err != nil {
 			return nil, err
 		}
@@ -117,26 +126,26 @@ func (p *Provider) pareto(ctx context.Context, s provider.Snapshot, out *provide
 		out.Actions[p.cfg.Action] = queue.PackClaimWithdrawRequest(p.epoch)
 		return amount, nil
 	case "direct-claim":
-		amount, err := readResult(group.At(9), strategy.UnpackWithdrawsRequests)
+		amount, err := readResult(group.At(base), strategy.UnpackWithdrawsRequests)
 		if err != nil {
 			return nil, err
 		}
-		epoch, err := readResult(group.At(10), strategy.UnpackEpochNumber)
+		epoch, err := readResult(group.At(base+1), strategy.UnpackEpochNumber)
 		if err != nil {
 			return nil, err
 		}
-		requested, err := readResult(group.At(11), strategy.UnpackLastWithdrawRequest)
+		requested, err := readResult(group.At(base+2), strategy.UnpackLastWithdrawRequest)
 		if err != nil {
 			return nil, err
 		}
-		end, err := readResult(group.At(12), cdo.UnpackEpochEndDate)
+		end, err := readResult(group.At(base+3), cdo.UnpackEpochEndDate)
 		if err != nil {
 			return nil, err
 		}
 		if epoch.Cmp(requested) <= 0 && end.Sign() > 0 {
 			return nil, idle("Pareto direct withdrawal epoch is pending")
 		}
-		apr0, err := readResult(group.At(13), strategy.UnpackApr0Users)
+		apr0, err := readResult(group.At(base+4), strategy.UnpackApr0Users)
 		if err != nil {
 			return nil, err
 		}
@@ -161,14 +170,14 @@ func (p *Provider) pareto(ctx context.Context, s provider.Snapshot, out *provide
 		out.Actions[p.cfg.Action] = cdo.PackClaimWithdrawRequest()
 		return amount, nil
 	case "instant-claim":
-		amount, err := readResult(group.At(9), strategy.UnpackInstantWithdrawsRequests)
+		amount, err := readResult(group.At(base), strategy.UnpackInstantWithdrawsRequests)
 		if err != nil {
 			return nil, err
 		}
 		if amount.Sign() == 0 {
 			return nil, idle("no Pareto instant withdrawal request")
 		}
-		allowed, err := readResult(group.At(10), cdo.UnpackAllowInstantWithdraw)
+		allowed, err := readResult(group.At(base+1), cdo.UnpackAllowInstantWithdraw)
 		if err != nil {
 			return nil, err
 		}

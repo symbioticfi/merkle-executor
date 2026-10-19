@@ -159,7 +159,7 @@ func TestStartupAccountsAreAtomicDeduplicatedAndCanonicallyClosed(t *testing.T) 
 		})
 	}
 }
-func TestStartupAccountsLegacyReaderKeepsSamePin(t *testing.T) {
+func TestStartupAccountsSingleReaderKeepsSamePin(t *testing.T) {
 	r := &discoveryReader{t: t, head: &types.Header{Number: big.NewInt(12)}}
 	got, err := DiscoverExecutors(t.Context(), r, []common.Address{common.HexToAddress("0x01")})
 	if err != nil || len(got) != 1 || r.calls != 2 || r.headers != 2 {

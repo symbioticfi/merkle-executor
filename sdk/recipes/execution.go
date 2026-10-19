@@ -103,32 +103,51 @@ func ValidateExecution(ctx context.Context, reader Reader, snapshot Snapshot, ca
 }
 
 func ValidateExecutionWithResults(ctx context.Context, reader Reader, snapshot Snapshot, caller common.Address, calldata []byte, results map[uint]string) error {
+	_, err := validateExecutionResults(ctx, reader, snapshot, caller, calldata, results)
+	return err
+}
+
+// ExecutionHasWork validates immutable prepared bytes at current state and then
+// classifies the successful original simulation. Call only before admitting a
+// new unsigned transaction; signed recovery must retain its original bytes.
+func ExecutionHasWork(ctx context.Context, reader Reader, snapshot Snapshot, caller common.Address, calldata []byte, results map[uint]string) (bool, error) {
+	raw, err := validateExecutionResults(ctx, reader, snapshot, caller, calldata, results)
+	if err != nil {
+		return false, err
+	}
+	return HasWork(calldata, raw)
+}
+
+func validateExecutionResults(ctx context.Context, reader Reader, snapshot Snapshot, caller common.Address, calldata []byte, results map[uint]string) ([]byte, error) {
 	current, err := openExecution(ctx, reader, snapshot, caller)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	requests := snapshotRequests(snapshot.Executor, snapshot.Account, current.Number)
 	requests = append(requests, executionRead(snapshot, caller, calldata, nil))
 	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err = validateCurrent(snapshot, current, reads, caller); err != nil {
-		return err
+		return nil, err
 	}
 	if reads.At(len(requests)-1).Err != nil {
-		return errors.New("prepared recipe no longer simulates")
+		return nil, errors.New("prepared recipe no longer simulates")
+	}
+	raw, err := reads.At(len(requests) - 1).CallData()
+	if err != nil {
+		return nil, err
 	}
 	if len(results) != 0 {
-		raw, err := reads.At(len(requests) - 1).CallData()
-		if err != nil {
-			return err
-		}
 		if err = VerifyResults(calldata, raw, results); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return closeExecution(ctx, reader, snapshot, current)
+	if err = closeExecution(ctx, reader, snapshot, current); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 func executionRead(snapshot Snapshot, caller common.Address, calldata []byte, block *big.Int) protocolio.ReadRequest {
 	return protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: caller, To: &snapshot.Executor, Data: calldata}, Block: block}

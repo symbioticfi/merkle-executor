@@ -15,7 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-	"gopkg.in/yaml.v3"
 
 	settlementbinding "github.com/symbioticfi/merkle-executor/api/bindings/cowsettlement"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
@@ -33,9 +32,7 @@ type Config struct {
 	BuyToken        string                `yaml:"buyToken"`
 	SellAmount      string                `yaml:"sellAmount"`
 	MinBuyAmount    string                `yaml:"minBuyAmount"`
-	SlippageBPS     uint64                `yaml:"slippageBps"`
 	ValiditySeconds uint64                `yaml:"validitySeconds"`
-	AppData         string                `yaml:"appData"`
 	Action          string                `yaml:"action"`
 	SellAmountInput *uint                 `yaml:"sellAmountInput"`
 	BuyAmountInput  *uint                 `yaml:"buyAmountInput"`
@@ -71,7 +68,6 @@ type Provider struct {
 	client                          *Client
 	settlement, sellToken, buyToken common.Address
 	sellAmount, minBuy              *big.Int
-	appData                         common.Hash
 	volumeBPS                       func(context.Context, *big.Int, common.Address, common.Address) (uint64, error)
 }
 type prepared struct {
@@ -96,14 +92,6 @@ func progress(d prepared, name string, done bool) provider.Progress {
 		outcome = name
 	}
 	return provider.Progress{Done: done, Outcome: outcome, State: state, Reference: d.UID}
-}
-func Register(r *providerRegistry.Registry) error { return r.Register("cowswap", Factory) }
-func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
-	var c Config
-	if e := parse.DecodeStrict(raw, &c); e != nil {
-		return nil, e
-	}
-	return New(c, deps)
 }
 
 // New accepts policy values derived from the authenticated recipe by the host.
@@ -138,14 +126,6 @@ func New(c Config, deps providerRegistry.Deps) (*Provider, error) {
 	p.minBuy, e = parse.Uint256(c.MinBuyAmount)
 	if e != nil || p.minBuy.Sign() == 0 {
 		return nil, errors.New("CoW minBuyAmount must be positive uint256")
-	}
-	// Retained only to drain legacy version-1 attempts; new preparation always
-	// creates the official AUTO appData document.
-	if c.AppData != "" {
-		p.appData, e = protocolio.Hash(c.AppData)
-		if e != nil {
-			return nil, e
-		}
 	}
 	for _, index := range []*uint{c.SellAmountInput, c.BuyAmountInput} {
 		if index != nil {
@@ -279,7 +259,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
 		return provider.Output{}, e
 	}
-	data, e := json.Marshal(prepared{Version: 2, ChainID: s.ChainID.String(), Account: s.Account, PreparedBlock: s.BlockNumber.String(), Order: o, Digest: digest, UID: uid, FullAppData: fullAppData, SlippageBPS: slippageBPS})
+	data, e := json.Marshal(prepared{Version: 1, ChainID: s.ChainID.String(), Account: s.Account, PreparedBlock: s.BlockNumber.String(), Order: o, Digest: digest, UID: uid, FullAppData: fullAppData, SlippageBPS: slippageBPS})
 	if e != nil {
 		return provider.Output{}, errors.New("encode CoW persisted order")
 	}
@@ -303,27 +283,21 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	if json.Unmarshal(out.Data, &d) != nil {
 		return provider.Progress{}, errors.New("invalid persisted CoW order")
 	}
-	if (d.Version != 1 && d.Version != 2) || d.Account != s.Account || d.ChainID != s.ChainID.String() {
+	if d.Version != 1 || d.Account != s.Account || d.ChainID != s.ChainID.String() {
 		return provider.Progress{}, errors.New("persisted CoW chain/account mismatch")
 	}
-	expectedAppData := p.appData
-	if d.Version == 2 {
-		if d.SlippageBPS == 0 || d.SlippageBPS > 10000 || d.Order.QuoteID < 0 || d.Order.AppDataHash != "" {
-			return provider.Progress{}, errors.New("invalid persisted CoW AUTO policy")
-		}
-		full, hash := appData(d.SlippageBPS)
-		if d.FullAppData != full || crypto.Keccak256Hash([]byte(d.FullAppData)) != hash {
-			return provider.Progress{}, errors.New("persisted CoW full appData differs from AUTO policy")
-		}
-		expectedAppData = hash
-	} else if p.cfg.AppData == "" {
-		return provider.Progress{}, errors.New("legacy CoW attempt requires the previous configuration to drain before enabling recipe-derived AUTO policy")
+	if d.SlippageBPS == 0 || d.SlippageBPS > 10000 || d.Order.QuoteID < 0 || d.Order.AppDataHash != "" {
+		return provider.Progress{}, errors.New("invalid persisted CoW AUTO policy")
+	}
+	full, expectedAppData := appData(d.SlippageBPS)
+	if d.FullAppData != full || crypto.Keccak256Hash([]byte(d.FullAppData)) != expectedAppData {
+		return provider.Progress{}, errors.New("persisted CoW full appData differs from AUTO policy")
 	}
 	block, e := parse.Uint256(d.PreparedBlock)
 	if e != nil || s.BlockNumber.Cmp(block) <= 0 {
 		return provider.Progress{}, errors.New("CoW Advance requires a confirmed snapshot after preparation")
 	}
-	if e = p.validateOrder(d.Order, s.Account, expectedAppData, d.Version == 2); e != nil {
+	if e = p.validateOrder(d.Order, s.Account, expectedAppData); e != nil {
 		return provider.Progress{}, e
 	}
 	domain := protocolio.Domain("Gnosis Protocol", "v2", s.ChainID, p.settlement)
@@ -428,10 +402,8 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 		return provider.Progress{}, e
 	}
 	postOrder := d.Order
-	if d.Version == 2 {
-		postOrder.AppData = d.FullAppData
-		postOrder.AppDataHash = d.Order.AppData
-	}
+	postOrder.AppData = d.FullAppData
+	postOrder.AppDataHash = d.Order.AppData
 	returned, code, postErr := p.client.Post(ctx, postOrder)
 	if postErr != nil {
 		// A timeout, duplicate response or gateway error can hide acceptance. Keep the exact UID
@@ -446,9 +418,9 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	}
 	return progress(d, "posted", false), nil
 }
-func (p *Provider) validateOrder(o wire.CowOrder, account common.Address, expectedAppData common.Hash, exactBudget bool) error {
+func (p *Provider) validateOrder(o wire.CowOrder, account common.Address, expectedAppData common.Hash) error {
 	sell, e := parse.Uint256(o.SellAmount)
-	if e != nil || sell.Sign() == 0 || sell.Cmp(p.sellAmount) > 0 || exactBudget && sell.Cmp(p.sellAmount) != 0 {
+	if e != nil || sell.Sign() == 0 || sell.Cmp(p.sellAmount) != 0 {
 		return errors.New("persisted CoW sell amount exceeds budget")
 	}
 	buy, e := parse.Uint256(o.BuyAmount)

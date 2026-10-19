@@ -47,7 +47,7 @@ func TestIssuerIndependentReadStagesBatchWithoutChangingPayload(t *testing.T) {
 	for _, tc := range []struct {
 		family, mode string
 		count        int
-	}{{"midas", "request", 4}, {"centrifuge", "request", 2}, {"centrifuge", "claim", 3}, {"openeden", "request", 4}, {"figure", "request", 4}, {"noon", "request", 3}, {"noon", "claim", 4}, {"pareto", "queue-request", 12}, {"pareto", "direct-request", 12}, {"pareto", "queue-claim", 12}, {"pareto", "direct-claim", 14}, {"pareto", "instant-claim", 11}} {
+	}{{"midas", "request", 4}, {"centrifuge", "request", 2}, {"centrifuge", "claim", 3}, {"openeden", "request", 4}, {"figure", "request", 4}, {"noon", "request", 3}, {"noon", "claim", 4}, {"pareto", "queue-request", 12}, {"pareto", "direct-request", 8}, {"pareto", "queue-claim", 12}, {"pareto", "direct-claim", 10}, {"pareto", "instant-claim", 7}} {
 		t.Run(tc.family+"/"+tc.mode, func(t *testing.T) {
 			cfg := issuerConfig(tc.family)
 			cfg.Mode = tc.mode
@@ -61,21 +61,21 @@ func TestIssuerIndependentReadStagesBatchWithoutChangingPayload(t *testing.T) {
 				cfg.Amount = ""
 				cfg.RequestID = "7"
 			}
-			snap, legacy := issuerFixture(t, cfg)
+			snap, single := issuerFixture(t, cfg)
 			if tc.family == "noon" && tc.mode == "claim" {
 				a := noon.NewNoonWithdrawalHandler().GetABI()
-				legacy.reply(common.HexToAddress(cfg.Target), a, "getWithdrawalRequest", []any{snap.Account, big.NewInt(7)}, struct {
+				single.reply(common.HexToAddress(cfg.Target), a, "getWithdrawalRequest", []any{snap.Account, big.NewInt(7)}, struct {
 					Amount    *big.Int
 					Timestamp *big.Int
 					Claimed   bool
 				}{big.NewInt(50), big.NewInt(100), false})
-				legacy.reply(common.HexToAddress(cfg.Target), a, "withdrawPeriod", nil, big.NewInt(200))
+				single.reply(common.HexToAddress(cfg.Target), a, "withdrawPeriod", nil, big.NewInt(200))
 			}
-			expected, err := issuerProvider(t, cfg, legacy).Prepare(context.Background(), snap)
+			expected, err := issuerProvider(t, cfg, single).Prepare(context.Background(), snap)
 			if err != nil {
 				t.Fatal(err)
 			}
-			r := &batchIssuerReader{issuerReader: legacy, failIndex: -1}
+			r := &batchIssuerReader{issuerReader: single, failIndex: -1}
 			out, err := issuerProvider(t, cfg, r).Prepare(context.Background(), snap)
 			if err != nil {
 				t.Fatal(err)

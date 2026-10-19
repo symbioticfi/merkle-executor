@@ -10,13 +10,21 @@ The journal stores one identity and same-nonce variants. Terminal success/revert
 
 A generic Merkle recipe can be repeatable and has no universal order ID/idempotency check. Merkle retains its unresolved journal when the engine abandons tracking or observes foreign nonce consumption. Restart checks every owned hash without replaying stored calldata. Neither a missing receipt, an RPC error nor a pending nonce is proof that the recipe failed. This intentional business-layer constraint prevents duplicate recipe execution and unauthorized external settlement.
 
-Configuration lives in `txManager`. `maxFeeGwei` is a finite positive ceiling. Defaults: confirmations 2, broadcast timeout 5000 ms, account telemetry interval 30000 ms, fallback replacement interval 30000 ms, pending timeout 300000 ms, shutdown drain 60000 ms. Merkle keeps its existing receipt `pollInterval` duration (default 2s). Pending timeout must cover at least one replacement interval; all millisecond settings must fit `time.Duration`.
+`txManager.maxFeeGwei` is the only transaction configuration field. It sets a
+finite positive fee ceiling in send mode. Timing and fee-horizon settings are
+fixed by runtime policy version `1`: 2 confirmations, 2-second receipt polling,
+5-second broadcast timeout, 30-second account telemetry and replacement intervals,
+5-minute pending timeout, and 1-minute shutdown drain.
 
-`horizon` defaults: maxBlocks 6 (allowed 3–12), blockTimeMs 12000, tipFloorGwei 0.02, fullBlockTipGwei 0.1, congestedTipFloorGwei 0.2, congestedTipCapGwei 15, congestedRewardBlocks 3, congestedRewardPercentile 50, escalateAfterFullBlocks 2, stallAfterBlocks 3, gasHeadroomBps 500, fallbackGasHeadroomBps 1000. Tips must be finite, positive and ordered; windows are bounded to 64 blocks and fallback headroom to 5000 bps. Startup checks that the congested tip leaves initial base-fee headroom under the global cap.
+The fixed fee horizon spans 6 blocks at 12 seconds each. Tip floors are 0.02 Gwei
+normally, 0.1 for a full block, and 0.2 under congestion, capped at 15 Gwei. The
+reward window is 3 blocks at percentile 50; escalation starts after 2 full blocks
+or 3 stalled blocks. Gas headroom is 500 basis points, or 1000 for the estimate
+fallback. The engine checks that these values fit the configured global fee cap.
 
 Both read and write HTTP RPC clients refuse redirects, including transaction
 submission redirects, so signed payloads stay on the configured endpoint.
 
 Read RPC handles simulation, fee history, receipts and confirmation headers. Write RPC handles nonce admission and broadcast. RPC error text is redacted but preserves a finite allowlist of nonce, fee/rejection and execution-revert classifications; original typed causes remain available for invalid-params fallback and revert decoding. No endpoint credentials or provider response text appear in lifecycle logs.
 
-The engine has no solver identity or protocol-obsolescence callback. Receipt confirmation and restoring the confirmed nonce floor are ordinary engine APIs. Merkle owns recovery after tracking ends: it polls stored variants directly, without a second passive observer, hash cache, deduplication ledger or receipt callback. The removed passive-observer settings are rejected by strict YAML. Engine gas/fee metrics account receipts found during active tracking; recovered terminal receipts are reported by journal logs and keeper outcomes, without passive-observer cost counters.
+The engine has no solver identity or protocol-obsolescence callback. Receipt confirmation and restoring the confirmed nonce floor are ordinary engine APIs. Merkle owns recovery after tracking ends: it polls stored variants directly, without a second passive observer, hash cache, deduplication ledger or receipt callback. Engine gas/fee metrics account receipts found during active tracking; recovered terminal receipts are reported by journal logs and keeper outcomes, without passive-observer cost counters.

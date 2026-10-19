@@ -57,12 +57,12 @@ func batchRequests(n int) []ReadRequest {
 	}
 	return out
 }
-func TestReadGroupDefersLegacySinglesUntilConsumed(t *testing.T) {
+func TestReadGroupDefersSingleReadsUntilConsumed(t *testing.T) {
 	sentinel := errors.New("member unavailable")
 	reader := &singleBatchFixture{fail: sentinel}
 	group, err := ReadGroup(context.Background(), reader, batchRequests(2)...)
 	if err != nil || reader.calls != 0 {
-		t.Fatalf("legacy group eagerly read: %v calls=%d", err, reader.calls)
+		t.Fatalf("single group eagerly read: %v calls=%d", err, reader.calls)
 	}
 	if got := group.At(0); got.Err != nil || got.Data[0] != 1 || reader.calls != 1 {
 		t.Fatalf("first read: %+v", got)

@@ -46,12 +46,10 @@ parent preparation still stops the operation. No decimals, prices or gas feeds
 are consulted.
 
 The authenticated recipe supplies the token pair, exact gross budget and minimum
-proceeds floor. AUTO never weakens that floor. Version 2 output persists the
+proceeds floor. AUTO never weakens that floor. Version 1 output persists the
 chosen slippage, final full document, signed hash, order, quote identity, digest
 and UID before any external POST. Recovery validates that document and exact
-authorization and never obtains another quote or slippage suggestion. Version 1
-attempts can drain only with their previous configured policy; operators must
-finish them before moving to recipe-derived configuration.
+authorization and never obtains another quote or slippage suggestion.
 
 Fixture tests cover upstream rounding vectors, verification refusal, BFF failure
 and cancellation, gross fee accounting, recipe floor rejection, appData identity

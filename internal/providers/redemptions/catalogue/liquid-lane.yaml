@@ -1,11 +1,10 @@
-# Asset catalogue, not a runnable executor strategy. See docs/LIQUID-LANE-ASSETS.md.
-# Authenticated recipes determine amounts, action references and permissions. Account/caller are discovered.
+# Reviewed issuer routes, not a runnable strategy. See docs/LIQUID-LANE-ASSETS.md.
+# Addresses never grant execution authority; authenticated recipes own amounts and recipients.
 version: 1
 provider: redemptions
 chainId: 1
-source: https://docs.symbiotic.fi/get-started/resources/addresses
-checkedAt: "2026-09-28"
-topologyBlock: 26074706
+source: curator-frontend/src/shared/lib/merkle/operations/authoring/catalog/types/rwa-routes.ts
+checkedAt: "2026-10-19"
 assets:
   - symbol: mF-ONE
     chainId: 1
@@ -17,7 +16,6 @@ assets:
     requestModes: [request]
     claimModes: []
     settlement: issuer-push
-
   - symbol: mROX
     chainId: 1
     family: midas
@@ -28,7 +26,6 @@ assets:
     requestModes: [request]
     claimModes: []
     settlement: issuer-push
-
   - symbol: mHYPER
     chainId: 1
     family: midas
@@ -39,7 +36,6 @@ assets:
     requestModes: [request]
     claimModes: []
     settlement: issuer-push
-
   - symbol: CarryTradeUSDTRYLeverage
     chainId: 1
     family: midas
@@ -50,7 +46,6 @@ assets:
     requestModes: [request]
     claimModes: []
     settlement: issuer-push
-
   - symbol: StockMarketTRBasisTrade
     chainId: 1
     family: midas
@@ -61,7 +56,6 @@ assets:
     requestModes: [request]
     claimModes: []
     settlement: issuer-push
-
   - symbol: mM1-USD
     chainId: 1
     family: midas
@@ -72,7 +66,6 @@ assets:
     requestModes: [request]
     claimModes: []
     settlement: issuer-push
-
   - symbol: JAAA
     chainId: 1
     family: centrifuge
@@ -83,7 +76,6 @@ assets:
     requestModes: [request]
     claimModes: [claim]
     settlement: claim
-
   - symbol: JTRSY
     chainId: 1
     family: centrifuge
@@ -94,7 +86,6 @@ assets:
     requestModes: [request]
     claimModes: [claim]
     settlement: claim
-
   - symbol: HYB
     chainId: 1
     family: centrifuge
@@ -105,7 +96,6 @@ assets:
     requestModes: [request]
     claimModes: [claim]
     settlement: claim
-
   - symbol: deJAAA
     chainId: 1
     family: centrifuge
@@ -116,7 +106,6 @@ assets:
     requestModes: [request]
     claimModes: [claim]
     settlement: claim
-
   - symbol: deJTRSY
     chainId: 1
     family: centrifuge
@@ -127,7 +116,6 @@ assets:
     requestModes: [request]
     claimModes: [claim]
     settlement: claim
-
   - symbol: HYBOND
     chainId: 1
     family: openeden
@@ -138,7 +126,6 @@ assets:
     requestModes: [request]
     claimModes: []
     settlement: issuer-push
-
   - symbol: PRIME
     chainId: 1
     family: figure
@@ -151,7 +138,6 @@ assets:
     settlement: issuer-push
     intermediate: "0x6aD038cA6C04e885630851278ca0a856Ad9a66Cc"
     redeemVault: "0xA8C3CF6183D49d5D372f8FC149BD2cb5CFC0faCd"
-
   - symbol: mGLOBAL
     chainId: 1
     family: midas
@@ -162,7 +148,6 @@ assets:
     requestModes: [request]
     claimModes: []
     settlement: issuer-push
-
   - symbol: AA_FalconXUSDC
     chainId: 1
     family: pareto
@@ -175,8 +160,6 @@ assets:
     requestModes: [queue-request, direct-request]
     claimModes: [queue-claim, direct-claim, instant-claim]
     settlement: claim
-
-  # Additional native issuer route, sourced from adapters IsUSN_Account.sol.
   - symbol: sUSN
     chainId: 1
     family: noon
@@ -186,8 +169,6 @@ assets:
     requestModes: [request]
     claimModes: [claim]
     settlement: claim
-
-  # Separate native USN -> USDC leg, reviewed 2026-10-12; see source closure in docs/LIQUID-LANE-ASSETS.md.
   - symbol: USN
     chainId: 1
     family: noon
@@ -197,3 +178,341 @@ assets:
     requestModes: [redeem-usn]
     claimModes: []
     settlement: atomic
+  - symbol: mAPOLLO
+    chainId: 1
+    family: midas
+    token: "0x7cf9dec92ca9fd46f8d86e7798b72624bc116c05"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x5aea6d35ed7b3b7ae78694b7da2ee880756af5c0"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mBASIS
+    chainId: 1
+    family: midas
+    token: "0x2a8c22e3b10036f3aef5875d04f8441d4188b656"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x19ab19e61a930bc5c7b75bf06cdd954218ca9f0b"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mBASIS
+    chainId: 1
+    family: midas
+    token: "0x2a8c22e3b10036f3aef5875d04f8441d4188b656"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x0d89c1c4799353f3805a3e6c4e1cbbb83217d123"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mBTC
+    chainId: 1
+    family: midas
+    token: "0x007115416ab6c266329a03b09a8aa39ac2ef7d9d"
+    outputAsset: "0x18084fba666a33d37592fa2633fd49a74dd93a88"
+    target: "0x30d9d1e76869516aea980390494aaed45c3efc1a"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mBTC
+    chainId: 1
+    family: midas
+    token: "0x007115416ab6c266329a03b09a8aa39ac2ef7d9d"
+    outputAsset: "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"
+    target: "0x30d9d1e76869516aea980390494aaed45c3efc1a"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mBTC
+    chainId: 1
+    family: midas
+    token: "0x007115416ab6c266329a03b09a8aa39ac2ef7d9d"
+    outputAsset: "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599"
+    target: "0x30d9d1e76869516aea980390494aaed45c3efc1a"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mEDGE
+    chainId: 1
+    family: midas
+    token: "0xbb51e2a15a9158ebe2b0ceb8678511e063ab7a55"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x9b2c5e30e3b1f6369fc746a1c1e47277396af15d"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mEVUSD
+    chainId: 1
+    family: midas
+    token: "0x548857309befb6fb6f20a9c5a56c9023d892785b"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x9c3743582e8b2d7ccb5e08caf3c9c33780ac446f"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mFARM
+    chainId: 1
+    family: midas
+    token: "0xa19f6e0df08a7917f2f8a33db66d0af31ff5eca6"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0xf4f042d90f0c0d3aba4a30caa6ac124b14a7e600"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mF-ONE
+    chainId: 1
+    family: midas
+    token: "0x238a700ed6165261cf8b2e544ba797bc11e466ba"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x375ea756418fe30eea21e1189104974c185abb48"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mGLO
+    chainId: 1
+    family: midas
+    token: "0x1dd91a111606382b77a917633ed90feaf25e0f76"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x55f3ab43e49ffb6b1fff5e2b310c21278bdaf0f5"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mGLO
+    chainId: 1
+    family: midas
+    token: "0x1dd91a111606382b77a917633ed90feaf25e0f76"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x027838c5f105490cadc36340ff2fe6c697690adb"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mGLOBAL
+    chainId: 1
+    family: midas
+    token: "0x7433806912eae67919e66aea853d46fa0aef98a8"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0xa0fc8bdfb1e6a705c1375810989b1d70a982b01b"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mGLOBAL
+    chainId: 1
+    family: midas
+    token: "0x7433806912eae67919e66aea853d46fa0aef98a8"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0xdbd621e67d9cffffcdcd316a27285f657c178e76"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mHyperBTC
+    chainId: 1
+    family: midas
+    token: "0xc8495eaff71d3a563b906295fcf2f685b1783085"
+    outputAsset: "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"
+    target: "0x16d4f955b0aa1b1570fe3e9bb2f8c19c407cdb67"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mHyperBTC
+    chainId: 1
+    family: midas
+    token: "0xc8495eaff71d3a563b906295fcf2f685b1783085"
+    outputAsset: "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599"
+    target: "0x16d4f955b0aa1b1570fe3e9bb2f8c19c407cdb67"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mHyperETH
+    chainId: 1
+    family: midas
+    token: "0x5a42864b14c0c8241ef5ab62dae975b163a2e0c1"
+    outputAsset: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+    target: "0x15f724b35a75f0c28f352b952ea9d1b24e348c57"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mMEV
+    chainId: 1
+    family: midas
+    token: "0x030b69280892c888670edcdcd8b69fd8026a0bf3"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0xac14a14f578c143625fc8f54218911e8f634184d"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mRe7BTC
+    chainId: 1
+    family: midas
+    token: "0x9fb442d6b612a6dcd2acc67bb53771ef1d9f661a"
+    outputAsset: "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599"
+    target: "0x4fd4dd7171d14e5bd93025ec35374d2b9b4321b0"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mRe7BTC
+    chainId: 1
+    family: midas
+    token: "0x9fb442d6b612a6dcd2acc67bb53771ef1d9f661a"
+    outputAsset: "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf"
+    target: "0x4fd4dd7171d14e5bd93025ec35374d2b9b4321b0"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mRe7BTC
+    chainId: 1
+    family: midas
+    token: "0x9fb442d6b612a6dcd2acc67bb53771ef1d9f661a"
+    outputAsset: "0x18084fba666a33d37592fa2633fd49a74dd93a88"
+    target: "0x4fd4dd7171d14e5bd93025ec35374d2b9b4321b0"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mRe7YIELD
+    chainId: 1
+    family: midas
+    token: "0x87c9053c819bb28e0d73d33059e1b3da80afb0cf"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x5356b8e06589de894d86b24f4079c629e8565234"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mSL
+    chainId: 1
+    family: midas
+    token: "0x76cc16608aa7cd32631bb151801bb095313f7bbd"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x8bee3870ad8293dce79e6f4cb049f7531bd57c22"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mTBILL
+    chainId: 1
+    family: midas
+    token: "0xdd629e5241cbc5919847783e6c96b2de4754e438"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0xf6e51d24f4793ac5e71e0502213a9bbe3a6d4517"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mTBILL
+    chainId: 1
+    family: midas
+    token: "0xdd629e5241cbc5919847783e6c96b2de4754e438"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x569d7dccbf6923350521ecbc28a555a500c4f0ec"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: mevBTC
+    chainId: 1
+    family: midas
+    token: "0xb64c014307622eb15046c66ff71d04258f5963dc"
+    outputAsset: "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599"
+    target: "0x2d7d5b1706653796602617350571b3f8999b950c"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: msyrupUSD
+    chainId: 1
+    family: midas
+    token: "0x20226607b4fa64228abf3072ce561d6257683464"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x9f7dd5462c183b6577858e16a13a4d864ce2f972"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: msyrupUSDp
+    chainId: 1
+    family: midas
+    token: "0x2fe058ccf29f123f9dd2aec0418aa66a877d8e50"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x71efa7af1686c5c04aa34a120a91cb4262679c44"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: JTRSY
+    chainId: 1
+    family: centrifuge
+    token: "0x8c213ee79581ff4984583c6a801e5263418c4b86"
+    outputAsset: "0xdac17f958d2ee523a2206206994597c13d831ec7"
+    target: "0xd6331e2efe21422f65b5a1b1070cf46589c75cab"
+    requestModes: [request]
+    claimModes: [claim]
+    settlement: claim
+  - symbol: JAAA
+    chainId: 1
+    family: centrifuge
+    token: "0x5a0f93d040de44e78f251b03c43be9cf317dcf64"
+    outputAsset: "0xdac17f958d2ee523a2206206994597c13d831ec7"
+    target: "0x4a76fb02421b1d38aaa40db541f59b2cb04b0770"
+    requestModes: [request]
+    claimModes: [claim]
+    settlement: claim
+  - symbol: HYB
+    chainId: 1
+    family: centrifuge
+    token: "0x4827c7ecce4f07adfe44a97165f06a199e7d2505"
+    outputAsset: "0xdac17f958d2ee523a2206206994597c13d831ec7"
+    target: "0xd01d499c7bb921d99f3a78ca7c9feddde95b716c"
+    requestModes: [request]
+    claimModes: [claim]
+    settlement: claim
+  - symbol: ACRDX
+    chainId: 1
+    family: centrifuge
+    token: "0x9477724bb54ad5417de8baff29e59df3fb4da74f"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x74a739ea1dc67c5a0179ebad665d1d3c4b80b712"
+    requestModes: [request]
+    claimModes: [claim]
+    settlement: claim
+  - symbol: wYLDS
+    chainId: 1
+    family: hastra
+    token: "0x6ad038ca6c04e885630851278ca0a856ad9a66cc"
+    outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    target: "0x6ad038ca6c04e885630851278ca0a856ad9a66cc"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+  - symbol: PRIME
+    chainId: 1
+    family: hastra
+    token: "0x19ebb35279a16207ec4ba82799cc64715065f7f6"
+    outputAsset: "0x6ad038ca6c04e885630851278ca0a856ad9a66cc"
+    target: "0x19ebb35279a16207ec4ba82799cc64715065f7f6"
+    requestModes: [unwrap]
+    claimModes: []
+    settlement: atomic
+  - symbol: AUTO
+    chainId: 1
+    family: hastra
+    token: "0x997e2efbce91d170b00ea402e35a66c887ee1da9"
+    outputAsset: "0x6ad038ca6c04e885630851278ca0a856ad9a66cc"
+    target: "0x997e2efbce91d170b00ea402e35a66c887ee1da9"
+    requestModes: [unwrap]
+    claimModes: []
+    settlement: atomic
+  - symbol: AUTO
+    chainId: 1
+    family: figure
+    token: "0x997e2efbce91d170b00ea402e35a66c887ee1da9"
+    outputAsset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    target: "0x6aD038cA6C04e885630851278ca0a856Ad9a66Cc"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+    intermediate: "0x6aD038cA6C04e885630851278ca0a856Ad9a66Cc"
+    redeemVault: "0xA8C3CF6183D49d5D372f8FC149BD2cb5CFC0faCd"
+  - symbol: BB_FalconXUSDC
+    chainId: 1
+    family: pareto
+    token: "0xacbb25b7dd30b6b2f7131865dc1023622de3b3d6"
+    outputAsset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    target: "0x5cC24f44cCAa80DD2c079156753fc1e908F495DC"
+    cdo: "0x433D5B175148dA32Ffe1e1A37a939E1b7e79be4d"
+    strategy: "0x17E9Ab2992dfecBe779a06A92a6cDB9fE6aEeEf3"
+    requestModes: [direct-request]
+    claimModes: []
+    settlement: claim
+    tranche: bb

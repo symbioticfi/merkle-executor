@@ -27,7 +27,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/go-errors/errors"
-	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
@@ -204,15 +203,6 @@ func serviceSeedTransaction(t *testing.T, ctx context.Context, client *ethclient
 		case <-ticker.C:
 		}
 	}
-}
-
-func serviceNode(t *testing.T, value any) yaml.Node {
-	t.Helper()
-	var node yaml.Node
-	if err := node.Encode(value); err != nil {
-		t.Fatal(err)
-	}
-	return node
 }
 
 func serviceRecipe(t *testing.T, leaf common.Hash, token, account common.Address) recipes.Recipe {

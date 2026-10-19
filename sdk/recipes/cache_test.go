@@ -116,7 +116,7 @@ func TestRecipeCacheReusesExactBytesAndIsolatesMutableBuilds(t *testing.T) {
 	raw := append(step(Call, pack(t, callArgs, common.HexToAddress("0x9999"), []byte{1, 2, 3, 4}, []*big.Int{})), 0xde, 0xad)
 	recipe := Recipe{Steps: [][]byte{raw}}
 	for _, batched := range []bool{false, true} {
-		t.Run(map[bool]string{false: "legacy", true: "batch"}[batched], func(t *testing.T) {
+		t.Run(map[bool]string{false: "single", true: "batch"}[batched], func(t *testing.T) {
 			r, c := cacheFixture(t, recipe)
 			for attempt := range 3 {
 				err := cachedPrepare(t, r, c, batched, func(_ Snapshot, got Recipe) error {
