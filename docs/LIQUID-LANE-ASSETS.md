@@ -21,7 +21,7 @@ MerkleAccount redemption.
 
 | Family | Assets | Provider modes | Proceeds |
 | --- | --- | --- | --- |
-| Midas | mF-ONE, mROX, mHYPER, CarryTradeUSDTRYLeverage, StockMarketTRBasisTrade, mM1-USD, mGLOBAL | `request` | Issuer pushes the requested output asset after approval. |
+| Midas | mF-ONE, mROX, mHYPER, CarryTradeUSDTRYLeverage, StockMarketTRBasisTrade, mM1-USD, mGLO, mGLOBAL | `request` | Issuer pushes the requested output asset after approval. |
 | Centrifuge ERC-7540 | JAAA, JTRSY, HYB, deJAAA, deJTRSY | `request`, `claim` | Account claims fulfilled shares from its asset-specific vault. |
 | OpenEden | HYBOND | `request` | Issuer processes its queue and pushes USDC. |
 | Figure/Hastra | PRIME | `request` | PRIME is redeemed to wYLDS; the issuer later pushes USDC for the wYLDS request. |
@@ -241,3 +241,5 @@ use the unmodified handler source, existing RecipeExecutor bytecode and a
 permission-enforcing account fixture with local burnable token/oracle fixtures.
 They prove local burn/payment/cleanup and fail-closed execution; they do not
 establish live issuer enrollment, treasury liquidity or production token behavior.
+
+mGLO uses its own Ethereum token, redemption vault and account factory in both catalogues. Only `redeemRequest(USDC, amount)` is authored: the issuer must greenlist the strategy account and later pushes settlement. Held mGLO uses unadjusted NAV. Instant redemption and its deferred 7% holdback have no admitted recipe or ledger here. The Liquid Lane account calendar is separate from direct issuer calls.

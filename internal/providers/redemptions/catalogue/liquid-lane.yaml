@@ -152,6 +152,18 @@ assets:
     intermediate: "0x6aD038cA6C04e885630851278ca0a856Ad9a66Cc"
     redeemVault: "0xA8C3CF6183D49d5D372f8FC149BD2cb5CFC0faCd"
 
+  # mGLO mainnet deployment checked at block 26225773; issuer calls are standard requests only.
+  - symbol: mGLO
+    chainId: 1
+    family: midas
+    token: "0x1DD91a111606382B77A917633ED90feAf25E0F76"
+    outputAsset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    target: "0x55f3Ab43E49FFb6b1FFf5E2B310C21278bDAf0f5"
+    factory: "0xBbe85FAAD7d3c4Fd52b959003efC79D82f5b7CFa"
+    requestModes: [request]
+    claimModes: []
+    settlement: issuer-push
+
   - symbol: mGLOBAL
     chainId: 1
     family: midas
