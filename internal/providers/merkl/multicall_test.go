@@ -191,7 +191,7 @@ func TestConstructorRequiresExplicitMulticallDeployment(t *testing.T) {
 }
 
 func TestPrepareValidatesWholeBatchBeforeReturningIdle(t *testing.T) {
-	for _, test := range []string{"valid below minimum", "later malformed claimed", "later malformed recipient", "later redirected recipient", "later stale claimed", "later invalid proof"} {
+	for _, test := range []string{"valid mixed idle and positive", "later malformed claimed", "later malformed recipient", "later redirected recipient", "later stale claimed", "later invalid proof"} {
 		t.Run(test, func(t *testing.T) {
 			rows, root, proofs := rewardBatch(t)
 			if test == "later invalid proof" {
@@ -251,11 +251,14 @@ func TestPrepareValidatesWholeBatchBeforeReturningIdle(t *testing.T) {
 				t.Fatal(err)
 			}
 			out, err := p.Prepare(context.Background(), provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
-			if err == nil || len(out.Actions) != 0 || len(out.SkipSteps) != 0 {
-				t.Fatalf("incomplete batch became usable claim/skip: %+v %v", out, err)
+			if test == "valid mixed idle and positive" {
+				if err != nil || len(out.Actions) != 1 {
+					t.Fatalf("idle token blocked positive rewards: %+v %v", out, err)
+				}
+				return
 			}
-			if (test == "valid below minimum") != errors.Is(err, provider.ErrNotReady) {
-				t.Fatalf("early below-minimum token hid later invalid data: %v", err)
+			if err == nil || errors.Is(err, provider.ErrNotReady) || len(out.Actions) != 0 || len(out.SkipSteps) != 0 {
+				t.Fatalf("idle token hid invalid later member: %+v %v", out, err)
 			}
 		})
 	}

@@ -20,6 +20,7 @@ one serialized transaction sender. [Design and comparison](docs/DESIGN.md).
 | Native on-chain operations | The committed recipe owns calls, reads, amount selection, eligibility gates, approvals, claims and output guards. The executor applies generic permission checks and simulation, without a protocol selector or deployment catalogue. |
 | CoW Swap | Quote, build account ERC-1271 authorization, wait for its confirmed transaction, submit/reconcile deterministic order UID, verify full fill on-chain. |
 | Liquid Lane RFQ | Acquire an HTTP quote, authorize the committed Request, publish idempotently and reconcile canonical Reactor settlement. |
+| Liquid Lane connector discounts | Verify signed connector witnesses and size a purchase within pinned funding, inventory, quote and budget; hosted connector service support is required. |
 | Merkl reward claims | Read V4 rewards, use cumulative amounts, verify effective distributor root/proof and recipient, encode an approved bounded claim. |
 | Deterministic runtime Inputs | `keeper.NewRecipeInputs()` resolves exact recipe constraints through the shared numerical lens. Unknown or unresolved Inputs fail closed. |
 
@@ -104,8 +105,10 @@ reads. Arbitrary data reads and ERC-1271 checks preserve their original caller
 and separate `eth_call` execution. Full simulations remain isolated EVM calls
 while sharing JSON arrays with getters.
 Dependent reads and the later closing canonical checks remain ordered.
-Automatic Merkl learns its distributor after recipe authentication and uses a later
-strict aggregate. Numeric values for all adapters share one prefix lens call. Verified recipe-event bodies can
+Automatic Merkl learns its distributors after recipe authentication, fetches all
+committed reward witnesses once and uses a later strict aggregate per claim action.
+It supports the frontend guarded execute calls while preserving their root,
+recipient and exact-delta checks. Numeric values for all adapters share one prefix lens call. Verified recipe-event bodies can
 be reused after fresh metadata and canonical event-header checks; account state,
 permissions and simulation remain fresh. The retained recipe cache has a fixed
 16777216-byte (16 MiB) budget. Entries are also limited by
@@ -139,8 +142,9 @@ Manage step still occupies a runtime slot and must pass full simulation.
 
 For a claim → Morpho-cap → Aave-overflow recipe, commit the claim and issuer
 operations, eligibility checks, balance reads and routing arithmetic in the recipe.
-Startup registers CoW, Merkl and Liquid Lane RFQ providers plus generic recipe
-Inputs. Those protocol providers supply HTTP orders, quotes and reward proofs;
+Startup registers CoW, Merkl, Liquid Lane RFQ and connector discount providers plus
+generic recipe Inputs. Those providers supply HTTP orders, quotes, signed witnesses
+and reward proofs;
 native protocol actions use the generic execution path. Request IDs and claim
 eligibility must come from committed literals, reads and results. Runtime inputs
 use exact recipe-result anchors; bounds alone never select an amount and unknown
@@ -243,9 +247,12 @@ Fill reconciliation. One ordinary ERC20 output to the derived account is support
 [supported recipe shapes and limits](docs/PROVIDERS.md#liquid-lane-rfq-consumer-redemptions)
 are validated before requesting a quote.
 
-Signed Liquid Lane discount acquisition and signatures belong to vault-solver. The
-daemon does not include a signed-swap acquisition provider; the SDK exposes
-protocol-neutral provider interfaces for host integrations. The recipe fixes
+Signed connector discount acquisition uses `liquidlane-discount` with strict
+connector-domain verification. The inspected backend signs an incompatible adapter
+domain, so hosted connector acquisition remains blocked pending matching service
+support. [Exact wire and read bounds](api/schemas/LIQUID_LANE_DISCOUNT.md) and
+[recipe compatibility](docs/RECIPE-COMPATIBILITY.md) distinguish local validation
+from service prerequisites. The recipe fixes
 identities, permitted layouts and economic constraints; protocol endpoints, expiry limits and preparation
 bounds use fixed policies. CoW uses its own automatic slippage calculation.
 

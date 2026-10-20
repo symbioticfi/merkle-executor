@@ -37,7 +37,7 @@ func TestMerklProofViemGolden(t *testing.T) {
 	}
 }
 func TestPrepareCumulativeSelfClaim(t *testing.T) {
-	for _, test := range []string{"valid", "wrong-root", "redirected", "duplicate-token", "proof-layout", "already-claimed"} {
+	for _, test := range []string{"valid", "recipient override", "wrong-root", "redirected", "duplicate-token", "proof-layout", "already-claimed"} {
 		t.Run(test, func(t *testing.T) {
 			sibling := common.HexToHash("0x" + strings.Repeat("11", 32))
 			root := common.HexToHash("0xd98400418a73f31e4b681498ddc089b9c9b92f409942f76789590c1cae24f0ab")
@@ -76,7 +76,7 @@ func TestPrepareCumulativeSelfClaim(t *testing.T) {
 					}
 					return method.Outputs.Pack(big.NewInt(n), big.NewInt(500), root)
 				case "claimRecipient":
-					if test == "redirected" {
+					if test == "redirected" || test == "recipient override" {
 						return method.Outputs.Pack(addr(9))
 					}
 					return method.Outputs.Pack(common.Address{})
@@ -93,6 +93,11 @@ func TestPrepareCumulativeSelfClaim(t *testing.T) {
 				t.Fatalf("claim ABI layout changed: %d", len(payload))
 			}
 			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: len(payload), AmountInputs: []uint{0}, ClaimableInputs: []uint{1}}
+			if test == "recipient override" {
+				cfg.DirectRecipient = true
+				payload = a.PackClaimWithRecipient([]common.Address{addr(3)}, []common.Address{addr(1)}, []*big.Int{big.NewInt(100)}, [][][32]byte{{sibling}}, []common.Address{addr(3)}, [][]byte{{}})
+				cfg.CalldataBytes = len(payload)
+			}
 			if test == "proof-layout" {
 				cfg.ProofLengths[0] = 2
 			}
@@ -101,7 +106,7 @@ func TestPrepareCumulativeSelfClaim(t *testing.T) {
 				t.Fatal(e)
 			}
 			out, e := p.Prepare(context.Background(), provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
-			if test != "valid" {
+			if test != "valid" && test != "recipient override" {
 				if e == nil {
 					t.Fatalf("invalid %s accepted", test)
 				}

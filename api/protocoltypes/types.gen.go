@@ -174,3 +174,21 @@ type RfqOrdersResponse struct {
 type CowSlippageResponse struct {
 	SlippageBPS int64 `json:"slippageBps"`
 }
+
+type LiquidLaneDiscountTerms struct {
+	Adapter       string `json:"adapter"`
+	TokenToRedeem string `json:"tokenToRedeem"`
+	Discount      string `json:"discount"`
+	Signer        string `json:"signer"`
+	Protocol      string `json:"protocol"`
+	Nonce         string `json:"nonce"`
+	Deadline      int64  `json:"deadline"`
+}
+
+type LiquidLaneResolvedDiscount struct {
+	DiscountID        string                  `json:"discountId"`
+	Discount          LiquidLaneDiscountTerms `json:"discount"`
+	SignerSignature   string                  `json:"signerSignature"`
+	ProtocolDeadline  int64                   `json:"protocolDeadline"`
+	ProtocolSignature string                  `json:"protocolSignature"`
+}

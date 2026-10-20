@@ -37,6 +37,8 @@ type Config struct {
 	ClaimableInputs     []uint                `yaml:"claimableInputs"`
 	SkipIfEmpty         bool                  `yaml:"skipIfEmpty"`
 	DedicatedClaimGroup bool                  `yaml:"dedicatedClaimGroup"`
+	DirectRecipient     bool                  `yaml:"directRecipient"`
+	AllowIdle           bool                  `yaml:"allowIdle"`
 }
 type Client struct{ http *protocolio.Client }
 
@@ -202,6 +204,10 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, read func()
 	if e != nil {
 		return provider.Output{}, e
 	}
+	return p.prepareRewards(s, entries, read)
+}
+
+func (p *Provider) prepareRewards(s provider.Snapshot, entries []wire.MerklEntry, read func() ([]multicall.Multicall3Result, error)) (provider.Output, error) {
 	var rewards []wire.MerklReward
 	found := false
 	for _, entry := range entries {
@@ -258,7 +264,7 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, read func()
 	inputs := map[uint]string{}
 	var defaultRecipient common.Address
 	defaultLoaded := false
-	belowMinimum := false
+	claimable := new(big.Int)
 	for i, t := range p.tokens {
 		reward := selected[t]
 		amount, e := parse.Uint256(reward.Amount)
@@ -311,11 +317,11 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, read func()
 			}
 			recipient = defaultRecipient
 		}
-		if recipient != (common.Address{}) && recipient != s.Account {
+		if !p.cfg.DirectRecipient && recipient != (common.Address{}) && recipient != s.Account {
 			return provider.Output{}, errors.New("Merkl distributor would redirect rewards away from account")
 		}
-		if delta.Cmp(p.minimum) < 0 {
-			belowMinimum = true
+		if delta.Cmp(p.minimum) >= 0 {
+			claimable.Add(claimable, delta)
 		}
 		users[i] = s.Account
 		amounts[i] = amount
@@ -327,17 +333,21 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, read func()
 		}
 	}
 	// An early idle token must not hide invalid data in later batch members.
-	if belowMinimum {
+	if claimable.Sign() == 0 && !p.cfg.AllowIdle {
 		return p.empty("Merkl rewards below minClaimable")
 	}
 	payload, e := a.TryPackClaim(users, p.tokens, amounts, proofs)
+	if p.cfg.DirectRecipient {
+		recipients := append([]common.Address(nil), users...)
+		payload, e = a.TryPackClaimWithRecipient(users, p.tokens, amounts, proofs, recipients, make([][]byte, len(users)))
+	}
 	if e != nil {
 		return provider.Output{}, errors.New("encode Merkl claim")
 	}
 	if len(payload) != p.cfg.CalldataBytes {
 		return provider.Output{}, errors.New("Merkl claim does not fit approved calldataBytes layout")
 	}
-	data, _ := json.Marshal(map[string]string{"root": root.Hex(), "tokens": strconv.Itoa(len(p.tokens))})
+	data, _ := json.Marshal(map[string]string{"root": root.Hex(), "tokens": strconv.Itoa(len(p.tokens)), "claimable": claimable.String()})
 	return provider.Output{Inputs: inputs, Actions: map[string]hexutil.Bytes{p.cfg.Action: payload}, Data: data}, nil
 }
 

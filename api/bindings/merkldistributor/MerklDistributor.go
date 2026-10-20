@@ -26,7 +26,7 @@ var (
 
 // MerklDistributorMetaData contains all meta data concerning the MerklDistributor contract.
 var MerklDistributorMetaData = bind.MetaData{
-	ABI: "[{\"type\":\"function\",\"name\":\"claim\",\"inputs\":[{\"name\":\"users\",\"type\":\"address[]\"},{\"name\":\"tokens\",\"type\":\"address[]\"},{\"name\":\"amounts\",\"type\":\"uint256[]\"},{\"name\":\"proofs\",\"type\":\"bytes32[][]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"getMerkleRoot\",\"inputs\":[],\"outputs\":[{\"name\":\"root\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"claimed\",\"inputs\":[{\"name\":\"user\",\"type\":\"address\"},{\"name\":\"token\",\"type\":\"address\"}],\"outputs\":[{\"name\":\"amount\",\"type\":\"uint208\"},{\"name\":\"timestamp\",\"type\":\"uint48\"},{\"name\":\"merkleRoot\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"claimRecipient\",\"inputs\":[{\"name\":\"user\",\"type\":\"address\"},{\"name\":\"token\",\"type\":\"address\"}],\"outputs\":[{\"name\":\"recipient\",\"type\":\"address\"}],\"stateMutability\":\"view\"}]",
+	ABI: "[{\"type\":\"function\",\"name\":\"claim\",\"inputs\":[{\"name\":\"users\",\"type\":\"address[]\"},{\"name\":\"tokens\",\"type\":\"address[]\"},{\"name\":\"amounts\",\"type\":\"uint256[]\"},{\"name\":\"proofs\",\"type\":\"bytes32[][]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"claimWithRecipient\",\"inputs\":[{\"name\":\"users\",\"type\":\"address[]\"},{\"name\":\"tokens\",\"type\":\"address[]\"},{\"name\":\"amounts\",\"type\":\"uint256[]\"},{\"name\":\"proofs\",\"type\":\"bytes32[][]\"},{\"name\":\"recipients\",\"type\":\"address[]\"},{\"name\":\"datas\",\"type\":\"bytes[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"getMerkleRoot\",\"inputs\":[],\"outputs\":[{\"name\":\"root\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"claimed\",\"inputs\":[{\"name\":\"user\",\"type\":\"address\"},{\"name\":\"token\",\"type\":\"address\"}],\"outputs\":[{\"name\":\"amount\",\"type\":\"uint208\"},{\"name\":\"timestamp\",\"type\":\"uint48\"},{\"name\":\"merkleRoot\",\"type\":\"bytes32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"claimRecipient\",\"inputs\":[{\"name\":\"user\",\"type\":\"address\"},{\"name\":\"token\",\"type\":\"address\"}],\"outputs\":[{\"name\":\"recipient\",\"type\":\"address\"}],\"stateMutability\":\"view\"}]",
 	ID:  "MerklDistributor",
 }
 
@@ -110,6 +110,28 @@ func (merklDistributor *MerklDistributor) UnpackClaimRecipient(data []byte) (com
 	}
 	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
 	return out0, nil
+}
+
+// PackClaimWithRecipient is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x9fb67b58.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function claimWithRecipient(address[] users, address[] tokens, uint256[] amounts, bytes32[][] proofs, address[] recipients, bytes[] datas) returns()
+func (merklDistributor *MerklDistributor) PackClaimWithRecipient(users []common.Address, tokens []common.Address, amounts []*big.Int, proofs [][][32]byte, recipients []common.Address, datas [][]byte) []byte {
+	enc, err := merklDistributor.abi.Pack("claimWithRecipient", users, tokens, amounts, proofs, recipients, datas)
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackClaimWithRecipient is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x9fb67b58.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function claimWithRecipient(address[] users, address[] tokens, uint256[] amounts, bytes32[][] proofs, address[] recipients, bytes[] datas) returns()
+func (merklDistributor *MerklDistributor) TryPackClaimWithRecipient(users []common.Address, tokens []common.Address, amounts []*big.Int, proofs [][][32]byte, recipients []common.Address, datas [][]byte) ([]byte, error) {
+	return merklDistributor.abi.Pack("claimWithRecipient", users, tokens, amounts, proofs, recipients, datas)
 }
 
 // PackClaimed is the Go binding used to pack the parameters required for calling

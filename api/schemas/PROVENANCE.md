@@ -1,22 +1,41 @@
 # Protocol schema and ABI provenance
 
 These are **manually selected consumer subsets**, not complete upstream OpenAPI
-specifications. Unknown response fields are tolerated; providers validate every
+specifications. Unknown response fields are tolerated except for the strict connector
+discount witness subset; providers validate every
 field used for authorization, pricing, identity, proof verification and settlement.
 No schema or endpoint is fetched automatically during a normal build.
 
 - `protocols.json`: JSON Schema wire subsets for Liquid Lane public consumer RFQ,
+  connector discount witnesses,
   Merkl V4 reward responses and CoW quote/order requests and status responses.
   `hack/generate-protocol-types.py` generates `api/protocoltypes/types.gen.go`.
 - Liquid Lane public consumer wire and contract sources are pinned in
-  [LIQUID_LANE_RFQ.md](LIQUID_LANE_RFQ.md). Signed discount acquisition belongs to
-  vault-solver and has no daemon wire subset or runtime provider.
+  [LIQUID_LANE_RFQ.md](LIQUID_LANE_RFQ.md). Connector discount subset, ABI, source
+  pins and current hosted backend incompatibility are recorded in
+  [LIQUID_LANE_DISCOUNT.md](LIQUID_LANE_DISCOUNT.md).
 - Merkl response subset: sibling `curator-frontend` Merkl V4 parser and
   <https://api.merkl.xyz/docs>, inspected 2026-09-27. Distributor ABI subset was
   transcribed from <https://github.com/AngleProtocol/merkl-contracts/blob/main/contracts/Distributor.sol>:
-  `claim`, `claimed`, `getMerkleRoot`, `claimRecipient`. Its current implementation
+  `claim`, `claimWithRecipient`, `claimed`, `getMerkleRoot`, `claimRecipient`. Its current implementation
   requires self/operator authorization and supports recipient overrides. Operators
   must verify the actual configured proxy implementation matches this subset.
+  The automatic provider also accepts the frontend's canonical guarded account
+  `execute(bytes[],bytes[],uint256[])` claim, including its checked-operation outer
+  wrapper. It follows pinned CALL input bindings and fills only cumulative/proof
+  words. Root, recipient, claimed-ledger and exact cash-delta checks remain pinned.
+  The recipient-override shape requires recipients equal the authenticated account
+  and empty callback data.
+  `internal/providers/merkl/testdata/generate-frontend.mjs` regenerates the two-token
+  permission fixture from a supplied frontend checkout; the JSON records revision
+  and source hashes. `cmd/merkle-executor/testdata/merkl/RecipeCapability.sol` is
+  `forge flatten` output of adapters `0427c657375512a87158010c323556739fe96d1b`
+  `src/contracts/merkle-adapter/capabilities/RecipeCapability.sol`, including its
+  unmodified dependency closure. The adjacent `generate.py` compiles it offline
+  with solc 0.8.37, Osaka, via-IR, optimizer 200, metadata hash disabled. The
+  account/distributor scaffolding and tokens are local fixtures. These tests
+  establish execution of current frontend wire and atomic guards on Anvil;
+  they do not establish a live distributor deployment or API availability.
 - `api/abi/Multicall3.json`: only `aggregate3((address,bool,bytes)[])`, extracted
   from the compiled official [Multicall3 source](https://github.com/mds1/multicall3/blob/b667d67ecfa5361a81e8f110234ce242613b0012/src/Multicall3.sol)
   at commit `b667d67ecfa5361a81e8f110234ce242613b0012`, inspected 2026-10-12.

@@ -5,7 +5,7 @@ used as lowercase state, log and metric identifiers. Duplicate normalized addres
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
 The recovery fingerprint includes runtime policy version `1`, executor, account,
-caller, chain ID, curator configuration and transaction-manager fee policy. The daemon installs automatic CoW, Merkl and Liquid Lane RFQ providers plus
+caller, chain ID, curator configuration and transaction-manager fee policy. The daemon installs automatic CoW, Merkl, Liquid Lane RFQ and connector discount providers plus
 `keeper.NewRecipeInputs()` in a fixed order. Typed provider settings are internal
 recipe and recovery data.
 Token pairs, amounts, minimum proceeds, action/input mappings, deployment targets
@@ -55,6 +55,11 @@ ownership, overlapping/partial bindings and masked bytes in an unknown managed
 action that have neither a committed full-word binding nor an owning automatic
 provider. A curator artifact's masked preimage does not select an amount. Fully
 pinned static Manage actions remain usable. Input indexes are bounded to 0..4095.
+
+These numerical anchoring rules apply to the native input resolver and
+read-budgeted order providers. Connector-signed terms and Merkl proof witnesses
+follow their owning provider policies below: their signed or proven economics
+are valid execution-time inputs, with the original contract checks preserved.
 
 ## Native on-chain recipes
 
@@ -127,7 +132,7 @@ simulations remain isolated while independent calls may share an HTTP array.
 Failed/malformed aggregates never fall back to individual calls.
 [Getter provenance and compatibility limits](../api/schemas/READ_BATCHING.md).
 
-Merkl performs one dedicated strict aggregate of effective root, default recipient,
+Each Merkl claim action performs one dedicated strict aggregate of effective root, default recipient,
 and claimed/recipient getters for each token: `2 + 2N` inner reads, at most 66 for
 32 tokens. The automatic adapter learns the distributor from authenticated recipe
 bytes after metadata discovery, so this aggregate is a later stage. A recipe with
@@ -166,16 +171,35 @@ until the scan completes. No new quote is obtained for an existing job.
 
 ## Merkl cumulative account rewards
 
-The automatic adapter recognizes canonical committed `claim(users,tokens,amounts,
-proofs)` actions. It requires the authenticated account as every user, pinned token
-addresses, equal arrays of 1..32 entries, committed proof depths and a pinned
-distributor. It fetches `https://api.merkl.xyz`, verifies cumulative reward amounts
-and proofs against the effective on-chain root, and checks claimed amounts plus
-per-token/default recipient routing through the strict aggregate. The default
-recipient is read once. It fills the existing masked amount/proof words and declared
-cumulative-amount Inputs; it does not infer uncommitted claimable-delta mappings.
-Absent/below-minimum rewards remain idle; automatic claims use a one-unit minimum.
-Multiple claim actions in one executor are currently unsupported.
+The automatic adapter recognizes canonical committed `claim` and
+`claimWithRecipient` actions and the frontend's guarded account execute wrappers.
+It requires the authenticated account as every user, pinned token addresses, equal
+arrays of 1..32 entries, committed proof depths and a pinned distributor. Wrapped
+claims retain the canonical root, recipient, cumulative-ledger and exact cash-delta
+checks. It follows committed CALL input bindings through at most eight account
+capability wrappers; all instructions, queries and framing stay pinned. Explicit
+recipient overrides must pin this account with empty callback data.
+
+One rewards HTTP request supplies witnesses for every claim action in the recipe.
+Every configured token must have a unique API row with an exact approved proof
+shape, a proof matching the pinned-block effective root, and a cumulative amount
+at least the pinned-block claimed ledger. Each action uses one strict distributor
+aggregate. Proof length growth and root/recipient guard changes require refreshed
+permissions; the provider never expands arrays, edits instructions or adds claims
+from unused permission leaves.
+
+All claim actions are prepared together. A raw multi-token claim can contain idle
+members when another member is positive. For a dedicated single-token Manage,
+an Input gate is owned as the verified cumulative-minus-claimed delta, allowing an
+idle guarded claim to remain zero-gated alongside positive claims. A shared group
+or a different gate expression retains its committed recipe policy. The provider
+fills the existing cumulative/proof fields and their declared Inputs; it does not
+replace gates or skip steps. When all these optional claims are idle, their zero gates remain usable alongside
+other ready actions; the engine classifies idle work across the whole recipe.
+All-idle Merkl claims without dedicated optional gates remain not ready. The normal daemon
+Anvil fixture `TestAnvilFrontendGuardedMerklMixedRewards` executes two freshly
+frontend-generated guarded claims, checks the idle/positive combination and rejects
+underpayment through the unchanged exact-cash-delta guard.
 
 ## CoW asynchronous ERC-1271 sell order
 
@@ -197,6 +221,20 @@ Advance verifies the exact confirmed account sign call before order POST. Idempo
 lookup/POST preserves the UID through ambiguity and restart; recovery uses only
 persisted config/order and canonical execution evidence. Partial fills stay owned,
 and terminal completion requires on-chain settlement evidence as well as API state.
+
+## Liquid Lane connector discounts
+
+`liquidlane-discount` acquires the documented pair-selected signed witness and
+verifies the exact `LiquidLaneConnector` domain at precision 100000000. It supports
+one canonical frontend `ll-executing` signed swap, including native funding and
+its exact cash/recipient/RWA deltas and approval reset. Execution-time amount and
+payment selection is bounded by the pinned connector and unchanged recipe.
+The inspected backend still signs `LiquidLaneAdapter` at precision 1000000, so
+hosted connector acquisition remains blocked and fails closed.
+[Discount source pins and limitations](../api/schemas/LIQUID_LANE_DISCOUNT.md)
+record the precise wire, funding shape, signature framing and read bounds.
+[Recipe compatibility](RECIPE-COMPATIBILITY.md) distinguishes authoring, runtime
+and service prerequisites.
 
 ## Recovery and provider interfaces
 

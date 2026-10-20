@@ -25,6 +25,38 @@
   },
   {
     "type": "function",
+    "name": "claimWithRecipient",
+    "inputs": [
+      {
+        "name": "users",
+        "type": "address[]"
+      },
+      {
+        "name": "tokens",
+        "type": "address[]"
+      },
+      {
+        "name": "amounts",
+        "type": "uint256[]"
+      },
+      {
+        "name": "proofs",
+        "type": "bytes32[][]"
+      },
+      {
+        "name": "recipients",
+        "type": "address[]"
+      },
+      {
+        "name": "datas",
+        "type": "bytes[]"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "getMerkleRoot",
     "inputs": [],
     "outputs": [

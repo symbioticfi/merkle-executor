@@ -52,6 +52,7 @@ Omitting this seam retains `keeper.Config.Tree` local-file behavior for SDK cons
 
 The daemon derives accounts at startup and uses curator-backend for this seam. It
 fetches only during new preparation, preserving saved-attempt and external-order
-recovery during backend outages. Signed Liquid Lane discount/signature acquisition
-belongs to vault-solver, while daemon Merkl and CoW clients continue direct API
-acquisition. No vault-solver code or protocol policy moves into the SDK.
+recovery during backend outages. The daemon owns its Merkl, CoW, RFQ and strict
+connector discount clients; [discount provenance](../api/schemas/LIQUID_LANE_DISCOUNT.md)
+records the hosted connector service prerequisite. No protocol policy moves into
+the SDK.

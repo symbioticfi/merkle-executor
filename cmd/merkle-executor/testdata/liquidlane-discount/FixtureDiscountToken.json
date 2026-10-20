@@ -1,0 +1,189 @@
+{
+  "abi": [
+    {
+      "type": "function",
+      "name": "allowance",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "approve",
+      "inputs": [
+        {
+          "name": "spender",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "balanceOf",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "decimals",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint8",
+          "internalType": "uint8"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "mint",
+      "inputs": [
+        {
+          "name": "to",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "payoutBps",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "setPayoutBps",
+      "inputs": [
+        {
+          "name": "value",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "transfer",
+      "inputs": [
+        {
+          "name": "to",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "transferFrom",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "to",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    }
+  ],
+  "bytecode": "0x60808060405234601b5761271060025561034690816100208239f35b5f80fdfe6080806040526004361015610012575f80fd5b5f3560e01c908163020f09b7146102d957508063095ea7b31461029257806323b872dd14610206578063313ce567146101eb57806340c10f19146101ae57806370a08231146101775780638a811dc61461015e578063a9059cbb146100d35763dd62ed3e1461007f575f80fd5b346100cf5760403660031901126100cf576100986102f3565b6100a0610309565b6001600160a01b039182165f908152600160209081526040808320949093168252928352819020549051908152f35b5f80fd5b346100cf5760403660031901126100cf576100ec6102f3565b60243590335f525f60205260405f2061010683825461031f565b90556002549182810292818404149015171561014a5760018060a01b03165f525f60205261013d61271060405f209204825461032c565b9055602060405160018152f35b634e487b7160e01b5f52601160045260245ffd5b346100cf5760203660031901126100cf57600435600255005b346100cf5760203660031901126100cf576001600160a01b036101986102f3565b165f525f602052602060405f2054604051908152f35b346100cf5760403660031901126100cf576001600160a01b036101cf6102f3565b165f525f60205260405f206101e7602435825461032c565b9055005b346100cf575f3660031901126100cf57602060405160128152f35b346100cf5760603660031901126100cf5761021f6102f3565b610227610309565b6044359160018060a01b0316805f52600160205260405f2060018060a01b0333165f5260205260405f2061025c84825461031f565b90555f525f60205260405f2061027383825461031f565b905560018060a01b03165f525f60205261013d60405f2091825461032c565b346100cf5760403660031901126100cf576102ab6102f3565b335f52600160205260405f209060018060a01b03165f5260205260405f206024359055602060405160018152f35b346100cf575f3660031901126100cf576020906002548152f35b600435906001600160a01b03821682036100cf57565b602435906001600160a01b03821682036100cf57565b9190820391821161014a57565b9190820180921161014a5756fea164736f6c6343000825000a",
+  "source": "FixtureDiscount.sol",
+  "dependenciesSha256": {
+    "FixtureDiscount.sol": "5a1d611fb343c1c3fe854b04355f30ca97f9dd6608535fb5a8d8dd7080a109da",
+    "LiquidLaneConnector.sol": "7c2ed1bc4e4efb9699a3770b680aca63c6a8275e0a4af73433cdbebd36188b37"
+  },
+  "sourceSha256": "5a1d611fb343c1c3fe854b04355f30ca97f9dd6608535fb5a8d8dd7080a109da",
+  "compiler": "0.8.37+commit.f401782d"
+}
