@@ -16,7 +16,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/curator"
 	"github.com/symbioticfi/merkle-executor/internal/observability"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/aave"
 	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlanerfq"
 	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
@@ -24,6 +23,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/txmanager"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/aave"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
@@ -91,14 +91,18 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 		for _, registration := range []struct {
 			name string
 			new  func(providerRegistry.Deps) (provider.Provider, error)
-		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}, {"aave", aave.NewAutomatic}} {
+		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}} {
 			p, err := registration.new(providerRegistry.Deps{Chain: client, HTTP: httpClient})
 			if err != nil {
 				return errors.Errorf("configure provider %s: %w", registration.name, err)
 			}
 			s.Providers = append(s.Providers, p)
 		}
-		s.Providers = append(s.Providers, keeper.NewRecipeInputs())
+		capacity, err := aave.New(client)
+		if err != nil {
+			return errors.Errorf("configure Aave capacity: %w", err)
+		}
+		s.Providers = append(s.Providers, capacity, keeper.NewRecipeInputs())
 		strategies = append(strategies, s)
 	}
 	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}

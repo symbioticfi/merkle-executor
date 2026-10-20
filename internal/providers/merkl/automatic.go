@@ -10,10 +10,10 @@ import (
 	"github.com/go-errors/errors"
 	multicall "github.com/symbioticfi/merkle-executor/api/bindings/multicall3"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 

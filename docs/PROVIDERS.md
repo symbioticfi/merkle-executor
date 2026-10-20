@@ -63,7 +63,7 @@ policy below, with the original contract checks preserved.
 
 ## Aave V3 capacity
 
-The default [Aave provider](../internal/providers/aave/README.md) owns Input 0 for
+The default [Aave provider](../sdk/providers/aave/README.md) owns Input 0 for
 one authenticated guarded borrow. It computes capacity after replaying the supply
 prefix at the pinned block using eth_call-only code. The committed recipe still
 chooses the borrow amount, caps total debt and verifies health. No manual amount

@@ -15,10 +15,9 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
-	registry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/aave"
 	executorABI "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/aave"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
@@ -46,7 +45,7 @@ func TestAnvilAavePostSupplyCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := owners[0]
-	raw, err := os.ReadFile("../../internal/providers/aave/lens/FixtureAave.json")
+	raw, err := os.ReadFile("../../sdk/providers/aave/lens/FixtureAave.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,14 +127,11 @@ func TestAnvilAavePostSupplyCapacity(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot := provider.Snapshot{Account: account, Executor: executor, Caller: owner, BlockNumber: header.Number}
-	native, err := aave.NewAutomatic(registry.Deps{Chain: reader})
+	native, err := aave.New(reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rp := native.(interface {
-		PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) (provider.Output, error)
-	})
-	out, err := rp.PrepareRecipe(ctx, snapshot, r, tree, nil)
+	out, err := native.PrepareRecipe(ctx, snapshot, r, tree, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +158,7 @@ func TestAnvilAavePostSupplyCapacity(t *testing.T) {
 	// Runtime identity and account roles remain real during the prefix replay.
 	wrong := snapshot
 	wrong.Executor = owners[1]
-	if _, err = rp.PrepareRecipe(ctx, wrong, r, tree, nil); err == nil {
+	if _, err = native.PrepareRecipe(ctx, wrong, r, tree, nil); err == nil {
 		t.Fatal("prefix ignored account permissions")
 	}
 	wrongWitness := map[uint]string{1: "1"}
@@ -186,7 +182,7 @@ func TestAnvilAavePostSupplyCapacity(t *testing.T) {
 	}
 
 	// Probe the bounded native edge cases without a supply prefix.
-	artifactRaw, err := os.ReadFile("../../internal/providers/aave/lens/AaveBorrowProbe.json")
+	artifactRaw, err := os.ReadFile("../../sdk/providers/aave/lens/AaveBorrowProbe.json")
 	if err != nil {
 		t.Fatal(err)
 	}

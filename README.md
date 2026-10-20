@@ -143,7 +143,7 @@ For a claim → Morpho-cap → Aave-overflow recipe, commit the claim and issuer
 operations, eligibility checks, balance reads and routing arithmetic in the recipe.
 Startup registers CoW, Merkl, Liquid Lane RFQ and Aave V3 capacity providers plus
 generic recipe Inputs. Aave capacity comes from an authenticated post-supply eth_call probe;
-[its recipe](internal/providers/aave/README.md) selects the actual borrow amount
+[its recipe](sdk/providers/aave/README.md) selects the actual borrow amount
 and enforces the health floor. The other providers supply HTTP orders, quotes
 and reward proofs;
 native protocol actions use the generic execution path. Request IDs and claim

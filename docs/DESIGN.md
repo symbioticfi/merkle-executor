@@ -121,7 +121,7 @@ The Aave V3 capacity provider supplies Input 0 only to the recognized borrow
 at the original executor before reading capacity. Persisted numerical witnesses
 must match full original execution. Multiple capacity groups, interleaved effects
 and unresolved prior provider data fail closed. The helper exists only as RPC
-code-override runtime. See [Aave capacity](../internal/providers/aave/README.md).
+code-override runtime. See [Aave capacity](../sdk/providers/aave/README.md).
 
 Inputs must resolve through exact generic recipe constraints or an authenticated
 off-chain provider. A native request ID can be committed directly or derived by

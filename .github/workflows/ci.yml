@@ -19,7 +19,7 @@ jobs:
         with:
           version: v1.8.1
       - run: make check
-      - run: make generate && git diff --exit-code -- api sdk/bindings sdk/recipes/lens internal/providers/aave/lens
+      - run: make generate && git diff --exit-code -- api sdk/bindings sdk/recipes/lens sdk/providers/aave/lens
       - run: make integration
 
       - env:

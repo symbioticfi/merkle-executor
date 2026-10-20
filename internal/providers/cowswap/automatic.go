@@ -12,11 +12,11 @@ import (
 	"github.com/go-errors/errors"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
