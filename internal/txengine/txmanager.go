@@ -1643,7 +1643,7 @@ func (m *Manager) waitForConfirmations(
 // start time. Single-call backends keep their separate sequential timeout contexts.
 func (m *Manager) confirmationOpening(ctx context.Context, hash common.Hash) (*types.Header, *types.Receipt, error, error) {
 	if _, ok := m.backend.(protocolio.BatchReader); !ok {
-		head, he := m.confirmationHead(ctx)
+		head, he := m.confirmationHeader(ctx, nil)
 		receipt, re := m.confirmationReceipt(ctx, hash)
 		return head, receipt, he, re
 	}
@@ -1659,10 +1659,6 @@ func (m *Manager) confirmationOpening(ctx context.Context, hash common.Hash) (*t
 	}
 	confirmed, err := confirmationReceiptResult(hash, receipt.Receipt, receipt.Err)
 	return head.Header, confirmed, head.Err, err
-}
-
-func (m *Manager) confirmationHead(ctx context.Context) (*types.Header, error) {
-	return m.confirmationHeader(ctx, nil)
 }
 
 func (m *Manager) confirmationHeader(ctx context.Context, number *big.Int) (*types.Header, error) {
