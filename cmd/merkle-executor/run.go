@@ -6,27 +6,26 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
-	"github.com/symbioticfi/merkle-executor/internal/chain"
 	"github.com/symbioticfi/merkle-executor/internal/config"
-	"github.com/symbioticfi/merkle-executor/internal/curator"
 	"github.com/symbioticfi/merkle-executor/internal/observability"
-	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
-	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlanerfq"
-	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
-	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
-	"github.com/symbioticfi/merkle-executor/internal/providers/securitize"
-	"github.com/symbioticfi/merkle-executor/internal/signer"
-	"github.com/symbioticfi/merkle-executor/internal/txmanager"
+	"github.com/symbioticfi/merkle-executor/sdk/chain"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/aave"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/cowswap"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/liquidlanerfq"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/merkl"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"github.com/symbioticfi/merkle-executor/sdk/signer"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
+	"github.com/symbioticfi/merkle-executor/sdk/txmanager"
 )
 
 func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer) error {
@@ -59,7 +58,7 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: config.DefaultHTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
-	source, err := curator.New(cfg.Curator.HTTPConfig(), httpClient, client)
+	source, err := permissions.New(cfg.Curator.HTTPConfig(), httpClient, client, os.Getenv)
 	if err != nil {
 		return err
 	}
@@ -78,7 +77,7 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	}
 	var txSigner signer.Signer
 	if cfg.Mode == "send" {
-		txSigner, err = signer.FromEnv(cfg.Signer.KeyEnv)
+		txSigner, err = signerFromEnv(cfg.Signer.KeyEnv)
 		if err != nil {
 			return err
 		}
@@ -91,15 +90,19 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 		s := keeper.Strategy{Config: keeper.Config{Name: sc, Executor: sc, Account: accounts[common.HexToAddress(sc)].Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(sc, accounts[common.HexToAddress(sc)], caller)}}
 		for _, registration := range []struct {
 			name string
-			new  func(providerRegistry.Deps) (provider.Provider, error)
-		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}, {"redemptions", redemptions.NewAutomatic}, {"securitize", securitize.NewAutomatic}} {
-			p, err := registration.new(providerRegistry.Deps{Chain: client, HTTP: httpClient})
+			new  func(provider.Deps) (provider.Provider, error)
+		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}} {
+			p, err := registration.new(provider.Deps{Chain: client, HTTP: httpClient, LookupSecret: os.Getenv})
 			if err != nil {
 				return errors.Errorf("configure provider %s: %w", registration.name, err)
 			}
 			s.Providers = append(s.Providers, p)
 		}
-		s.Providers = append(s.Providers, keeper.NewRecipeInputs())
+		capacity, err := aave.New(client)
+		if err != nil {
+			return errors.Errorf("configure Aave capacity: %w", err)
+		}
+		s.Providers = append(s.Providers, capacity, keeper.NewRecipeInputs())
 		strategies = append(strategies, s)
 	}
 	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}

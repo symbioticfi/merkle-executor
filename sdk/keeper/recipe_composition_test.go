@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
+	"strings"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -19,8 +20,10 @@ import (
 )
 
 type exclusiveRecipeProvider struct {
-	target common.Address
-	calls  int
+	target  common.Address
+	calls   int
+	values  []recipes.Value
+	results map[uint]string
 }
 
 func (p *exclusiveRecipeProvider) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
@@ -28,11 +31,15 @@ func (p *exclusiveRecipeProvider) Prepare(context.Context, provider.Snapshot) (p
 	return provider.Output{}, nil
 }
 func (p *exclusiveRecipeProvider) RecipeRequirements(provider.Snapshot, recipes.Recipe, *recipes.Tree) (RecipeRequirements, error) {
-	return RecipeRequirements{Actions: []string{"0:0"}, ExclusiveTargets: map[string]common.Address{"0:0": p.target}}, nil
+	req := RecipeRequirements{Actions: []string{"0:0"}, Values: p.values, ExclusiveTargets: map[string]common.Address{"0:0": p.target}}
+	if len(p.values) > 0 {
+		req.Actions = nil
+	}
+	return req, nil
 }
 func (p *exclusiveRecipeProvider) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) (provider.Output, error) {
 	p.calls++
-	return provider.Output{}, nil
+	return provider.Output{Results: p.results}, nil
 }
 func (*exclusiveRecipeProvider) Advance(context.Context, provider.Snapshot, provider.Output, json.RawMessage) (provider.Progress, error) {
 	return provider.Progress{Done: true}, nil
@@ -42,6 +49,11 @@ func (p *exclusiveRecipeProvider) ExclusiveOutputTargets(provider.Output) (map[s
 }
 
 type exclusiveRecipeReader struct{ *permissionReader }
+
+func (r *exclusiveRecipeReader) CallContractWithCode(context.Context, ethereum.CallMsg, *big.Int, []byte) ([]byte, error) {
+	typ, _ := abi.NewType("uint256[]", "", nil)
+	return (abi.Arguments{{Type: typ}}).Pack([]*big.Int{new(big.Int), big.NewInt(42)})
+}
 
 func (r *exclusiveRecipeReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
 	method := account.NewMerkleAccount().GetABI().Methods["hasRole"]
@@ -67,7 +79,7 @@ func TestPlannerExclusiveRecipePreflightBeforeProviderIO(t *testing.T) {
 		}
 		return raw
 	}
-	for _, mode := range []string{"valid", "unowned target", "direct Call"} {
+	for _, mode := range []string{"valid", "unowned target", "direct Call", "early witness", "late witness", "conflicting witness", "invalid witness index", "wrong witness value"} {
 		t.Run(mode, func(t *testing.T) {
 			header := &types.Header{Number: big.NewInt(12)}
 			leaf := recipes.Leaf{Target: target, Value: new(big.Int), Data: []byte{1, 2, 3, 4}, DataMask: make([]byte, 4)}
@@ -78,6 +90,10 @@ func TestPlannerExclusiveRecipePreflightBeforeProviderIO(t *testing.T) {
 			}
 			manage := append([]byte{recipes.Manage}, pack([]string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{leaf.Hash}, [][]*big.Int{{}})...)
 			recipe := recipes.Recipe{Steps: [][]byte{manage}}
+			witness := strings.Contains(mode, "witness")
+			if witness {
+				recipe.Steps = append(recipe.Steps, append([]byte{recipes.Add}, pack([]string{"uint256", "uint256"}, big.NewInt(42), new(big.Int))...))
+			}
 			if mode == "unowned target" {
 				recipe.Steps = append(recipe.Steps, manage)
 			}
@@ -98,6 +114,9 @@ func TestPlannerExclusiveRecipePreflightBeforeProviderIO(t *testing.T) {
 			for i := range values {
 				values[i] = new(big.Int)
 			}
+			if witness {
+				values[1] = big.NewInt(42)
+			}
 			returned, err := e.GetABI().Methods["execute"].Outputs.Pack(values)
 			if err != nil {
 				t.Fatal(err)
@@ -106,10 +125,29 @@ func TestPlannerExclusiveRecipePreflightBeforeProviderIO(t *testing.T) {
 			raw, _ := json.Marshal(map[string]any{"chainId": 1, "root": leaf.Hash.Hex(), "leaves": []any{map[string]any{"hash": leaf.Hash.Hex(), "target": target.Hex(), "value": "zero", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": []string{}}}})
 			planner := Planner{Chain: reader, ChainID: big.NewInt(1), Caller: snapshot.Caller, PermissionSource: permissionSourceFunc(func(context.Context, *big.Int, recipes.Snapshot) ([]byte, error) { return raw, nil })}
 			pr := &exclusiveRecipeProvider{target: target}
-			_, err = planner.Prepare(t.Context(), Strategy{Config: Config{Account: snapshot.Account.Hex(), Executor: snapshot.Executor.Hex()}, Providers: []provider.Provider{pr}})
-			if mode == "valid" {
+			if witness {
+				pr.results = map[uint]string{1: "42"}
+			}
+			if mode == "late witness" || mode == "conflicting witness" {
+				pr.values = []recipes.Value{{Source: recipes.Result, Value: big.NewInt(1)}}
+			}
+			if mode == "conflicting witness" || mode == "wrong witness value" {
+				pr.results[1] = "41"
+			}
+			if mode == "invalid witness index" {
+				pr.results = map[uint]string{2: "42"}
+			}
+			plan, err := planner.Prepare(t.Context(), Strategy{Config: Config{Account: snapshot.Account.Hex(), Executor: snapshot.Executor.Hex()}, Providers: []provider.Provider{pr}})
+			if mode == "valid" || mode == "early witness" || mode == "late witness" {
 				if err != nil || pr.calls != 1 {
 					t.Fatalf("valid claimed action failed: %v calls=%d", err, pr.calls)
+				}
+				if witness && plan.Results[1] != "42" {
+					t.Fatal("provider witness was not retained")
+				}
+			} else if witness {
+				if err == nil || pr.calls != 1 {
+					t.Fatalf("invalid provider witness accepted: %v calls=%d", err, pr.calls)
 				}
 			} else if err == nil || pr.calls != 0 {
 				t.Fatalf("ambiguous recipe reached provider: %v calls=%d", err, pr.calls)

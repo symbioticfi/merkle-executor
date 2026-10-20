@@ -71,3 +71,34 @@ func TestTreeRejectsEveryInvalidLeaf(t *testing.T) {
 		})
 	}
 }
+
+func TestTreeAcceptsUnusedPayableMarkerWithoutAllowingNativeExecution(t *testing.T) {
+	document := treeDocument(t)
+	zero := singleTree(t).Leaves[0]
+	payable := zero
+	payable.Value = big.NewInt(1)
+	payable.Hash, _ = HashLeaf(payable)
+	document["root"] = hashPair(zero.Hash, payable.Hash).Hex()
+	zeroJSON := document["calls"].([]any)[0].(map[string]any)
+	zeroJSON["proof"] = []string{payable.Hash.Hex()}
+	payableJSON := map[string]any{}
+	for key, value := range zeroJSON {
+		payableJSON[key] = value
+	}
+	payableJSON["hash"], payableJSON["value"], payableJSON["proof"] = payable.Hash.Hex(), "nonzero", []string{zero.Hash.Hex()}
+	document["calls"] = []any{zeroJSON, payableJSON}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := DecodeTree(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tree.lookup(zero.Hash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tree.lookup(payable.Hash); err == nil || err.Error() != "recipe managed actions cannot carry native value" {
+		t.Fatalf("payable selection must remain rejected: %v", err)
+	}
+}

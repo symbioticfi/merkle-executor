@@ -8,24 +8,48 @@ standalone daemon and vault-solver consume this same implementation.
   bounded runtime assembly and role/root/snapshot checks.
 - `keeper`: preparation, full simulation, immutable plan validation, durable workflow
   recovery and provider reconciliation with canonical execution evidence.
-- `provider`: host-implemented Prepare/Advance contracts. Protocol discovery,
-  pricing, auctions, API authentication and settlement policy belong to the host.
-- `protocolio`: pinned block reads and execution-log validation.
+- `provider`: Prepare/Advance contracts and explicit chain/HTTP dependencies.
+- `providers/cowswap`, `providers/liquidlanerfq`, `providers/merkl`: opt-in order,
+  quote and reward-proof preparation with durable settlement reconciliation.
+- `providers/aave`: authenticated Aave V3 capacity preparation shared by both hosts.
+- `providers/derived`: immutable provider envelopes and authenticated signed fields.
+- `protocolio`: bounded HTTP and RPC batches, pinned reads and execution-log validation.
+- `chain`: read/write RPC client, Multicall grouping and code-override simulations.
 - `submission`: sender-independent signed-attempt journal and canonical receipts.
 - `state`: optional exclusive local file store with atomic replacement and fsync.
-- `bindings`, `abi`: generated core interfaces and vendored provenance.
+- `txengine`: nonce admission, gas/fees, replacements and canonical confirmation.
+- `txmanager`: standalone durable sender implementing `submission.Transport`.
+- `signer`: key-backed signing primitive, with credentials supplied by the host.
+- `telemetry`: context logging and transaction tracing; the host installs exporters.
+- `bindings`, `abi`, `protocoltypes`, `schemas`: generated interfaces, wire types
+  and source provenance. `make generate` rebuilds bindings, types and probe lenses.
 
-The SDK creates no signer, nonce manager, fee engine, metrics server or daemon.
-Financial amount derivation requires an exact read-dependent recipe result,
+Components require explicit construction. HTTP components accept a host credential
+lookup function; `HTTPConfig.APIKeyEnv` is only a reference passed to that function. The host acquires credentials, chooses
+providers, installs telemetry and controls sender startup/shutdown, scheduling and
+store lifetime. Importing the SDK reads no environment and starts no service.
+Generic derivation of inputs without a host provider requires an exact read-dependent recipe result,
 bound directly or through an input equality. For example, `amount = min(balance,
 cap)` selects one amount; `amount <= balance` and `amount <= cap` do not. Bounds
 remain checks, and bounds-only inputs are rejected rather than filled by an
-executor policy. Generic input derivation and host providers share this rule.
+executor policy. A host provider can own an input under its authenticated policy.
 Quote outputs may exceed an authenticated minimum; their external data still
 requires a provider. No on-chain recipe ABI or permission change is required.
 
+`recipes.ProbePrefix` replays an authenticated prefix at the original executor with
+host-owned eth_call-only code, then probes the resulting state. The shared prefix
+interpreter retains original caller/account identities and permission checks.
+Unresolved inputs and unprepared mutable actions fail closed. Its numerical
+witnesses belong in `provider.Output.Results`; the planner merges them after all
+providers prepare and verifies them against full original execution, including on
+recovery. Protocol-specific probe code and admission policy live in isolated providers;
+`providers/aave` supplies the shared Aave implementation.
+
 Permission sources and protocol I/O wrap a host-supplied HTTP transport; pinned
-read batching wraps a host-supplied RPC transport and generated aggregate codec. A host implements `submission.Transport` over its existing sender.
+read batching wraps a host-supplied RPC transport and generated aggregate codec.
+A host can implement `submission.Transport` over its existing sender or explicitly
+start the standalone `txmanager` with `chain` and `signer`. Vault-solver uses its
+existing shared sender, preserving one nonce owner across its extensions.
 `Hold` fences every other job using that signer; `SendAsync` calls `Persist` on
 each signed original and replacement **before** broadcasting; `Release` follows
 SDK acknowledgement after durable business progress. Signed records retain
@@ -44,13 +68,13 @@ host sender's shutdown drain: callbacks may still persist during that drain.
 
 Run `make check` and `make integration` here without a parent module/workspace.
 Root `make check` and `make integration` also check this module explicitly.
-Bindings regenerate from this module's ABI through the repository's pinned
-abigen tool; never edit generated Go.
+Bindings regenerate from this module's ABI through its pinned abigen tool;
+never edit generated Go.
 
-The SDK is an execution primitive. It does not by itself add LL or 3F auction
-feeds, pricing, signed offers, RFQ domain compatibility or order reconciliation.
-Those integrations supply bounded provider outputs and restart-safe Advance
-implementations from the host.
+Liquid Lane's consumer quote/order provider is included. Vault-specific Liquid
+Lane connector and 3F auction integrations belong to vault-solver: they supply
+bounded provider outputs using their own feeds, sizing and calldata construction.
+Custom integrations implement the same provider contracts.
 
 Providers that reconcile transaction-wide receipt logs without unique protocol
 identity implement `provider.ExclusiveTargetProvider`. The keeper validates their
@@ -70,7 +94,7 @@ independent stages at 256 members and returns ordered member results, separately
 from transport errors. Existing backends keep lazy individual reads; a failed real
 batch never falls back to singles. `MulticallSafe` is an explicit assertion of
 caller independence and read-only behavior, not an ABI `view` inference. The host
-chooses the transport and deployment; SDK code contains no protocol-specific rules.
+chooses the transport and deployment; generic SDK transport code contains no protocol-specific rules.
 Member errors are consumed in validation order, preserving idle/terminal branches
 that do not need speculative results. Missing members invalidate the whole group.
 

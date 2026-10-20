@@ -16,21 +16,20 @@ func TestSDKIndependentModule(t *testing.T) {
 	if !strings.Contains(string(data), "module github.com/symbioticfi/merkle-executor/sdk\n") {
 		t.Fatal("SDK has wrong module identity")
 	}
-	err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	allowed := map[string]bool{"architecture": true, "config": true, "observability": true, "version": true}
+	err = filepath.WalkDir(filepath.Join("..", "..", "internal"), func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		source, err := os.ReadFile(path)
+		relative, err := filepath.Rel(filepath.Join("..", "..", "internal"), path)
 		if err != nil {
 			return err
 		}
-		for _, forbidden := range []string{"github.com/symbioticfi/merkle-executor/internal/", "github.com/symbioticfi/merkle-executor/api/", "github.com/symbioticfi/vault-solver/"} {
-			if strings.Contains(string(source), forbidden) {
-				t.Errorf("SDK imports host code: %s: %s", path, forbidden)
-			}
+		if !allowed[strings.Split(relative, string(filepath.Separator))[0]] {
+			t.Errorf("reusable component belongs in the SDK: %s", path)
 		}
 		return nil
 	})

@@ -344,7 +344,7 @@ func (m *Manager) wait(ctx context.Context) (Result, error) {
 	}
 }
 
-// recordSigned runs in the host lifecycle before broadcast. The SDK never signs.
+// recordSigned runs in the sender lifecycle before broadcast; this journal does not sign.
 func (m *Manager) recordSigned(unsigned, signed *types.Transaction) error {
 	if signed == nil || unsigned == nil {
 		return errors.New("signed and unsigned transaction required")

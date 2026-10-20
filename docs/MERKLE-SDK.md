@@ -1,9 +1,11 @@
 # Shared Merkle execution
 
 `merkle-executor/sdk` is an independent Go module. The daemon keeps its CLI,
-strict YAML, protocol providers, RPC/signing setup, metrics and deployment. The
-SDK owns recipe/tree/proof validation, pinned discovery, bounded input assembly,
-simulation, canonical evidence and durable workflow/submission recovery.
+strict YAML, credentials, provider selection, telemetry setup and process lifecycle.
+The SDK owns recipe/tree/proof validation, pinned discovery, bounded input assembly,
+simulation, canonical evidence, durable recovery and opt-in providers. Its RPC,
+signer and transaction-engine components support a standalone host without requiring
+each consumer to run a separate sender. Components start only on explicit host calls.
 
 Vault-solver imports an immutable SDK module version and supplies its existing
 transaction manager. Its adapter does not construct another manager or signer.
@@ -14,13 +16,12 @@ canonical evidence and durable workflow acknowledgement permit release.
 The repository contains two modules. `make check` and `make integration` test
 both explicitly. For local SDK editing, an untracked Go workspace can include
 `.` and `./sdk`; production module requirements remain immutable. SDK imports
-are checked to exclude daemon and vault-solver code. Core ABI artifacts and
-bindings are owned and regenerated under `sdk/abi` and `sdk/bindings`; protocol
-provider bindings remain under `api`.
+are checked to exclude daemon and vault-solver code. All ABI artifacts, bindings
+and protocol wire schemas are owned and regenerated inside the SDK. `make -C sdk generate` works without the daemon module.
 
-SDK extraction does not add auction discovery, pricing, reservations, LL RFQ
-signing-domain compatibility or 3F offer lifecycle behavior. These stay in host
-integrations, which implement the SDK's Prepare/Advance provider contracts.
+The SDK includes CoW, Merkl and Liquid Lane consumer RFQ providers. Vault-specific
+connector and 3F auction feeds, sizing and calldata construction remain in
+vault-solver, using the SDK's Prepare/Advance provider contracts.
 
 Private module reads use normal local GitHub credentials with
 `GOPRIVATE=github.com/symbioticfi/merkle-executor`. CI uses this repository's
@@ -52,6 +53,11 @@ Omitting this seam retains `keeper.Config.Tree` local-file behavior for SDK cons
 
 The daemon derives accounts at startup and uses curator-backend for this seam. It
 fetches only during new preparation, preserving saved-attempt and external-order
-recovery during backend outages. Signed Liquid Lane discount/signature acquisition
-belongs to vault-solver, while daemon Merkl and CoW clients continue direct API
-acquisition. No vault-solver code or protocol policy moves into the SDK.
+recovery during backend outages. The daemon constructs SDK Merkl, CoW and RFQ
+providers with its HTTP/RPC clients.
+Liquid Lane connector acquisition and calldata construction belong to vault-solver's
+Merkle extension. External signed terms come from RFQ/backend integrations and
+are validated by contracts. The daemon does not size connector swaps or verify
+their signatures. The SDK applies generic permission/runtime validation, full
+execution simulation and canonical receipt checks. Protocol policy stays in
+isolated provider packages; generic execution does not branch on protocol names.

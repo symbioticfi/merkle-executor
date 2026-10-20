@@ -5,28 +5,21 @@ funding priorities, postconditions and asset limits remain in the on-chain recip
 The service discovers that program, resolves its runtime inputs, verifies the current
 permission package, simulates the exact transaction and manages its lifecycle.
 
-## Repository alignment
-
-Studied `../vault-solver` at `c5cae70`: Cobra entrypoints under `cmd`, generic
-infrastructure under `internal`, isolated protocol packages, strict YAML
-configuration, Go 1.27.1, go-errors, logr/zap, generated abigen v2 bindings, and
-context-aware I/O. The new service is independently buildable. It does not import
-another module's internal packages or change the solver or adapters checkouts.
-
 ## Boundaries
 
-- `recipes`: ABI codec, SetRecipe discovery, tree/role validation and runtime assembly.
+- SDK `recipes`: ABI codec, SetRecipe discovery, tree/role validation and runtime assembly.
 - SDK `provider`: integration-neutral snapshots, runtime outputs and asynchronous progress.
-  The daemon keeps only shared chain/HTTP dependencies in `internal/provider`; startup
-  installs its fixed automatic providers directly. There is no manual YAML factory registry.
-- `providers`: protocol-specific adapters selected from authenticated recipes.
-  SDK hosts supply additional integrations through the provider interfaces. `redemptions`
-  owns the documented LL issuer families; `securitize` owns wallet and offramp routes.
-- `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
-- `curator`: bounded HTTP acquisition of the exact active permission root; the SDK
+  Hosts supply explicit chain/HTTP dependencies and select providers at startup.
+- SDK `providers`: CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs, selected
+  from authenticated recipes. Generic `keeper.NewRecipeInputs()` resolves exact
+  recipe constraints. The isolated Aave V3 provider supplies one authenticated
+  borrow-capacity Input through an eth_call-only post-supply prefix probe;
+  actual amount selection and health guards remain in recipe bytes.
+- SDK `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
+- SDK `permissions`: bounded HTTP acquisition of the exact active permission root; the SDK
   validates the returned bytes independently.
-- `txengine`: local nonce admission, adaptive fees, gas estimation, replacements, canonical receipts and graceful drain.
-- `state`, `signer`, `txmanager`: exclusive process ownership and a durable recipe journal around the engine. See [transaction design](TRANSACTIONS.md).
+- SDK `txengine`: nonce admission, adaptive fees, gas estimation, replacements, canonical receipts and graceful drain.
+- SDK `state`, `signer`, `txmanager`: exclusive process ownership and a durable recipe journal around the engine. See [transaction design](TRANSACTIONS.md).
 - `config`, `observability`, `cmd`: startup wiring, strict configuration and operational controls.
 
 Provider output may fill numerical inputs or masked calldata fields only. It cannot
@@ -34,19 +27,28 @@ replace targets, masks, proofs, recipe instructions or caller identity. External
 does not grant authority. The final full execute simulation validates on-chain bindings
 and postconditions; the keeper does not duplicate the Solidity arithmetic interpreter.
 
-Liquid Lane RFQ consumers use the separate host provider `liquidlane-rfq` to
+Liquid Lane RFQ consumers use the SDK provider `liquidlane-rfq` to
 acquire exact-input quotes, populate an approved account Sign action and reconcile
 canonical Reactor events. It persists the quote, Request digest and fixed `0x00`
 signature before publication, preserving identity through ambiguous HTTP responses.
 Only complete all-status lookup permits an idempotent retry. Bounded canonical event
 scan cursors survive restart; API statuses and used nonce bits are not settlement.
 
-Signed Liquid Lane discount/signature acquisition belongs to vault-solver; the daemon
-does not register that provider. Issuer redemptions remain registered. CoW authorization and settlement
+Liquid Lane connector acquisition and calldata construction belong to vault-solver's
+Merkle extension. External signed terms come from RFQ/backend integrations and
+are validated by contracts. The daemon does not size connector swaps or verify
+their signatures. SDK hosts retain generic permission/runtime
+validation, full execution simulation and canonical receipt checks.
+
+CoW authorization and settlement
 are separate phases: submit the ERC-1271 order only after its authorization transaction
 confirms, persist its deterministic UID and reconcile it before retrying submission.
 Merkl reward proofs are protocol data, separate from account permission proofs. Claims
-must fit explicitly approved bounded calldata shapes. Asynchronous issuer redemptions
+must fit explicitly approved bounded calldata shapes. Automatic preparation covers
+all committed Merkl claims with one rewards request, preserving frontend root,
+recipient, ledger and cash-delta guards through account capability wrappers.
+Dedicated single-token Input gates receive the verified claimable delta, so idle
+claims can coexist with positive claims. Asynchronous issuer redemptions
 use later claim recipes, configured independently from the request recipe.
 
 ## Account and permission ownership
@@ -54,8 +56,10 @@ use later claim recipes, configured independently from the request recipe.
 The daemon accepts a YAML list of executor addresses and registers fixed automatic
 providers at startup. Canonical lowercase executor addresses are the durable and
 log identifiers; duplicate addresses and strategy objects are rejected. Runtime
-policy version `1` binds chain, discovered account/caller, curator source and sender
-policy. The issuer policy also binds the reviewed catalogue digest.
+policy version `1` is included in the recovery fingerprint with the canonical
+executor, discovered account/caller, chain ID, curator URL/credential environment
+name and transaction-manager fee ceiling. The fingerprint does not encode the
+provider roster or an issuer catalogue.
 At startup it pins a valid head, batches deduplicated account and caller getters,
 rejects any invalid member,
 and closes the same-number/hash guard before publishing the complete account map.
@@ -92,23 +96,35 @@ responses enter logs. Failed/unknown external states never become successful com
 
 The transaction journal persists confirmed receipt identity and logs before nonce
 acknowledgement. Provider advancement receives that evidence with a fresh pinned
-snapshot and checks canonical headers before and after reconciliation. Issuer
-providers match exact account `Manage` calls in receipt order; missing or skipped
-actions do not count as executed. A request finishes as `requested`, releasing the
-account lock while issuer-owned state retains the pending withdrawal. Independent
-claim strategies read current claim eligibility. Submission is never labelled paid.
-Issuer providers declare exclusive managed targets for receipt attribution. The
-keeper checks the complete immutable execute composition before signing and on
-recovery, retaining completed providers' claims. Repeated/static calls to those
-targets and arbitrary Call steps are unsupported; see [provider restrictions](PROVIDERS.md).
-Existing journals without evidence remain readable; new issuer reconciliation
-requires evidence and does not infer it from a successful transaction alone.
+snapshot and checks canonical headers before and after reconciliation. CoW and RFQ
+providers retain their exact account authorization and settlement attestations.
+
+A canonical native receipt settles generic execution. The keeper does not interpret
+issuer events, discover requests, apply protocol-specific readiness rules or wait
+for an issuer payout. Calls, reads, amount selection, authorization, claim gates
+and output checks are committed in the recipe. Other native protocols require no selector
+or deployment catalogue in Go. Separate request and claim recipes read their own
+current pending/eligible state; a successful request transaction does not establish
+later settlement.
+
+The Aave V3 capacity provider supplies Input 0 only to the recognized borrow
+`Min` chain. Its bounded native calculation replays the authenticated supply prefix
+at the original executor before reading capacity. Persisted numerical witnesses
+must match full original execution. Multiple capacity groups, interleaved effects
+and unresolved prior provider data fail closed. The helper exists only as RPC
+code-override runtime. See [Aave capacity](../sdk/providers/aave/README.md).
+
+Inputs must resolve through exact generic recipe constraints or an authenticated
+off-chain provider. A native request ID can be committed directly or derived by
+recipe reads/results. Other provider-created native Inputs require such a
+constraint or a Result binding. Unknown and unresolved dependencies fail closed;
+the keeper never adds a protocol-specific discovery fallback.
 
 ## Preparation read stages
 
 The keeper can plan independent provider reads from a provisional value-only block
 pin and configured identity. This optional SDK contract lives in `protocolio`, keeping
-provider policy in the host and avoiding an import cycle through `provider`. Planning
+policy in isolated providers and avoiding an import cycle through `provider`. Planning
 is pure local encoding. Initial metadata and planned calls share a bounded read group;
 only authenticated discovery plus active permission-tree validation can invoke their resolvers.
 Each resolver sees its own lazy results and must match the exact provisional pin.

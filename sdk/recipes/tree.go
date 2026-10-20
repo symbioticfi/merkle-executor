@@ -115,8 +115,12 @@ func decodeLeaf(entry leafJSON) (Leaf, error) {
 	}
 	leaf.Target = common.HexToAddress(entry.Target)
 	value := entry.Value
-	if value == "zero" {
+	switch value {
+	case "zero":
 		value = "0"
+	case "nonzero":
+		// The permission hash commits only the nonzero marker, not a payable amount.
+		value = "1"
 	}
 	if leaf.Value, err = parse.Uint256(value); err != nil || leaf.Value.BitLen() > 96 {
 		return leaf, errors.New("value does not fit uint96")

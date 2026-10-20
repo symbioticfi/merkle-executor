@@ -25,6 +25,14 @@ contract RecipePrefixLens {
     }
     struct State { uint256[] values; bool[] needed; uint256[] inputs; bool[] known; bytes[] anchors; uint256 index; }
 
+    function probe(bytes calldata prefix, bytes calldata query) external returns (uint256[] memory values, bytes memory result) {
+        (bool ok, bytes memory reply) = address(this).call(prefix);
+        if (!ok) { assembly ("memory-safe") { revert(add(reply,32),mload(reply)) } }
+        values = abi.decode(reply,(uint256[]));
+        (ok,result) = address(this).staticcall(query);
+        if (!ok) { assembly ("memory-safe") { revert(add(result,32),mload(result)) } }
+    }
+
     function resolve(address account, bytes[] calldata queries, bytes[] calldata steps,
         uint256[] calldata inputs, bool[] calldata known, bytes[] calldata anchors,
         bytes[] calldata runtime, uint256[] calldata indices) external guarded returns (uint256[] memory)

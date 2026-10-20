@@ -8,12 +8,12 @@ import subprocess
 import tempfile
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[3]
+ROOT = HERE.parents[2]
 checkout = os.environ.get("MERKLE_ADAPTERS_REPO")
 if not checkout:
     raise SystemExit("Set MERKLE_ADAPTERS_REPO to the pinned adapters checkout")
 ADAPTERS = Path(checkout).resolve()
-source_pin = json.loads((ROOT / "sdk/abi/source.json").read_text())
+source_pin = json.loads((ROOT / "abi/source.json").read_text())
 revision = subprocess.check_output(["git", "-C", str(ADAPTERS), "rev-parse", "HEAD"], text=True).strip()
 if revision != source_pin["revision"]:
     raise SystemExit(f"Expected adapters {source_pin['revision']}, got {revision}")

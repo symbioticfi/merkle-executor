@@ -9,7 +9,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -39,7 +38,8 @@ type Client struct {
 	timeout time.Duration
 }
 
-func NewHTTP(c HTTPConfig, injected *http.Client) (*Client, error) {
+// NewHTTP resolves credential references only through the host's lookup function.
+func NewHTTP(c HTTPConfig, injected *http.Client, lookup func(string) string) (*Client, error) {
 	u, err := url.Parse(c.URL)
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, errors.New("protocol HTTP URL must be an http(s) base URL without credentials, query or fragment")
@@ -64,7 +64,9 @@ func NewHTTP(c HTTPConfig, injected *http.Client) (*Client, error) {
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	bearer := ""
 	if c.APIKeyEnv != "" {
-		bearer = os.Getenv(c.APIKeyEnv)
+		if lookup != nil {
+			bearer = lookup(c.APIKeyEnv)
+		}
 		if bearer == "" || strings.ContainsAny(bearer, "\r\n") {
 			return nil, errors.New("configured protocol API key is missing or invalid")
 		}

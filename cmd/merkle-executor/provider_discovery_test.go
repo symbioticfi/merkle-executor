@@ -12,7 +12,7 @@ import (
 )
 
 func TestDaemonRejectsManualRuntimeSources(t *testing.T) {
-	for _, name := range []string{"static", "rpc", "http", "merkl", "cowswap", "liquidlane", "liquidlane-rfq", "redemptions", "securitize"} {
+	for _, name := range []string{"static", "rpc", "http", "merkl", "cowswap", "liquidlane", "liquidlane-rfq"} {
 		t.Run(name, func(t *testing.T) {
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
