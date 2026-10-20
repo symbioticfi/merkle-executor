@@ -19,12 +19,11 @@ use the checked-in ABI and wire schema, never a downloaded current schema.
   `src/domains/quotes/quotes.schemas.ts`, `src/domains/orders/orders.schemas.ts`,
   quote/order services, and `src/clients/contracts/reactor-{order,typed-data,request-signature}.ts`.
   The generated `Rfq*` DTOs in `protocols.json` are a selected public wire subset.
-- MerkleAccount revision `bd5e235899de5e175a0001a913d47596f6f4f801` from adapters,
+- MerkleAccount revision `0427c657375512a87158010c323556739fe96d1b` from adapters,
   `src/contracts/merkle-adapter/MerkleAccount.sol` and
   `test/adapters/merkle-adapter/MerkleAdapterLiquidLaneSignatures.t.sol`.
   This is the SDK-pinned interface with `root()`, `signatures()` and the original
-  buffer `Sign` event. The newer `merkleRoot()` account interface is outside this
-  integration's verified scope.
+  buffer `Sign` event.
 
 These source revisions describe supported behavior, not production deployment
 availability. Operators must verify configured chain, Reactor, protocol signer and

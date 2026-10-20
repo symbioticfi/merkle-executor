@@ -49,7 +49,7 @@ No schema or endpoint is fetched automatically during a normal build.
   invalidation sentinel is not success.
 - `api/abi/LiquidConnector.json`: full compiled ABI extracted from the adapters
   `out/LiquidLaneConnector.sol/LiquidLaneConnector.json` at
-  `bd5e235899de5e175a0001a913d47596f6f4f801`, refreshed 2026-09-28. The payment
+  `0427c657375512a87158010c323556739fe96d1b`, refreshed 2026-10-20. The payment
   asset getter is `outputAsset()`.
   Its EIP712 name/version are `LiquidLaneConnector` / `1`; the verifying contract
   is the connector proxy. The ABI artifact is vendored and independently buildable;

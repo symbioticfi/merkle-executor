@@ -1,19 +1,19 @@
 # Read aggregation source provenance
 
-Read-only source inspection on 2026-10-12 established the getter scopes below. No live transactions were used. The normal daemon uses the standard Multicall3 address. These are the reviewed implementation assumptions for getters that opt into aggregation. Operators must verify that deployments and proxy upgrades retain the reviewed behavior. Source discovery is never performed automatically at runtime. ABI view annotations alone do not establish safety.
+Read-only source inspection on 2026-10-12 (core refreshed 2026-10-20) established the getter scopes below. No live transactions were used. The normal daemon uses the standard Multicall3 address. These are the reviewed implementation assumptions for getters that opt into aggregation. Operators must verify that deployments and proxy upgrades retain the reviewed behavior. Source discovery is never performed automatically at runtime. ABI view annotations alone do not establish safety.
 
 Sourcify source URL template: `https://sourcify.dev/server/v2/contract/1/<implementation>?fields=sources`. Proxy mapping metadata used `?fields=proxyResolution`; it establishes mappings at retrieval, not code verification at a runtime pinned block.
 
 ## Core and Liquid Lane
 
-Pinned [adapters revision](https://github.com/symbioticfi/adapters/tree/bd5e235899de5e175a0001a913d47596f6f4f801): `bd5e235899de5e175a0001a913d47596f6f4f801`. Hashes below are SHA-256 of source bytes.
+Pinned [adapters revision](https://github.com/symbioticfi/adapters/tree/0427c657375512a87158010c323556739fe96d1b): `0427c657375512a87158010c323556739fe96d1b`. Hashes below are SHA-256 of source bytes.
 
 | Path relative to src/contracts/merkle-adapter | SHA256 | Safe getters |
 |---|---|---|
-| connectors/LiquidLaneConnector.sol | 54f34c9bca2a3005a3588f21d4cb0be90371ae8563f9bf929c9a8bb2e753e079 | account, outputAsset, signer, isUsedNonce, minDiscount, getAmountOut, remainingAssets |
-| libraries/AssetRateLimits.sol | 3a8419c654e666956026d774e0b0c63fb308b244633f64897d72600acd707558 | remainingAssets downstream rate calculation |
-| MerkleAccount.sol | 83e8cd39f5d56ca83b4618f6f289499f0b7289ec8e9b93e90ce890d20402cb55 | root, signatures; inherited hasRole |
-| automations/RecipeExecutor.sol | 3f7eacac6e0c8794a3d7d0012c12b0c7ca0c6a9d1e70e264ea6ca202455ff639 | account, caller, recipeBlock, recipeHash |
+| connectors/LiquidLaneConnector.sol | b6ff9210f91ed88d6df5441562b8c97cf5ff5436fa82896513b85a474f21dce2 | account, outputAsset, signer, isUsedNonce, minDiscount, getAmountOut, remainingAssets |
+| libraries/AssetRateLimits.sol | f1d66388eabeff9ced17633c94d7e99e542ce8b47fb332f3a8692973b11e2e24 | remainingAssets downstream rate calculation |
+| MerkleAccount.sol | 531a5983f4e737f00447e6c87115509efec21ecff0937fa18e9e7247e4b22d16 | root, signatures; inherited hasRole |
+| automations/RecipeExecutor.sol | 623070b2e7aa7b2c6d6f43a791a98c177128e818cf62ec76b6b22a2d7fa00360 | account, caller, recipeBlock, recipeHash |
 
 LL inherited EIP712/Ownable: OZ submodule `cab19933c33c2ad1d4c7a84864a3601dddfd16f3`, `contracts/utils/cryptography/EIP712.sol` SHA256 `1023ca2a7f9590767a9cf7b7ed1259801d81c576787b7e25d5a40683c8c3fd97`, `contracts/access/Ownable.sol` SHA256 `38578bd71c0a909840e67202db527cc6b4e6b437e0f39f0c909da32c1e30cb81`. `eip712Domain` and `owner` are caller-independent. LL oracle/token downstream calls retain connector as sender in either mode.
 
