@@ -50,9 +50,9 @@ leaves. Masked or runtime-bound token pairs and recipients are invalid. Unknown
 contracts sharing a selector remain ordinary committed recipe actions.
 
 Amounts must bind directly to a read-dependent recipe Result, or use an Input with
-preceding equality or upper-bound checks against recipe results. Equality selects
-the exact value; otherwise the executor selects the smallest upper bound, after
-checking every lower bound. Literal caps alone cannot determine an amount.
+an exact preceding equality to a read-dependent result. Use explicit arithmetic
+such as `min(balance, cap)` to select a capped amount. Upper/lower bounds validate
+the selected value; bounds alone cannot determine it.
 Centrifuge claims keep that exact share budget and wait if the available allowance
 is smaller. Pareto and Noon complete-request claims have no amount field. Their
 epoch or request ID must be a committed literal or exact deterministic Result.

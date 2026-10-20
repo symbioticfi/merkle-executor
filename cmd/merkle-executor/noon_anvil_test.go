@@ -147,8 +147,8 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	}, Steps: [][]byte{
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(0)),
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(1)),
-		issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, input, result(0)),
-		issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, input, result(1)),
+		issuerStep(t, recipes.Min, []string{"uint256", "uint256"}, result(0), result(1)),
+		issuerStep(t, recipes.Equal, []string{"uint256", "uint256"}, input, result(2)),
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(2)),
 		issuerStep(t, recipes.Approve, []string{"uint256", "address", "address", "bytes32"}, input, usn, handler, approval.Hash),
 		issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{action.Hash}, [][]*big.Int{{binding}}),

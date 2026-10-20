@@ -44,9 +44,9 @@ permission leaf. A selector alone does not identify Securitize: unrelated
 | `legacy` | Offramp `redeem(amount)` | Read-dependent amount and explicit recipe payment-delta floor | `redeemed` |
 
 An amount binds directly to a read-dependent Result, or uses an Input constrained
-by preceding equality or upper-bound checks against recipe results. Equality
-selects the exact value; otherwise the executor selects the smallest upper bound
-and checks every lower bound. Literal caps alone are insufficient. A modern
+by a preceding exact equality to a read-dependent result. The recipe selects
+the amount with explicit arithmetic; the executor checks upper/lower bounds
+without choosing an amount from them. A modern
 minimum binds to a Result or an Input protected by preceding result-based
 lower-bound guards. Legacy routes require an explicit post-redemption payment
 balance-delta guard; their ABI has no minimum word. A guard Input is derived

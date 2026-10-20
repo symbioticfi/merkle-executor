@@ -27,6 +27,11 @@ The transaction engine supports the current Solidity interpreter's operations;
 automatic preparation rejects recipes whose runtime data cannot be determined from
 authenticated instructions, permission fields and numeric results. Token pairs must
 be pinned, and trade amounts and minimum proceeds must depend on recipe reads.
+The recipe must select each amount explicitly: bind a result such as
+`min(balance, cap)` directly, or require an input to equal that result before use.
+Upper/lower bounds validate a selected amount; automatic preparation never chooses
+the largest permitted value. External quotes may improve on a recipe's minimum
+proceeds while remaining subject to its checks.
 One shared same-executor lens resolves numeric dependencies after authenticated
 Manage, Approve and Call effects. Earlier unresolved provider actions, unknown
 Inputs and future/circular dependencies fail with an explicit unsupported error. The service does not infer economic intent or invent
@@ -132,7 +137,7 @@ For a claim → Morpho-cap → Aave-overflow recipe, commit the claim and issuer
 operations, balance reads and routing arithmetic in the recipe. Startup registers
 a fixed provider set; authenticated action layouts select the applicable protocols.
 The keeper supplies unavailable proofs, request IDs and signatures. Runtime inputs
-use exact recipe-result anchors or the maximum permitted READ-derived bounds;
+use exact recipe-result anchors; bounds alone never select an amount and
 unknown sources are rejected.
 SDK hosts implement their own providers through the SDK provider interfaces;
 the daemon does not expose manual provider configuration.

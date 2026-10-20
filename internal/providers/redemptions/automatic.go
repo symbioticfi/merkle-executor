@@ -136,9 +136,6 @@ func exactIndex(recipe recipes.Recipe, action recipes.ManagedAction, offset int)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !economic.Exact {
-		return nil, nil, errors.New("issuer request index requires exact recipe identity")
-	}
 	return &economic, nil, nil
 }
 func selectorMatches(action recipes.ManagedAction, target common.Address, data []byte) bool {

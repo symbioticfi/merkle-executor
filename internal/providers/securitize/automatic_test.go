@@ -174,7 +174,7 @@ func TestAutomaticSecuritizeZeroBudget(t *testing.T) {
 					}
 					manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
 					steps := append([][]byte{}, r.Steps[:at]...)
-					steps = append(steps, packedStep(t, recipes.LessOrEqual, binaryArguments, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.LessOrEqual, binaryArguments, packedValue(recipes.Literal, 1), packedValue(recipes.Input, 7)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{bindings}))
+					steps = append(steps, packedStep(t, recipes.Equal, binaryArguments, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.LessOrEqual, binaryArguments, packedValue(recipes.Literal, 1), packedValue(recipes.Input, 7)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{bindings}))
 					if mode == "legacy" {
 						// The two inserted guards shift the post-redemption READ by two steps.
 						r.Steps[5] = packedStep(t, recipes.Sub, binaryArguments, packedValue(recipes.Result, 6), packedValue(recipes.Result, 1))
@@ -474,9 +474,10 @@ func TestAutomaticSecuritizeRejectsPersistedRouteAndFieldMutation(t *testing.T) 
 	}
 }
 
-func TestAutomaticSecuritizeBoundedAmount(t *testing.T) {
+func TestAutomaticSecuritizeRequiresExactAmount(t *testing.T) {
 	cfg, s, reader := fixture(t, "wallet")
-	raw, err := NewAutomatic(registry.Deps{Chain: reader})
+	counter := &preparationReadCounter{Reader: reader}
+	raw, err := NewAutomatic(registry.Deps{Chain: counter})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,13 +489,17 @@ func TestAutomaticSecuritizeBoundedAmount(t *testing.T) {
 	r, tree := automaticRecipe(t, cfg, s, reader)
 	manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
 	r.Steps = [][]byte{r.Steps[0], packedStep(t, recipes.LessOrEqual, binaryArguments, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(36, recipes.Input, 7)}})}
+	if _, err = p.RecipeRequirements(s, r, tree); err == nil || counter.reads != 0 {
+		t.Fatal("Securitize inferred an amount from an upper bound")
+	}
+	r.Steps[1] = packedStep(t, recipes.Equal, binaryArguments, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0))
 	req, err := p.RecipeRequirements(s, r, tree)
-	if err != nil || len(req.Values) != 2 || len(req.Actions) != 1 || len(req.Inputs) != 1 || req.Inputs[0] != 7 {
-		t.Fatalf("bounded requirements %+v %v", req, err)
+	if err != nil || len(req.Values) != 1 || len(req.Actions) != 1 || len(req.Inputs) != 1 || req.Inputs[0] != 7 {
+		t.Fatalf("exact requirements %+v %v", req, err)
 	}
 	out, err := p.PrepareRecipe(context.Background(), s, r, tree, map[uint]*big.Int{0: big.NewInt(100)})
 	if err != nil || out.Inputs[7] != "100" {
-		t.Fatalf("bounded amount %+v %v", out, err)
+		t.Fatalf("exact amount %+v %v", out, err)
 	}
 	if _, err = p.ExclusiveOutputTargets(out); err != nil {
 		t.Fatal(err)

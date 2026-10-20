@@ -34,9 +34,10 @@ runtime data those bytes authorize. [Permission schema](../api/schemas/CURATOR_P
 Protocol token pairs, recipients, domain/type identifiers and ABI framing must be
 fully pinned. A sign binding must cover an entire supported numeric word. A trade
 amount directly bound to a numeric Result must have a READ dependency. An Input
-uses a preceding exact equality when one exists; otherwise it selects the maximum
-permitted amount, the minimum of all preceding upper bounds, with at least one
-READ-derived bound. Literal caps and arithmetic multipliers are allowed. The exact
+requires a preceding exact equality to a READ-derived result. The recipe must
+express its selection with arithmetic such as `min(balance, cap)`; upper bounds
+alone leave the amount unspecified and are rejected. Literal caps and arithmetic
+multipliers are allowed inside read-dependent expressions. The exact
 selected amount must satisfy every applicable lower/upper bound before quotes.
 
 Minimum proceeds require READ ancestry too. A dynamic quote Input can exceed the
@@ -48,7 +49,7 @@ they still must exactly match the persisted wire bytes. Claim indexes require an
 exact deterministic source, and never select an index from a ceiling.
 
 Examples rejected before protocol HTTP include an unpinned token or recipient,
-a financial Input with no result bounds, literal-only financial policy, ambiguous
+a financial Input without an exact result equality, literal-only financial policy, ambiguous
 ownership, overlapping/partial bindings and masked bytes in an unknown managed
 action that have neither a committed full-word binding nor an owning automatic
 provider. A curator artifact's masked preimage does not select an amount. Fully
@@ -63,7 +64,7 @@ pinned numerical lens, uses the real caller as `From`, and runs at the pinned bl
 It resolves all required values and replays preceding authenticated Manage, Approve
 and Call effects, including bindings, proof checks, gates and allowance resets.
 Those effects exist only inside this call. A later balance READ can therefore
-observe an earlier claim. Prior exact or maximum-bound Inputs may also feed preview
+observe an earlier claim. Prior exact Inputs may also feed preview
 reads. Packed uint216 operands, checked arithmetic, division by zero and caller
 context follow the pinned Recipes implementation.
 
@@ -141,9 +142,9 @@ the family, mode, action keys, exact addresses and recipients; no provider YAML 
 runtime catalogue path is accepted. [Issuer catalogue and lifecycle guide](LIQUID-LANE-ASSETS.md)
 records the fixed routes, catalogue digest and verified ABI subsets.
 
-Financial amounts require a read-dependent Result or an Input constrained by
-preceding result-based equality/upper-bound checks. The executor chooses an exact
-equality value or the smallest upper bound, and checks every lower bound.
+Financial amounts require a read-dependent Result or an Input equated to one by
+a preceding equality. The recipe selects the amount explicitly and the executor
+checks its bounds without selecting a different amount.
 Centrifuge claims preserve that exact share amount and remain idle if
 `maxRedeem(account)` is smaller. Noon request IDs and Pareto queue epochs are
 committed literals or exact deterministic Results; an Input needs a preceding
@@ -153,7 +154,7 @@ Hastra supports separate PRIME/AUTO unwraps into wYLDS and a later wYLDS request
 for USDC. An unwrap checks its live asset; a request also checks the account has
 no pending redemption. The combined Figure route retains the ordered wrapper
 unwrap and wYLDS request, with a preview query
-bound to the exact unwrap field, including a derived bounded Input. Preparation
+bound to the exact unwrap field, including an Input with an exact equality. Preparation
 checks that preview against the selected unwrap amount. A post-effect actual
 balance cannot substitute for that preview link. Free or masked token pairs,
 recipients, selectors and modes are invalid. Unknown contracts sharing a selector
