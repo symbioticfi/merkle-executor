@@ -225,36 +225,3 @@ func BindOutput(template SignTemplate, payload []byte, results map[uint]*big.Int
 func Empty(policy string) (provider.Output, error) {
 	return Encode(policy, nil, provider.Output{}, false)
 }
-
-// NumericTemplate permits numerical words only; route identity stays pinned.
-func NumericTemplate(action recipes.ManagedAction, expected []byte, offsets ...int) error {
-	if action.Leaf.Value == nil || action.Leaf.Value.Sign() != 0 || len(action.Leaf.Data) != len(expected) {
-		return errors.New("issuer template has wrong value or calldata shape")
-	}
-	allowed := map[int]bool{}
-	for _, at := range offsets {
-		allowed[at] = true
-	}
-	for _, b := range action.Bindings {
-		if !allowed[int(b.Offset)] {
-			return errors.New("issuer binding changes an identity field")
-		}
-	}
-	for i := 0; i < len(expected); {
-		if allowed[i] {
-			i += 32
-			continue
-		}
-		start := i
-		for i < len(expected) && !allowed[i] {
-			i++
-		}
-		if err := action.Pinned(start, i-start); err != nil {
-			return err
-		}
-		if !bytes.Equal(action.Leaf.Data[start:i], expected[start:i]) {
-			return errors.New("issuer token, recipient or mode differs from committed route")
-		}
-	}
-	return nil
-}

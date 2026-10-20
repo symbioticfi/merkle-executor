@@ -4,10 +4,10 @@ Normal daemon `strategies` entries are full nonzero executor addresses, directly
 used as lowercase state, log and metric identifiers. Duplicate normalized addresses
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
-Runtime policy version `1` binds the current configuration and built-in provider
-policies. The daemon installs automatic CoW, Merkl, Liquid Lane RFQ,
-issuer-redemption, Securitize and recipe-input adapters in a fixed order. Typed
-provider settings are internal recipe and recovery data.
+The recovery fingerprint includes runtime policy version `1`, executor, account,
+caller, chain ID, curator configuration and transaction-manager fee policy. The daemon installs automatic CoW, Merkl and Liquid Lane RFQ providers plus
+`keeper.NewRecipeInputs()` in a fixed order. Typed provider settings are internal
+recipe and recovery data.
 Token pairs, amounts, minimum proceeds, action/input mappings, deployment targets
 and authorization shapes come from the
 authenticated recipe and its permission tree; they are not operator parameters.
@@ -24,9 +24,10 @@ constants. [Minimal configuration](../config/example.yaml).
 
 ## Authenticated recipe policy
 
-Every preparation fetches `GET /merkle-trees/{root}?chainId={chainId}` from the
-curator backend for the exact active account root. The SDK validates chain, root,
-optional account, all leaves and proofs before adapter preflight. Backend display
+Every preparation fetches `GET /merkle/{adapter}/{acceptedRoot}` from the
+curator backend for the exact active account root and pinned account adapter. The
+SDK validates chain, adapter, account, root, all leaves and proofs before adapter
+preflight. Backend display
 metadata does not authorize a target, token or numerical mapping. Recipes, masks,
 targets, proofs, steps and bindings remain immutable. Providers only fill the
 runtime data those bytes authorize. [Permission schema](../api/schemas/CURATOR_PERMISSIONS.md).
@@ -55,6 +56,37 @@ action that have neither a committed full-word binding nor an owning automatic
 provider. A curator artifact's masked preimage does not select an amount. Fully
 pinned static Manage actions remain usable. Input indexes are bounded to 0..4095.
 
+## Native on-chain recipes
+
+Native protocol execution has no Go provider, selector catalogue or deployment
+admission list. The committed recipe owns protocol calls and reads, eligibility
+and pause checks, account/recipient identity, approvals, amount selection, request
+IDs, claims and proceeds guards. The permission tree authorizes each managed call;
+the generic planner preserves its targets, masks, proofs and bindings. The shared
+lens resolves dependencies, and the original executor simulates the exact complete
+transaction before signing.
+
+Use Result bindings directly for values computed by the recipe. When a runtime
+Input is needed, give it an exact deterministic recipe constraint that generic
+`keeper.NewRecipeInputs()` can resolve. Financial Inputs must equal a READ-derived
+expression; an upper/lower bound does not select a value. A request ID must be a
+committed value or be derived exactly from recipe reads/results. The keeper does
+not enumerate an issuer ledger or choose a request from an allowed range.
+
+Recipes that relied on issuer-provider-created Inputs, request discovery or
+readiness checks must commit those sources and checks before execution. Express an
+Input through a generic exact constraint or replace it with a Result binding.
+Unknown, unresolved, future or circular dependencies fail closed. There is no
+issuer-specific fallback or automatic recipe rewrite.
+
+Canonical confirmation settles generic execution only. The keeper does not label a
+native action `requested`, `claimed` or `redeemed`, infer payout from issuer events,
+or retain the account lock while an issuer processes a request. Put pending-state
+checks and duplicate-request prevention in the recipe. A later settlement or claim
+requires a separate committed recipe with fresh reads, eligibility gates and output
+guards. Off-chain providers retain their own authorization and settlement evidence
+checks.
+
 ## Shared numerical prefix and read batching
 
 The planner unions every adapter's dependencies. Adapters requiring no numerical
@@ -81,11 +113,11 @@ Some valid compositions are explicitly unsupported: a needed READ following an
 action whose own runtime output still needs an unresolved numerical result; a
 future/circular or externally unknown Input in a needed prefix; and direct executor
 self-queries whose original code cannot survive the override. These return an
-unsupported-prefix error instead of guessing zero or changing instructions. Issuer
-eligibility getters and external quote verification still inspect canonical
-pre-execution chain state. A post-claim amount can consequently be rejected by an
-issuer or quote verifier that cannot inspect the hypothetical prefix state. The
-shared lens does not imply those independent services support post-effect state.
+unsupported-prefix error instead of guessing zero or changing instructions.
+External quote verification still inspects canonical pre-execution chain state. A
+post-effect amount can consequently be rejected by a quote verifier that cannot
+inspect the hypothetical prefix state. The shared lens does not imply those
+independent services support post-effect state.
 
 Independent RPC stages use JSON arrays, bounded to 256 members and 32 MiB responses.
 Reviewed metadata/role/provider getters share standard Multicall3
@@ -131,76 +163,6 @@ ambiguous or overly dense evidence. Lookup checkpoints after 10 API pages per ti
 and resumes across restarts, preserving duplicate checks and withholding publication
 until the scan completes. No new quote is obtained for an existing job.
 [Consumer wire schema and evidence](../api/schemas/LIQUID_LANE_RFQ.md).
-
-## Liquid Lane issuer requests and claims
-
-Issuer support is registered automatically. The embedded catalogue covers 54 routes over 38 tokens: the original Liquid
-Lane assets and Noon routes plus the current frontend Midas/Centrifuge routes,
-independent Hastra actions and FalconX BB requests. The authenticated recipe
-determines
-the family, mode, action keys, exact addresses and recipients; no provider YAML or
-runtime catalogue path is accepted. [Issuer catalogue and lifecycle guide](LIQUID-LANE-ASSETS.md)
-records the fixed routes, catalogue digest and verified ABI subsets.
-
-Financial amounts require a read-dependent Result or an Input equated to one by
-a preceding equality. The recipe selects the amount explicitly and the executor
-checks its bounds without selecting a different amount.
-Centrifuge claims preserve that exact share amount and remain idle if
-`maxRedeem(account)` is smaller. Noon request IDs and Pareto queue epochs are
-committed literals or exact deterministic Results; an Input needs a preceding
-exact equality. The provider never chooses an arbitrary index from a range.
-
-Hastra supports separate PRIME/AUTO unwraps into wYLDS and a later wYLDS request
-for USDC. An unwrap checks its live asset; a request also checks the account has
-no pending redemption. The combined Figure route retains the ordered wrapper
-unwrap and wYLDS request, with a preview query
-bound to the exact unwrap field, including an Input with an exact equality. Preparation
-checks that preview against the selected unwrap amount. A post-effect actual
-balance cannot substitute for that preview link. Free or masked token pairs,
-recipients, selectors and modes are invalid. Unknown contracts sharing a selector
-remain ordinary committed actions; known catalogue routes on the wrong chain fail.
-
-Midas, OpenEden and Figure have issuer-driven payouts. Confirmed request calls
-finish with `requested` and release the account for a later independent recipe;
-this outcome records issuer submission. Centrifuge, Noon and Pareto claims finish
-with `claimed`. Recipe output and balance guards enforce the intended proceeds.
-
-## Securitize wallet requests and atomic offramps
-
-Securitize support is registered automatically for the embedded published EVM
-routes. [Catalogue and lifecycle guide](SECURITIZE-ASSETS.md) records wallet
-transfers, modern `redeem(amount, minOutput)` and legacy `redeem(amount)` offramps.
-Token, wallet/offramp, payment pair and mode must match one committed route.
-Catalogue updates require explicit review; execution and recovery never fetch or
-adopt a new feed. VBILL on BNB has no published redemption route, and non-EVM
-entries are outside RecipeExecutor.
-
-Amounts use the recipe-derived budget policy above. Modern minimums require a
-read-dependent Result or preceding result-based lower/equality guards. Legacy
-redemptions require an explicit payment-token balance-delta floor in the original
-recipe because their calldata has no minimum word. A floor Input is saved as a
-separate guard assignment, filled from the derived minimum and revalidated on
-recovery. Free minimums and circular unresolved dependencies are rejected.
-
-Wallet completion requires exact token delivery and returns `requested`, recording
-the issuer request. Atomic offramps check decimals, payment topology, quote and
-liquidity, then require canonical receipt payment evidence before returning
-`redeemed`. Unrelated contracts with `redeem(uint256)` remain generic recipe actions.
-
-All issuer routes require canonical receipt identity and exact account `Manage`
-calls. Receipt attribution reserves each issuer target: the Securitize token for
-wallet requests, the offramp for atomic routes, and both PRIME/wYLDS targets for
-Figure. Multiple independent routes are supported when their targets and input
-ownership are distinct. Another provider or static action cannot use an owned
-target, including zero-gated populated actions and providers already complete.
-
-Arbitrary `Call` instructions are incompatible with these receipt claims because
-they can invoke account `manage` indirectly. Approvals, reads, arithmetic,
-unrelated Manage targets and later payment transfers remain available. The SDK
-checks this composition before provider reads and again on durable recovery.
-Saved catalogue policy, account, configuration, action bytes and input semantics
-are checked before network I/O; recovery does not rederive economics or rewrite the
-saved journal. Full original recipe simulation remains required before signing.
 
 ## Merkl cumulative account rewards
 
@@ -261,38 +223,3 @@ lens fixtures verify caller/origin, constrained preview Inputs, stateful effects
 allowance reset/zero short-circuit, overflow/division errors and original-code
 introspection divergence. These are local/API-fixture results; no deployment,
 external chain, hosted quote/order or live signing verification is implied.
-
-## Native Noon USN redemption
-
-The authenticated Ethereum route selects `redeemOnchain(USDC, amount)` at the
-reviewed RedeemHandlerV2. Its positive USN amount uses the recipe-derived budget
-policy above. USDT, minting and privileged instant sUSN exits are outside this
-route. Native USN whitelist membership is separate from staking withdrawals;
-the executor does not grant it.
-
-Preparation batches USN identity, collateral enablement, account whitelist,
-treasury, block counters, collateral decimals and the **full-amount**
-`calculateCollateralAmount(USDC, amount)` quote at one pinned block. The getter
-checks the collateral oracle's freshness and returns native 6-decimal USDC with
-Noon's peg and floor rounding. A one-token `getRate` cannot substitute for it.
-The counter resets when `lastRedeemBlock` precedes the pinned block. Dependent
-treasury USDC balance **and allowance to the handler** are checked together in
-isolated token reads; a funded treasury without allowance remains idle.
-
-The provider fills only the committed `redeemOnchain(USDC, amount)` action and
-read-constrained USN input. The recipe must supply exact USN approval, allowance
-cleanup
-and a USDC output postcondition. Account balance and allowance can be established
-earlier in that recipe, including after an existing sUSN claim. Full simulation
-remains the execution gate; a readable quote alone does not prove redeemability.
-Production token pause, blacklist and whitelist restrictions can still prevent
-the USN burn or USDC transfer; local token fixtures do not attest those policies.
-The native protocol readiness stage uses one aggregate for nine handler getters,
-then one JSON batch for two dependent token getters. Shared metadata, numerical
-lens, original full simulation and canonical fences remain separate ordered
-stages; these two readiness requests are not a total planning call count.
-
-Native completion requires canonical exact Manage-call identity, one matching
-handler `Redeemed` event, the USN burn and the matching account USDC transfer.
-It finishes as `redeemed`. The execution payout may differ from the old preview;
-minimum proceeds are enforced by the committed recipe.

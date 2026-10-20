@@ -5,16 +5,12 @@ specifications. Unknown response fields are tolerated; providers validate every
 field used for authorization, pricing, identity, proof verification and settlement.
 No schema or endpoint is fetched automatically during a normal build.
 
-- `protocols.json`: JSON Schema wire subsets for Liquid Lane discount list/resolve and public consumer RFQ,
+- `protocols.json`: JSON Schema wire subsets for Liquid Lane public consumer RFQ,
   Merkl V4 reward responses and CoW quote/order requests and status responses.
   `hack/generate-protocol-types.py` generates `api/protocoltypes/types.gen.go`.
-- Liquid Lane wire source: sibling `vault-solver/openapi/rfq-backend-internal.openapi.json`
-  and `rfq-backend/src/domains/discounts/discounts.types.ts`, inspected 2026-09-27.
-  Public schema location: <https://swap.symbiotic.fi/api/v1/openapi-internal.json>.
-  Actual list/resolve paths are `/api-internal/v1/discounts`, requiring an explicitly
-  reachable internal backend. This schema does **not** establish connector-domain
-  support: the inspected producer still signs `LiquidLaneAdapter`, not
-  `LiquidLaneConnector`. See [provider boundaries](../../docs/PROVIDERS.md).
+- Liquid Lane public consumer wire and contract sources are pinned in
+  [LIQUID_LANE_RFQ.md](LIQUID_LANE_RFQ.md). Signed discount acquisition belongs to
+  vault-solver and has no daemon wire subset or runtime provider.
 - Merkl response subset: sibling `curator-frontend` Merkl V4 parser and
   <https://api.merkl.xyz/docs>, inspected 2026-09-27. Distributor ABI subset was
   transcribed from <https://github.com/AngleProtocol/merkl-contracts/blob/main/contracts/Distributor.sol>:
@@ -47,27 +43,6 @@ No schema or endpoint is fetched automatically during a normal build.
   [CoW provenance](COW_AUTO.md), refreshed 2026-10-13. The settlement ABI subset is `domainSeparator()` and
   `filledAmount(bytes)`. Full-fill sell orders use the filled sell amount; the
   invalidation sentinel is not success.
-- `api/abi/LiquidConnector.json`: full compiled ABI extracted from the adapters
-  `out/LiquidLaneConnector.sol/LiquidLaneConnector.json` at
-  `0427c657375512a87158010c323556739fe96d1b`, refreshed 2026-10-20. The payment
-  asset getter is `outputAsset()`.
-  Its EIP712 name/version are `LiquidLaneConnector` / `1`; the verifying contract
-  is the connector proxy. The ABI artifact is vendored and independently buildable;
-  a source update requires deliberately refreshing this file.
-- `ParetoCDO.BBTranche() returns (address)` was added from the current frontend
-  Pareto builder and NAV identity catalogue on 2026-10-19, for FalconX BB direct
-  requests. It is the public getter in `IdleCDOStorage.sol`, alongside the retained
-  AA getter; bindings are regenerated, not hand edited. This source comparison and
-  local fixture coverage do not establish live liquidity or account eligibility.
-- The ten LL/Noon issuer ABI subsets are sourced from pinned adapters interfaces and
-  issuer contracts. [Liquid Lane provenance](../../docs/LIQUID-LANE-ASSETS.md)
-  records every source, hash, embedded catalogue policy and read-only topology check.
-- Four Securitize ABI subsets cover fund decimals, topology and the distinct
-  legacy/modern offramp versions. [Securitize provenance](../../docs/SECURITIZE-ASSETS.md)
-  records the official public feed, verified implementation sources and coverage.
-  Its embedded catalogue is a reviewed snapshot, pinned by SHA-256 and durable
-  recipe policy; builds and execution never adopt
-  remote feed changes automatically.
 
 Generate bindings with `sh hack/generate-protocol-bindings.sh` using `abigen --v2`
 from go-ethereum 1.17.5 (same dependency as this module). The separate core binding
@@ -81,12 +56,10 @@ not API acceptance, a deployed permission proof or a live transaction result.
 The public Liquid Lane RFQ consumer uses a distinct Reactor ABI and public quote/order
 wire subset. [LIQUID_LANE_RFQ.md](LIQUID_LANE_RFQ.md) records exact contract/backend
 revisions, ABI source hash, account interface, EIP712 layout, cursor semantics and
-unsupported boundaries. These do not change the older signed discount subset.
+unsupported boundaries.
 
-- Native Noon `NoonRedeemHandlerV2.json` is the reviewed subset of the verified
-  Ethereum deployment `0x9F8D0a683871125083170F65430F8A15aFfa0086`, retrieved
-  2026-10-12 from Blockscout. Its full source closure, SHA-256 hashes, exact
-  Solidity 0.8.28/Paris/optimizer-200 settings and generated local artifacts live
-  in `internal/providers/redemptions/testdata/noon/provenance.json`. Only USN→USDC
-  preparation, `redeemOnchain`, and its `Redeemed` receipt event are included;
-  signed orders, USDT, USN minting and administrative methods are excluded.
+Native issuer contracts are test fixtures only. Source-pinned Noon artifacts and
+compiler settings live under `cmd/merkle-executor/testdata/issuers/noon`, outside
+production ABI generation. [Native validation](../../docs/NATIVE-ISSUER-TESTING.md)
+explains the evidence boundary. Production Go code has no native issuer ABI,
+deployment catalogue or protocol-specific execution provider.

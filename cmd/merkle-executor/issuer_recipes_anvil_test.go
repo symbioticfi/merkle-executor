@@ -19,17 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/go-logr/logr"
-	"github.com/symbioticfi/merkle-executor/internal/chain"
-	"github.com/symbioticfi/merkle-executor/internal/curator"
-	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/signer"
-	"github.com/symbioticfi/merkle-executor/internal/txmanager"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 
-	async "github.com/symbioticfi/merkle-executor/api/bindings/asyncredeemvault"
-	"github.com/symbioticfi/merkle-executor/internal/config"
-	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
@@ -39,7 +29,7 @@ import (
 
 func loadIssuerArtifact(t *testing.T, name string) serviceArtifact {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "providers", "redemptions", "testdata", name+".json"))
+	raw, err := os.ReadFile(filepath.Join("testdata", "issuers", name+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +64,7 @@ func issuerStep(t *testing.T, operation uint8, names []string, values ...any) []
 	return append([]byte{operation}, payload...)
 }
 
-func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
+func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
 		t.Skip("set MERKLE_ANVIL_TEST=1 for full local issuer lifecycle integration")
 	}
@@ -100,7 +90,6 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	}
 	requestExecutor, claimExecutor := deployExecutor(), deployExecutor()
 	serviceSeedTransaction(t, ctx, client, owner, &share, servicePack(t, shareArtifact, "setVault", asset, issuer))
-	serviceSeedTransaction(t, ctx, client, owner, &share, servicePack(t, shareArtifact, "mint", account, big.NewInt(100)))
 	serviceSeedTransaction(t, ctx, client, owner, &asset, servicePack(t, outputArtifact, "mint", issuer, big.NewInt(200)))
 
 	// Only a new random key funded on this ephemeral local chain signs bot calls.
@@ -112,7 +101,7 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	if err := client.Client().CallContext(ctx, nil, "anvil_setBalance", caller, "0xde0b6b3a7640000"); err != nil {
 		t.Fatal(err)
 	}
-	tokens, vaults, executors := erc20.NewERC20(), async.NewAsyncRedeemVault(), executor.NewRecipeExecutor()
+	tokens, executors := erc20.NewERC20(), executor.NewRecipeExecutor()
 	newLeaf := func(target common.Address, data []byte, offset int) recipes.Leaf {
 		mask := make([]byte, len(data))
 		for i := offset; i < offset+32; i++ {
@@ -127,8 +116,8 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	}
 	leaves := []recipes.Leaf{
 		newLeaf(share, tokens.PackApprove(issuer, new(big.Int)), 36),
-		newLeaf(issuer, vaults.PackRequestRedeem(new(big.Int), account, account), 4),
-		newLeaf(issuer, vaults.PackRedeem(new(big.Int), account, account), 4),
+		newLeaf(issuer, servicePack(t, issuerArtifact, "requestRedeem", new(big.Int), account, account), 4),
+		newLeaf(issuer, servicePack(t, issuerArtifact, "redeem", new(big.Int), account, account), 4),
 	}
 	pair := func(a, b common.Hash) common.Hash {
 		if a.Cmp(b) > 0 {
@@ -145,14 +134,22 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 		serviceSeedTransaction(t, ctx, client, owner, &account, servicePack(t, accountArtifact, "configure", root, [][32]byte{leaves[0].Hash, leaves[1].Hash, leaves[2].Hash}, address))
 		serviceSeedTransaction(t, ctx, client, owner, &address, executors.PackSetCaller(caller))
 	}
-	manage := func(leaf common.Hash) []byte {
-		return issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{leaf}, [][]*big.Int{{}})
+	result := new(big.Int).Lsh(big.NewInt(2), 216)
+	query := func(target common.Address, data []byte) []byte {
+		return issuerStep(t, 0, []string{"address", "bytes", "uint256[]", "uint256"}, target, data, []*big.Int{}, new(big.Int))[1:]
 	}
-	requestRecipe := recipes.Recipe{Steps: [][]byte{
-		issuerStep(t, recipes.Approve, []string{"uint256", "address", "address", "bytes32"}, big.NewInt(100), share, issuer, leaves[0].Hash),
-		manage(leaves[1].Hash),
+	bind := func(offset int64) *big.Int {
+		return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(offset), 224), result)
+	}
+	requestRecipe := recipes.Recipe{Queries: [][]byte{query(share, tokens.PackBalanceOf(account))}, Steps: [][]byte{
+		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(0)),
+		issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, result,
+			[][32]byte{leaves[0].Hash, leaves[1].Hash, leaves[0].Hash}, [][]*big.Int{{bind(36)}, {bind(4)}, {new(big.Int).Lsh(big.NewInt(36), 224)}}),
 	}}
-	claimRecipe := recipes.Recipe{Steps: [][]byte{manage(leaves[2].Hash)}}
+	claimRecipe := recipes.Recipe{Queries: [][]byte{query(issuer, servicePack(t, issuerArtifact, "maxRedeem", account))}, Steps: [][]byte{
+		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(0)),
+		issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, result, [][32]byte{leaves[2].Hash}, [][]*big.Int{{bind(4)}}),
+	}}
 	serviceSeedTransaction(t, ctx, client, owner, &requestExecutor, executors.PackSetRecipe(requestRecipe.Queries, requestRecipe.Steps))
 	serviceSeedTransaction(t, ctx, client, owner, &claimExecutor, executors.PackSetRecipe(claimRecipe.Queries, claimRecipe.Steps))
 
@@ -180,16 +177,13 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	}))
 	defer permissionServer.Close()
 	cfg.Curator.URL = permissionServer.URL + "/api/v1"
-	requestConfig := redemptions.Config{Family: "centrifuge", Mode: "request", ChainID: 31337, Token: share.Hex(), OutputAsset: asset.Hex(), Target: issuer.Hex(), Amount: "100", Action: "1:0"}
-	claimConfig := requestConfig
-	claimConfig.Mode, claimConfig.Action, claimConfig.Amount = "claim", "0:0", "100"
 	cfg.Strategies = []string{strings.ToLower(requestExecutor.Hex()), strings.ToLower(claimExecutor.Hex())}
 	path := writeCLIConfig(t, directory, cfg)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 
 	startServiceConfirmationMining(t, ctx, client, caller)
 	run := func() {
-		if err := runIssuerFixture(ctx, path, []redemptions.Config{requestConfig, claimConfig}); err != nil {
+		if err := runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -211,10 +205,24 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 		}
 		return job
 	}
+	assertIdle := func() {
+		t.Helper()
+		for _, strategy := range cfg.Strategies {
+			if found, err := state.Read(cfg.StateDir, "strategy."+strategy+".v1", new(keeper.Job)); err != nil || found {
+				t.Fatalf("zero-gated issuer recipe became durable work: %v", err)
+			}
+		}
+		if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 0 {
+			t.Fatalf("idle recipes consumed a nonce: nonce=%d error=%v", nonce, err)
+		}
+	}
+	run()
+	assertIdle()
+	serviceSeedTransaction(t, ctx, client, owner, &share, servicePack(t, shareArtifact, "mint", account, big.NewInt(100)))
 	run()
 	requested := load(cfg.Strategies[0])
-	if requested.Phase != "settled" || len(requested.Progress) != 1 || !requested.Progress[0].Done || requested.Progress[0].Outcome != "requested" || requested.Result.Execution == nil {
-		t.Fatal("confirmed request did not release account ownership with correlated execution evidence")
+	if requested.Phase != "settled" || len(requested.Progress) != 4 || !requested.Progress[3].Done || requested.Result.Execution == nil {
+		t.Fatal("confirmed recipe request did not release account ownership with correlated execution evidence")
 	}
 	if read(issuer, issuerArtifact, "pendingShares", account).Int64() != 100 || read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(share, shareArtifact, "allowance", account, issuer).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Sign() != 0 {
 		t.Fatal("request did not consume exact allowance and retain issuer-owned pending shares")
@@ -229,7 +237,7 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	serviceSeedTransaction(t, ctx, client, owner, &issuer, servicePack(t, issuerArtifact, "finalize", account))
 	run() // Separate claim strategy may now own the same account and nonce lane.
 	claimed := load(cfg.Strategies[1])
-	if claimed.Phase != "settled" || !claimed.Progress[0].Done || claimed.Progress[0].Outcome != "claimed" || claimed.Result.Execution == nil || claimed.Result.Hash == requested.Result.Hash {
+	if claimed.Phase != "settled" || len(claimed.Progress) != 4 || !claimed.Progress[3].Done || claimed.Result.Execution == nil || claimed.Result.Hash == requested.Result.Hash {
 		t.Fatal("matured issuer claim did not finish as its own confirmed execution")
 	}
 	if read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Int64() != 200 || read(issuer, issuerArtifact, "claimCount").Int64() != 1 {
@@ -242,64 +250,4 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	if found, err := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); err != nil || found {
 		t.Fatalf("completed claim retained nonce ownership: %v", err)
 	}
-}
-
-// The catalogue intentionally contains no local-chain deployments. This fixture
-// constructs reviewed providers directly at the SDK boundary; production YAML
-// continues to reject manual runtime providers and uses authenticated discovery.
-func runIssuerFixture(ctx context.Context, path string, policies []redemptions.Config) error {
-	cfg, err := config.Load(path)
-	if err != nil {
-		return err
-	}
-	chainID := new(big.Int).SetUint64(cfg.Chain.ChainID)
-	client, err := chain.Dial(ctx, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID, common.HexToAddress(config.StandardMulticall3))
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	source, err := curator.New(cfg.Curator.HTTPConfig(), &http.Client{Timeout: config.DefaultHTTPTimeout}, client)
-	if err != nil {
-		return err
-	}
-	targets := make([]common.Address, len(cfg.Strategies))
-	for i, strategy := range cfg.Strategies {
-		targets[i] = common.HexToAddress(strategy)
-	}
-	accounts, caller, err := discoverIdentity(ctx, client, targets)
-	if err != nil {
-		return err
-	}
-	strategies := make([]keeper.Strategy, len(cfg.Strategies))
-	for i, strategy := range cfg.Strategies {
-		runtime, err := redemptions.New(policies[i], providerRegistry.Deps{Chain: client})
-		if err != nil {
-			return err
-		}
-		revision, _ := json.Marshal(policies[i])
-		strategies[i] = keeper.Strategy{Config: keeper.Config{Name: strategy, Executor: strategy, Account: accounts[targets[i]].Hex(), Interval: config.DefaultStrategyInterval, Revision: string(revision)}, Providers: []provider.Provider{runtime}}
-	}
-	store, err := state.Open(cfg.StateDir)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-	if err = bindState(store, cfg.Chain.ChainID, caller.Hex()); err != nil {
-		return err
-	}
-	txSigner, err := signer.FromEnv(cfg.Signer.KeyEnv)
-	if err != nil {
-		return err
-	}
-	sender, err := txmanager.New(client, txSigner, chainID, store, cfg.TxManager.EngineConfig(), logr.Discard())
-	if err != nil {
-		return err
-	}
-	if err = sender.Start(ctx); err != nil {
-		return err
-	}
-	defer sender.Close()
-	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations}
-	worker := keeper.Keeper{Store: store, Planner: planner, Sender: sender, Strategies: strategies, Mode: "send", OperationTimeout: config.DefaultOperationTimeout, Log: logr.Discard()}
-	return worker.Tick(ctx)
 }

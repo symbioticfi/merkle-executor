@@ -6,13 +6,7 @@ case "$("$ABIGEN" --version)" in
     "abigen version 1.17.5"*) ;;
     *) echo "abigen 1.17.5 is required" >&2; exit 1 ;;
 esac
-for spec in LiquidLaneReactor:liquidlanereactor LiquidConnector:liquidconnector MerklDistributor:merkldistributor Multicall3:multicall3 CowSettlement:cowsettlement \
-    MidasRedemption:midasredemption CentrifugeShare:centrifugeshare AsyncRedeemVault:asyncredeemvault \
-    FigureYieldVault:figureyieldvault OpenEdenExpress:openedenexpress ParetoQueue:paretoqueue \
-    ParetoCDO:paretocdo ParetoStrategy:paretostrategy ERC4626:erc4626 \
-    NoonWithdrawalHandler:noonwithdrawalhandler NoonRedeemHandlerV2:noonredeemhandlerv2 \
-    SecuritizeOffRamp:securitizeofframp SecuritizeLegacyOffRamp:securitizelegacyofframp \
-    SecuritizeToken:securitizetoken SecuritizeTopology:securitizetopology; do
+for spec in LiquidLaneReactor:liquidlanereactor MerklDistributor:merkldistributor Multicall3:multicall3 CowSettlement:cowsettlement; do
     contract=${spec%:*}
     package=${spec#*:}
     mkdir -p "api/bindings/$package"

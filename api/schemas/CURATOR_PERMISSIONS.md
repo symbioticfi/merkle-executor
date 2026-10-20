@@ -1,34 +1,58 @@
 # Curator permission response
 
-The daemon consumes the route and response schema from curator-backend revision
-`49c8418a344523e6500b1ed3708a4b44fc069051`:
+The daemon uses SDK `permissions.Source` through `internal/curator`. The host pins
+published SDK `v0.0.0-20261020132604-dc2cd396a69d` in `go.mod`.
+For every new preparation, the source reads `account.adapter()` at the authenticated
+snapshot block, requires a canonical nonzero address, then requests:
 
-- `src/domains/merkle-trees/merkle-trees.router.ts`: `GET /merkle-trees/:root?chainId=...`.
-- `src/domains/merkle-trees/merkle-trees.schemas.ts`: exported tree response schema.
+```text
+GET /merkle/{lowercaseAdapter}/{acceptedRoot}
+```
 
-The configured base URL includes `/api/v1`. The requested root is the account's
-fresh accepted root from the authenticated recipe snapshot, never a backend-selected
-latest revision. The chain query is the configured numeric chain ID.
+The configured base URL includes `/api/v1`. The route has no query parameters.
+The adapter comes from the pinned account read, and the root is the account's
+active accepted root. The source does not request a backend-selected latest tree.
 
-The consumed subset is `chainId`, `root` and `leaves`; each leaf contains `target`,
-`value`, `data`, `dataMask`, `hash` and `proof`. SDK decoding also accepts its existing
-`calls` representation and validates optional `account` when supplied. A remote source
-must supply a nonnull matching chain ID. All leaves, including unused leaves, undergo
-hash and sorted-pair proof validation before provider preparation. The active root
-and optional account must match the snapshot.
+## Certificate and executable metadata
 
-The backend response has no top-level account. Its `adapter` identifies a MerkleAdapter,
-not a RecipeExecutor or its MerkleAccount. `vault`, `actions`, signatures, nonces,
-parent roots, catalogue versions and display fields are not execution authority and
-are deliberately ignored. Unknown display fields remain compatible. The host returns
-raw response JSON to the SDK instead of constructing a trusted tree from backend data.
+The response contains `bundle` with `chainId`, `adapter`, `account`, `root`,
+`leaves` and `metadata`. Both the bundle and its embedded metadata must name the
+exact chain, adapter, account and active root. Chain IDs retain exact uint256
+precision. The source decodes the embedded metadata as an executable permission
+tree and returns those exact bytes to the generic planner.
 
-The client reuses `protocolio` context-aware HTTP, configured timeouts, bounded
-responses (default 2 MiB, maximum 16 MiB), credential environment references, redacted
-errors and redirect rejection. It has no local-file, missing-route or stale-root
-fallback. Config validation does not access credentials or the network.
+The complete bundle contains 1..4096 sorted, unique leaf hashes. Rebuilding its
+sorted-pair tree must reproduce the active root. Metadata contains executable
+`calls` (or the SDK tree's `leaves` representation); each call includes its target,
+value, data, mask, hash and proof. Every call, including unused calls, undergoes
+hash and proof validation and must be present in the bundle. Extra API policy
+leaves may be present in the complete bundle. A certificate signature or frontend
+display metadata does not authorize execution or replace those checks.
 
-Local HTTP fixtures verify this source contract and real local Anvil tests use
-backend-shaped trees. The inspected latest stage did not yet expose this route.
-These checks do not establish deployment availability; verify the chosen backend
-before rollout. No live credentials, chain transactions or orders were used.
+The byte-exact certificate fixture is copied from
+`curator-backend/test/fixtures/api/merkle/permission-set-full.json` at backend
+`3b03a4d13d63efe7736636696332bf8a34719383`. Its generator source is
+`a1d9506f20792ecf9da5554e1415d45b1924c5ad`, with the source changes recorded in the
+backend fixture provenance. The copied file's SHA-256 is
+`738d1e6891484f2944164e0bbb50a6b475168071a561ccab564e049a285f21e2`.
+[SDK fixture source](../../sdk/permissions/testdata/SOURCE.md) records that chain of
+custody. `TestSourceReadsCurrentBackendCertificate` validates all 78 executable
+calls and proofs independently of the backend certificate.
+
+## Transport and recovery
+
+The daemon fixes the permission HTTP timeout at 10 seconds and response cap at
+2 MiB. Context cancellation, credential environment references, sanitized errors
+and redirect rejection use shared `protocolio` transport. Configuration validation
+reads neither credentials nor the network. A failed adapter read prevents HTTP;
+invalid scope, malformed metadata, incomplete leaves or proof errors fail closed.
+There is no local-file, missing-route or stale-root fallback in the daemon.
+
+Only new preparation acquires permission artifacts. Saved signed attempts and
+external-order advancement recover from persisted identity and canonical evidence
+without fetching a new tree. Standalone SDK hosts may separately use the optional
+local permission-tree interface.
+
+These are source and local HTTP/Anvil fixture checks. They do not establish the
+chosen backend's deployment availability, production permissions or a live chain
+transaction.

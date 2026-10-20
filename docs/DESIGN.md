@@ -19,9 +19,9 @@ another module's internal packages or change the solver or adapters checkouts.
 - SDK `provider`: integration-neutral snapshots, runtime outputs and asynchronous progress.
   The daemon keeps only shared chain/HTTP dependencies in `internal/provider`; startup
   installs its fixed automatic providers directly. There is no manual YAML factory registry.
-- `providers`: protocol-specific adapters selected from authenticated recipes.
-  SDK hosts supply additional integrations through the provider interfaces. `redemptions`
-  owns the documented LL issuer families; `securitize` owns wallet and offramp routes.
+- `providers`: CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs, selected
+  from authenticated recipes. Generic `keeper.NewRecipeInputs()` resolves exact
+  recipe constraints. Native protocol semantics belong entirely in recipe bytes.
 - `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
 - `curator`: bounded HTTP acquisition of the exact active permission root; the SDK
   validates the returned bytes independently.
@@ -42,7 +42,7 @@ Only complete all-status lookup permits an idempotent retry. Bounded canonical e
 scan cursors survive restart; API statuses and used nonce bits are not settlement.
 
 Signed Liquid Lane discount/signature acquisition belongs to vault-solver; the daemon
-does not register that provider. Issuer redemptions remain registered. CoW authorization and settlement
+does not register that provider. CoW authorization and settlement
 are separate phases: submit the ERC-1271 order only after its authorization transaction
 confirms, persist its deterministic UID and reconcile it before retrying submission.
 Merkl reward proofs are protocol data, separate from account permission proofs. Claims
@@ -54,8 +54,10 @@ use later claim recipes, configured independently from the request recipe.
 The daemon accepts a YAML list of executor addresses and registers fixed automatic
 providers at startup. Canonical lowercase executor addresses are the durable and
 log identifiers; duplicate addresses and strategy objects are rejected. Runtime
-policy version `1` binds chain, discovered account/caller, curator source and sender
-policy. The issuer policy also binds the reviewed catalogue digest.
+policy version `1` is included in the recovery fingerprint with the canonical
+executor, discovered account/caller, chain ID, curator URL/credential environment
+name and transaction-manager fee ceiling. The fingerprint does not encode the
+provider roster or an issuer catalogue.
 At startup it pins a valid head, batches deduplicated account and caller getters,
 rejects any invalid member,
 and closes the same-number/hash guard before publishing the complete account map.
@@ -92,17 +94,22 @@ responses enter logs. Failed/unknown external states never become successful com
 
 The transaction journal persists confirmed receipt identity and logs before nonce
 acknowledgement. Provider advancement receives that evidence with a fresh pinned
-snapshot and checks canonical headers before and after reconciliation. Issuer
-providers match exact account `Manage` calls in receipt order; missing or skipped
-actions do not count as executed. A request finishes as `requested`, releasing the
-account lock while issuer-owned state retains the pending withdrawal. Independent
-claim strategies read current claim eligibility. Submission is never labelled paid.
-Issuer providers declare exclusive managed targets for receipt attribution. The
-keeper checks the complete immutable execute composition before signing and on
-recovery, retaining completed providers' claims. Repeated/static calls to those
-targets and arbitrary Call steps are unsupported; see [provider restrictions](PROVIDERS.md).
-Existing journals without evidence remain readable; new issuer reconciliation
-requires evidence and does not infer it from a successful transaction alone.
+snapshot and checks canonical headers before and after reconciliation. CoW and RFQ
+providers retain their exact account authorization and settlement attestations.
+
+A canonical native receipt settles generic execution. The keeper does not interpret
+issuer events, discover requests, apply protocol-specific readiness rules or wait
+for an issuer payout. Calls, reads, amount selection, authorization, claim gates
+and output checks are committed in the recipe. Native protocols require no selector
+or deployment catalogue in Go. Separate request and claim recipes read their own
+current pending/eligible state; a successful request transaction does not establish
+later settlement.
+
+Inputs must resolve through exact generic recipe constraints or an authenticated
+off-chain provider. A native request ID can be committed directly or derived by
+recipe reads/results. Provider-created native Inputs must be replaced with such a
+constraint or a Result binding. Unknown and unresolved dependencies fail closed;
+the keeper never adds a protocol-specific discovery fallback.
 
 ## Preparation read stages
 

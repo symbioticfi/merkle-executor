@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Build local async issuer fixtures without any external chain or deployment."""
+import argparse
 import hashlib
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 
+parser = argparse.ArgumentParser()
+mode = parser.add_mutually_exclusive_group()
+mode.add_argument("--check", action="store_true", help="verify artifacts without writing")
+mode.add_argument("--update", action="store_true", help="write generated artifacts")
+args = parser.parse_args()
 HERE = Path(__file__).resolve().parent
 source = HERE / "Fixture.sol"
 with tempfile.TemporaryDirectory(prefix="merkle-issuer-fixtures-") as temporary:
@@ -26,4 +32,11 @@ with tempfile.TemporaryDirectory(prefix="merkle-issuer-fixtures-") as temporary:
             "sourceSha256": hashlib.sha256(source.read_bytes()).hexdigest(),
             "compiler": artifact["metadata"]["compiler"]["version"],
         }
-        (HERE / f"{contract}.json").write_text(json.dumps(document, indent=2) + "\n")
+        encoded = json.dumps(document, indent=2) + "\n"
+        target = HERE / f"{contract}.json"
+        if args.check:
+            if not target.is_file() or target.read_text() != encoded:
+                raise SystemExit(f"Issuer artifact is stale: {target.name}; regenerate with --update")
+        else:
+            target.write_text(encoded)
+print("Local issuer artifacts " + ("verified" if args.check else "generated"))

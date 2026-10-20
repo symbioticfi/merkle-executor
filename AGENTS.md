@@ -4,8 +4,11 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
 
 - Go 1.27.1, Cobra CLI, strict YAML, go-errors wrapping, logr structured logs,
   context-aware I/O and table-driven tests. Keep configuration values in YAML.
-- Generic packages may not branch on protocol names. Register providers at startup;
-  protocol details belong under `internal/providers/<name>`.
+- Generic packages may not branch on protocol names. Native protocol calls, reads,
+  gates, amount selection, claims, authorization and balance guards belong in the
+  committed recipe, with no selector or deployment catalogue in Go. Protocol
+  providers under `internal/providers` serve only CoW orders, Liquid Lane HTTP RFQ
+  and Merkl HTTP proofs; `keeper.NewRecipeInputs()` handles exact recipe constraints.
 - Never store secret values in configuration or logs. Use environment variable names.
 - Contract interfaces are vendored under `api/abi` and generated with abigen v2.
   Regenerate artifacts instead of editing generated bindings. Protocol wire schema

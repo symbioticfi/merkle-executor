@@ -2,7 +2,8 @@
 
 A Go keeper for curator-committed `RecipeExecutor` strategies. It discovers the
 current `SetRecipe`, assembles runtime calldata from the active permission tree,
-resolves protocol data, simulates the complete call and optionally sends it.
+resolves authorized runtime inputs and off-chain protocol data, simulates the
+complete call and optionally sends it.
 
 Recipes use opcode-prefixed `bytes[]` steps and packed operands/bindings from
 the current `IRecipes` schema. Literal values and indices fit `uint216`;
@@ -16,17 +17,16 @@ one serialized transaction sender. [Design and comparison](docs/DESIGN.md).
 
 | Flow | Implementation |
 | --- | --- |
-| Ordered Morpho/Aave funding, caps and overflow deposits | Execute the committed on-chain recipe. Read-derived values resolve through the shared lens, including authenticated preceding effects. |
-| All 15 documented LL assets plus sUSN and USN | `redemptions` provider prepares Midas, Centrifuge, OpenEden, Figure, Pareto and Noon requests, eligible claims and native USN → USDC redemption. [Catalogue and lifecycle](docs/LIQUID-LANE-ASSETS.md). |
-| Securitize EVM assets | `securitize` provider prepares wallet requests and legacy/modern atomic offramps for all 10 symbols in the public feed. [Deployment coverage and limits](docs/SECURITIZE-ASSETS.md). |
+| Native on-chain operations | The committed recipe owns calls, reads, amount selection, eligibility gates, approvals, claims and output guards. The executor applies generic permission checks and simulation, without a protocol selector or deployment catalogue. |
 | CoW Swap | Quote, build account ERC-1271 authorization, wait for its confirmed transaction, submit/reconcile deterministic order UID, verify full fill on-chain. |
+| Liquid Lane RFQ | Acquire an HTTP quote, authorize the committed Request, publish idempotently and reconcile canonical Reactor settlement. |
 | Merkl reward claims | Read V4 rewards, use cumulative amounts, verify effective distributor root/proof and recipient, encode an approved bounded claim. |
-| 3F reads and other protocols | Recipe reads and arithmetic determine numeric inputs. Additional off-chain protocol data requires an authenticated provider implementation. |
+| Deterministic runtime Inputs | `keeper.NewRecipeInputs()` resolves exact recipe constraints through the shared numerical lens. Unknown or unresolved Inputs fail closed. |
 
 The transaction engine supports the current Solidity interpreter's operations;
 automatic preparation rejects recipes whose runtime data cannot be determined from
-authenticated instructions, permission fields and numeric results. Token pairs must
-be pinned, and trade amounts and minimum proceeds must depend on recipe reads.
+authenticated instructions, permission fields and numeric results. Off-chain trade
+providers require pinned token pairs and read-derived amounts and minimum proceeds.
 The recipe must select each amount explicitly: bind a result such as
 `min(balance, cap)` directly, or require an input to equal that result before use.
 Upper/lower bounds validate a selected amount; automatic preparation never chooses
@@ -35,7 +35,8 @@ proceeds while remaining subject to its checks.
 One shared same-executor lens resolves numeric dependencies after authenticated
 Manage, Approve and Call effects. Earlier unresolved provider actions, unknown
 Inputs and future/circular dependencies fail with an explicit unsupported error. The service does not infer economic intent or invent
-calldata layouts. Async redemptions need separate request and claim recipes.
+calldata layouts. Native issuer readiness and proceeds checks must be committed in
+the recipe. Async redemptions need separate request and claim recipes.
 CoW settlement occurs in a later transaction, so subsequent deposit work belongs
 in a later recipe. [Provider configuration and limits](docs/PROVIDERS.md).
 
@@ -82,8 +83,8 @@ rejected, including different checksum spellings. Strategy objects, labels and
 per-strategy options are rejected before network access.
 
 The runtime policy version is `1`. Its recovery fingerprint binds the executor,
-chain, discovered account and caller, curator source, provider policies and sender
-fee ceiling. Active work must match that fingerprint before it can resume.
+chain, discovered account and caller, curator URL/credential environment name and
+sender fee ceiling. Active work must match that fingerprint before it can resume.
 
 Cache, timeout, polling, confirmation and fee-horizon policies are fixed in code.
 Their fields are not configuration inputs.
@@ -137,11 +138,15 @@ are errors. Result bindings and arithmetic execute on-chain. An explicit skipped
 Manage step still occupies a runtime slot and must pass full simulation.
 
 For a claim → Morpho-cap → Aave-overflow recipe, commit the claim and issuer
-operations, balance reads and routing arithmetic in the recipe. Startup registers
-a fixed provider set; authenticated action layouts select the applicable protocols.
-The keeper supplies unavailable proofs, request IDs and signatures. Runtime inputs
-use exact recipe-result anchors; bounds alone never select an amount and
-unknown sources are rejected.
+operations, eligibility checks, balance reads and routing arithmetic in the recipe.
+Startup registers CoW, Merkl and Liquid Lane RFQ providers plus generic recipe
+Inputs. Those protocol providers supply HTTP orders, quotes and reward proofs;
+native protocol actions use the generic execution path. Request IDs and claim
+eligibility must come from committed literals, reads and results. Runtime inputs
+use exact recipe-result anchors; bounds alone never select an amount and unknown
+sources are rejected. Recipes that depended on issuer-provider-created Inputs or
+request discovery must express that source as an exact recipe constraint or bind a
+Result directly. [Native recipe requirements](docs/PROVIDERS.md#native-on-chain-recipes).
 SDK hosts implement their own providers through the SDK provider interfaces;
 the daemon does not expose manual provider configuration.
 
@@ -172,16 +177,16 @@ lifecycle, fee, replacement and sender-account metrics. Gas/fee counters cover
 receipts observed during active engine tracking. Recovery after tracking ends is
 owned by the durable journal and reported through its terminal logs and keeper outcomes.
 
-Issuer providers require the account's confirmed `Manage` logs to match their
-prepared calls, so a skipped recipe group cannot count as a request. Request jobs
-finish as `requested` and release the account for later claim recipes. This records
-submission, not issuer payout. Receipt evidence survives restarts. Securitize wallet
-requests additionally require exact token delivery; atomic offramps require payment
-evidence. Native Noon redemption requires the account's separate USN whitelist,
-fresh full-amount quote, remaining block budget, and treasury USDC balance plus
-allowance. Its receipt must prove the exact managed redemption, USN burn and
-account USDC payment before finishing as `redeemed`. Issuer enrollment and
-external settlement remain issuer-controlled.
+For native on-chain actions, canonical confirmation completes the generic recipe
+execution. The keeper does not classify an issuer request, interpret payout events
+or track a pending issuer obligation. The recipe's own gates and balance guards
+enforce the intended execution. A later settlement or claim uses a separate recipe
+with its own current-state reads and permissions. Issuer enrollment and external
+settlement remain issuer-controlled.
+
+Finish active work with the existing binary before upgrading from an issuer-provider
+roster; active jobs with a different provider count are rejected and have no
+automatic state conversion.
 
 After authorization confirms, external progress is checkpointed separately.
 CoW API status alone is insufficient to finish a trade. Full on-chain fill or
@@ -224,8 +229,8 @@ The service uses Go 1.27.1. Generation installs pinned `abigen` 1.17.5 locally i
 also required for wire type generation.
 
 The local integration exercises event discovery, permissions, arithmetic/bindings,
-managed transfers, allowance resets, direct Call, skipped gates and a request →
-issuer fulfillment → independent claim lifecycle with restart recovery. Provider tests
+managed transfers, allowance resets, direct Call, skipped gates and native issuer
+recipes with atomic guards and restart recovery. Provider tests
 use HTTP/RPC fixtures and independent digest vectors. They do not certify live
 third-party deployments. Contract/protocol artifacts record their sources;
 refresh them when the on-chain ABI or upstream API changes.
@@ -240,9 +245,8 @@ are validated before requesting a quote.
 
 Signed Liquid Lane discount acquisition and signatures belong to vault-solver. The
 daemon does not include a signed-swap acquisition provider; the SDK exposes
-protocol-neutral provider interfaces for host integrations. The `redemptions` issuer
-request/claim provider remains registered. The recipe fixes identities, permitted
-layouts and economic constraints; protocol endpoints, expiry limits and preparation
+protocol-neutral provider interfaces for host integrations. The recipe fixes
+identities, permitted layouts and economic constraints; protocol endpoints, expiry limits and preparation
 bounds use fixed policies. CoW uses its own automatic slippage calculation.
 
 The curator route is verified against source and local fixtures; its availability

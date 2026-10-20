@@ -23,11 +23,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-	native "github.com/symbioticfi/merkle-executor/api/bindings/noonredeemhandlerv2"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
@@ -39,8 +37,8 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	client, endpoint := startServiceAnvil(t, ctx)
-	// This owned ephemeral process has no fork or external RPC. Chain 1 is needed
-	// for the provider's canonical Ethereum route allowlist, not a live deployment.
+	// This owned ephemeral process has no fork or external RPC. Chain 1 only
+	// reproduces the permission certificate's deployment identity.
 	if err := client.Client().CallContext(ctx, nil, "anvil_setChainId", 1); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +106,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	call(owner, usn, tokenArtifact, "mint", account, amount)
 	call(owner, usdc, tokenArtifact, "mint", treasury, big.NewInt(10_000_000))
 	call(treasury, usdc, tokenArtifact, "approve", handler, big.NewInt(10_000_000))
-	tokens, redeem, executors := erc20.NewERC20(), native.NewNoonRedeemHandlerV2(), recipeexecutor.NewRecipeExecutor()
+	tokens, executors := erc20.NewERC20(), recipeexecutor.NewRecipeExecutor()
 	leaf := func(target common.Address, data []byte) recipes.Leaf {
 		mask := make([]byte, len(data))
 		for i := 36; i < 68; i++ {
@@ -123,7 +121,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 		return value
 	}
 	approval := leaf(usn, tokens.PackApprove(handler, new(big.Int)))
-	action := leaf(handler, redeem.PackRedeemOnchain(usdc, new(big.Int)))
+	action := leaf(handler, servicePack(t, handlerArtifact, "redeemOnchain", usdc, new(big.Int)))
 	approval.Proof, action.Proof = []common.Hash{action.Hash}, []common.Hash{approval.Hash}
 	a, b := approval.Hash, action.Hash
 	if a.Cmp(b) > 0 {
@@ -142,7 +140,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), input)
 	recipe := recipes.Recipe{Queries: [][]byte{
 		query(usn, tokens.PackBalanceOf(account)),
-		query(handler, redeem.PackRedeemLimitPerBlock()),
+		query(handler, servicePack(t, handlerArtifact, "redeemLimitPerBlock")),
 		query(usdc, tokens.PackBalanceOf(account)),
 	}, Steps: [][]byte{
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(0)),
@@ -192,13 +190,14 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	}))
 	defer rpc.Close()
 	cfg := testCLIConfig(t.TempDir())
-	cfg.Mode = "simulate"
+	cfg.Mode = "send"
 	cfg.Chain.ChainID = 1
 	cfg.Chain.RPCURL = rpc.URL
 	cfg.Curator.URL = curator.URL + "/api/v1"
 	cfg.Strategies = []string{strings.ToLower(executor.Hex())}
 	cfg.Signer.Address = ""
 	path := writeCLIConfig(t, t.TempDir(), cfg)
+	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	prepare := func() (keeper.Plan, error) {
 		before := lenses.Load()
 		var output bytes.Buffer
@@ -210,8 +209,13 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 			return keeper.Plan{}, e
 		}
 		plan, exists := plans[cfg.Strategies[0]]
-		if !exists || len(plans) != 1 || plan.Snapshot.Account != account || plan.Snapshot.Caller != caller || len(plan.Outputs) != 6 || plan.Results[0] != amount.String() || len(plan.Outputs[3].Actions) != 1 || plan.Outputs[3].Inputs[0] != amount.String() || lenses.Load()-before != 1 {
-			t.Fatalf("automatic native host lost address identity/budget/lens: %+v", plan.Results)
+		if !exists || len(plans) != 1 || plan.Snapshot.Account != account || plan.Snapshot.Caller != caller || len(plan.Outputs) != 4 || plan.Results[0] != amount.String() || plan.Results[2] != amount.String() || lenses.Load()-before != 1 {
+			t.Fatalf("recipe host lost address identity/input derivation/lens budget: %+v", plan.Results)
+		}
+		for _, output := range plan.Outputs {
+			if len(output.Inputs) != 0 || len(output.Actions) != 0 || len(output.SkipSteps) != 0 {
+				t.Fatal("on-chain issuer recipe acquired provider-owned runtime values")
+			}
 		}
 		return plan, nil
 	}
@@ -324,10 +328,23 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 			if failure != "treasury-balance" && read(usdc, tokenArtifact, "balanceOf", treasury).Int64() != 10_000_000 {
 				t.Fatal("failed native execution changed treasury USDC")
 			}
-			if failure != "minimum-output" {
-				_, prepareErr := prepare()
-				if prepareErr == nil || (failure == "oracle-stale" && errors.Is(prepareErr, provider.ErrNotReady)) {
-					t.Fatal("invalid native readiness passed preparation or stale quote became idle")
+			_, prepareErr := prepare()
+			if prepareErr == nil || !strings.Contains(prepareErr.Error(), "full recipe simulation failed") {
+				t.Fatalf("issuer failure did not reach full recipe simulation: %v", prepareErr)
+			}
+			beforeNonce, err := client.NonceAt(ctx, caller, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runBot(ctx, path, true, false, new(bytes.Buffer)); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
+				t.Fatalf("send admission accepted failing issuer recipe: %v", err)
+			}
+			if afterNonce, err := client.NonceAt(ctx, caller, nil); err != nil || afterNonce != beforeNonce {
+				t.Fatalf("failed preparation consumed a nonce: before=%d after=%d error=%v", beforeNonce, afterNonce, err)
+			}
+			for _, name := range []string{"strategy." + cfg.Strategies[0] + ".v1", "txmanager.active.v1"} {
+				if found, err := state.Read(cfg.StateDir, name, new(any)); err != nil || found {
+					t.Fatalf("failed preparation became durable work: %s / %v", name, err)
 				}
 			}
 			switch failure {
@@ -365,7 +382,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 		t.Fatal(err)
 	}
 	var job keeper.Job
-	if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); e != nil || !found || job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || len(job.Progress) != 6 || job.Progress[3].Outcome != "redeemed" {
+	if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); e != nil || !found || job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || len(job.Progress) != 4 || !job.Progress[3].Done {
 		t.Fatalf("native canonical address job did not settle: %+v %v", job.Result, e)
 	}
 	if found, e := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); e != nil || found {

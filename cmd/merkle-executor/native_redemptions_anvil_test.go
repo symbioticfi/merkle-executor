@@ -16,13 +16,12 @@ import (
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-	async "github.com/symbioticfi/merkle-executor/api/bindings/asyncredeemvault"
-	midas "github.com/symbioticfi/merkle-executor/api/bindings/midasredemption"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
@@ -144,7 +143,12 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	call(owner, issuer, issuerArtifact, "finalize", account)
-	tokens, vaults, executors := erc20.NewERC20(), async.NewAsyncRedeemVault(), recipeexecutor.NewRecipeExecutor()
+	tokens, executors := erc20.NewERC20(), recipeexecutor.NewRecipeExecutor()
+	midasArtifact := serviceArtifact{}
+	midasArtifact.ABI, err = abi.JSON(strings.NewReader(`[{"type":"function","name":"redeemRequest","inputs":[{"name":"tokenOut","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	leaf := func(target common.Address, data []byte, offset int) recipes.Leaf {
 		mask := make([]byte, len(data))
 		for at := offset; at < offset+32; at++ {
@@ -158,10 +162,10 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 		return value
 	}
 	leaves := []recipes.Leaf{
-		leaf(issuer, vaults.PackRedeem(new(big.Int), account, account), 4),
-		leaf(issuer, vaults.PackRequestRedeem(new(big.Int), account, account), 4),
+		leaf(issuer, servicePack(t, issuerArtifact, "redeem", new(big.Int), account, account), 4),
+		leaf(issuer, servicePack(t, issuerArtifact, "requestRedeem", new(big.Int), account, account), 4),
 		leaf(share, tokens.PackApprove(issuer, new(big.Int)), 36),
-		leaf(midasVault, midas.NewMidasRedemption().PackRedeemRequest(asset, new(big.Int)), 36),
+		leaf(midasVault, servicePack(t, midasArtifact, "redeemRequest", asset, new(big.Int)), 36),
 	}
 	pair := func(a, b common.Hash) common.Hash {
 		if a.Cmp(b) > 0 {
@@ -209,20 +213,20 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 		return issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, result(source), [][32]byte{findLeaf(target, data)}, [][]*big.Int{{binding}})
 	}
 	recipe := recipes.Recipe{Queries: [][]byte{
-		query(issuer, vaults.PackMaxRedeem(account)),
+		query(issuer, servicePack(t, issuerArtifact, "maxRedeem", account)),
 		query(share, tokens.PackBalanceOf(account)),
 		query(mglobal, tokens.PackBalanceOf(account)),
 		query(asset, tokens.PackBalanceOf(account)),
 	}, Steps: [][]byte{
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(0)),
-		manage(issuer, vaults.PackRedeem(new(big.Int), account, account), 4, 0),
+		manage(issuer, servicePack(t, issuerArtifact, "redeem", new(big.Int), account, account), 4, 0),
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(0)),
-		manage(issuer, vaults.PackRedeem(new(big.Int), account, account), 4, 2),
+		manage(issuer, servicePack(t, issuerArtifact, "redeem", new(big.Int), account, account), 4, 2),
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(1)),
 		issuerStep(t, recipes.Approve, []string{"uint256", "address", "address", "bytes32"}, result(4), share, issuer, findLeaf(share, tokens.PackApprove(issuer, new(big.Int)))),
-		manage(issuer, vaults.PackRequestRedeem(new(big.Int), account, account), 4, 4),
+		manage(issuer, servicePack(t, issuerArtifact, "requestRedeem", new(big.Int), account, account), 4, 4),
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(2)),
-		manage(midasVault, midas.NewMidasRedemption().PackRedeemRequest(asset, new(big.Int)), 36, 7),
+		manage(midasVault, servicePack(t, midasArtifact, "redeemRequest", asset, new(big.Int)), 36, 7),
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(3)),
 		issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, big.NewInt(80), result(9)),
 	}}
@@ -321,7 +325,7 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := plans[cfg.Strategies[0]]
-	if len(plan.Outputs) != 6 || len(plan.Calldata) == 0 {
+	if len(plan.Outputs) != 4 || len(plan.Calldata) == 0 {
 		t.Fatal("mixed native plan missing automatic providers or execution")
 	}
 	for _, out := range plan.Outputs {
@@ -454,8 +458,8 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != signed.Nonce()+1 {
 		t.Fatal("recovery duplicated native execution", e)
 	}
-	if len(settled.Progress) != 6 || settled.Progress[3].Outcome != "not-applicable" {
-		t.Fatalf("native issuer provider incorrectly attributed receipt: %+v", settled.Progress)
+	if len(settled.Progress) != 4 {
+		t.Fatalf("wrong provider progress count: %+v", settled.Progress)
 	}
 	for _, progress := range settled.Progress {
 		if !progress.Done {
@@ -467,9 +471,9 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	zeroRecipe := recipes.Recipe{Queries: recipe.Queries, Steps: [][]byte{
 		recipe.Steps[0], recipe.Steps[1],
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(1)),
-		manage(issuer, vaults.PackRequestRedeem(new(big.Int), account, account), 4, 2),
+		manage(issuer, servicePack(t, issuerArtifact, "requestRedeem", new(big.Int), account, account), 4, 2),
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(2)),
-		manage(midasVault, midas.NewMidasRedemption().PackRedeemRequest(asset, new(big.Int)), 36, 4),
+		manage(midasVault, servicePack(t, midasArtifact, "redeemRequest", asset, new(big.Int)), 36, 4),
 	}}
 	if err = client.Client().CallContext(ctx, nil, "evm_setAutomine", true); err != nil {
 		t.Fatal(err)

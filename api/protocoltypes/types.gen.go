@@ -4,48 +4,6 @@ package protocoltypes
 
 import "encoding/json"
 
-type LLDiscount struct {
-	Adapter       string `json:"adapter"`
-	TokenToRedeem string `json:"tokenToRedeem"`
-	Discount      string `json:"discount"`
-	Signer        string `json:"signer"`
-	Protocol      string `json:"protocol"`
-	Nonce         string `json:"nonce"`
-	Deadline      int64  `json:"deadline"`
-}
-
-type LLResolved struct {
-	DiscountID        string     `json:"discountId"`
-	Discount          LLDiscount `json:"discount"`
-	SignerSignature   string     `json:"signerSignature"`
-	ProtocolDeadline  int64      `json:"protocolDeadline"`
-	ProtocolSignature string     `json:"protocolSignature"`
-}
-
-type LLResolveResponse struct {
-	DiscountID        string       `json:"discountId"`
-	Discount          LLDiscount   `json:"discount"`
-	SignerSignature   string       `json:"signerSignature"`
-	ProtocolDeadline  int64        `json:"protocolDeadline"`
-	ProtocolSignature string       `json:"protocolSignature"`
-	Discounts         []LLResolved `json:"discounts"`
-}
-
-type LLListItem struct {
-	DiscountID    string `json:"discountId"`
-	Adapter       string `json:"adapter"`
-	TokenToRedeem string `json:"tokenToRedeem"`
-	Collateral    string `json:"collateral"`
-	MaxRate       string `json:"maxRate"`
-	MaxAssets     string `json:"maxAssets"`
-	Deadline      int64  `json:"deadline"`
-}
-
-type LLListResponse struct {
-	Protocol  string       `json:"protocol"`
-	Discounts []LLListItem `json:"discounts"`
-}
-
 type MerklToken struct {
 	Address  string `json:"address"`
 	Decimals int64  `json:"decimals"`

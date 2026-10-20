@@ -326,7 +326,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 			t.Fatal(err)
 		}
 		plan, exists := plans[cfg.Strategies[0]]
-		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 6 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
+		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 4 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
 			t.Fatal("plan lost configuration, provider output or transaction")
 		}
 	}
@@ -390,7 +390,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if found, err := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); err != nil || !found {
 		t.Fatalf("durable job missing: %v", err)
 	}
-	if job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || job.Result.Hash == (common.Hash{}) || len(job.Progress) != 6 || job.FinishedAt.IsZero() {
+	if job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || job.Result.Hash == (common.Hash{}) || len(job.Progress) != 4 || job.FinishedAt.IsZero() {
 		t.Fatalf("job did not settle: %+v", job.Result)
 	}
 	for _, progress := range job.Progress {

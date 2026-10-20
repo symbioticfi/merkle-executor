@@ -47,7 +47,6 @@
     "@openzeppelin/contracts/utils/math/SafeCast.sol": "9769274bf53f26a7c7896c526ea1980dc9bea5bf5c2a5fd04870008c4afc1de9",
     "contracts/interfaces/IRedeemHandlerV2.sol": "7276e9e3a6da6d2b5ba7ec6e31959accba31f48898b0bcb26ce5d5e5322f81bb"
   },
-  "abiSubsetSha256": "9ecdb8b8c6190d9d25924a35072be600c2dbfdf08174e7c6902a1c3741f96187",
   "artifacts": {
     "RedeemHandlerV2.json": "3d157abfe661e523c7bd89147f271056c3fd79a57d241212a4abb189df1ee63e",
     "FixtureNoonToken.json": "4bb66030ccf5b11fe627ae46cffe575fc5dbc98e330c9d206d496c312bfbd941",

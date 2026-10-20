@@ -205,7 +205,7 @@ func TestRuntimePolicyRejectsFixedFields(t *testing.T) {
 }
 
 func TestRuntimeRejectsManualProviders(t *testing.T) {
-	for _, name := range []string{"static", "rpc", "http", "cowswap", "merkl", "liquidlane-rfq", "redemptions", "securitize"} {
+	for _, name := range []string{"static", "rpc", "http", "cowswap", "merkl", "liquidlane-rfq"} {
 		t.Run(name, func(t *testing.T) {
 			raw := strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    providers:\n      - name: " + name + "\n        config: {}\n")
 			if _, err := Load(writeConfig(t, raw)); err == nil {

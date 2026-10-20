@@ -11,8 +11,6 @@ import (
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
-	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
-	"github.com/symbioticfi/merkle-executor/internal/providers/securitize"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
@@ -42,22 +40,6 @@ func TestEveryProviderInputIndexBoundary(t *testing.T) {
 		}},
 		{"merkl/claimable", func(i *uint) error {
 			_, err := merkl.New(merkl.Config{HTTP: protocolio.HTTPConfig{URL: "http://localhost"}, Multicall3: b, Distributor: a, Tokens: []string{a}, ProofLengths: []int{0}, Action: "0:0", CalldataBytes: 4, ClaimableInputs: []uint{*i}}, deps)
-			return err
-		}},
-		{"redemptions/amount", func(i *uint) error {
-			_, err := redemptions.New(redemptions.Config{Family: "figure", Mode: "request", ChainID: 1, Token: a, OutputAsset: b, Target: b, Amount: "1", Action: "0:0", SecondAction: "1:0", AmountInput: i}, deps)
-			return err
-		}},
-		{"redemptions/intermediate", func(i *uint) error {
-			_, err := redemptions.New(redemptions.Config{Family: "figure", Mode: "request", ChainID: 1, Token: a, OutputAsset: b, Target: b, Amount: "1", Action: "0:0", SecondAction: "1:0", IntermediateInput: i}, deps)
-			return err
-		}},
-		{"securitize/amount", func(i *uint) error {
-			_, err := securitize.New(securitize.Config{Mode: "modern", ChainID: 1, Token: a, Target: b, PaymentToken: b, Amount: "1", MinOutput: "1", Action: "0:0", AmountInput: i}, deps)
-			return err
-		}},
-		{"securitize/minimum", func(i *uint) error {
-			_, err := securitize.New(securitize.Config{Mode: "modern", ChainID: 1, Token: a, Target: b, PaymentToken: b, Amount: "1", MinOutput: "1", Action: "0:0", MinOutputInput: i}, deps)
 			return err
 		}},
 	} {

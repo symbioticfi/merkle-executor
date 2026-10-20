@@ -22,7 +22,6 @@ for contract, destination in (
     ("RecipeExecutor", "sdk/abi/RecipeExecutor.json"),
     ("MerkleAccount", "sdk/abi/MerkleAccount.json"),
     ("IERC20", "sdk/abi/ERC20.json"),
-    ("LiquidLaneConnector", "api/abi/LiquidConnector.json"),
 ):
     artifact = json.loads((adapters / f"out/{contract}.sol/{contract}.json").read_text())
     for name, metadata in artifact["metadata"]["sources"].items():
