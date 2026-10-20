@@ -31,7 +31,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const CatalogueSHA256 = "e11e2ce31f0e1864d158fd5ecfdd6a6e3624304f8b2bb546601eb5a870f6bb2d"
+const CatalogueSHA256 = "14f5c8979da891a85b913244d9829d93f53d507263413d990d73026ff9139fe6"
 const PolicyVersion = "issuer-recipes-v1-" + CatalogueSHA256
 
 //go:embed catalogue/liquid-lane.yaml

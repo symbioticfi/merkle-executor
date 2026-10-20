@@ -109,17 +109,17 @@ func TestReceiptSweepGivesEveryHashFullTimeout(t *testing.T) {
 		if result.Outcome != OutcomeConfirmed || result.Hash != pending.attempts[51].hash {
 			t.Fatalf("result: %+v", result)
 		}
-		const sweepReads, proofReads = 52, 3
+		const sweepReads, proofReads = 52, 1
 		if len(backend.budgets) != sweepReads+proofReads || len(backend.hashes) != sweepReads+proofReads {
-			t.Fatalf("reads=%d hashes=%d, want 52 sweep reads and 3 proof reads", len(backend.budgets), len(backend.hashes))
+			t.Fatalf("reads=%d hashes=%d, want 52 sweep reads and 1 proof read", len(backend.budgets), len(backend.hashes))
 		}
 		for i, hash := range backend.hashes[:sweepReads] {
 			if hash != pending.attempts[i].hash {
 				t.Fatalf("sweep read %d targeted %s, want distinct attempt %s", i, hash, pending.attempts[i].hash)
 			}
 		}
-		// Canonical inclusion rereads the winner once; the depth-zero final
-		// proof then reads it at opening and before its numbered closing fence.
+		// Canonical inclusion rereads the winner once. No second proof is needed
+		// when the requested confirmation depth is zero.
 		for i, hash := range backend.hashes[sweepReads:] {
 			if hash != pending.attempts[51].hash {
 				t.Fatalf("proof read %d targeted %s instead of the winning hash", i, hash)

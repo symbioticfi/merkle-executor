@@ -1090,7 +1090,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	canonicalCtx, cancelCanonical := context.WithDeadline(ctx, canonicalDeadline)
 	canonicalErr := canonicalCtx.Err()
 	if canonicalErr == nil {
-		canonicalErr = m.confirmCanonicalReceipt(canonicalCtx, receipt)
+		receipt, canonicalErr = m.confirmReceiptWitness(canonicalCtx, receipt, 0)
 	}
 	cancelCanonical()
 	if canonicalErr != nil {
@@ -1100,7 +1100,10 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	}
 	pending.lifecycle.transitionPhase(lifecyclePhaseConfirming)
 	confirmations := m.confirmations(pending.req)
-	receipt, err := m.waitForConfirmations(ctx, attempt.hash, receipt, confirmations)
+	var err error
+	if confirmations > 0 {
+		receipt, err = m.waitForConfirmations(ctx, attempt.hash, receipt, confirmations)
+	}
 	if errors.Is(err, errReceiptReorged) {
 		pending.lifecycle.transitionPhase(lifecyclePhasePending)
 		observability.Log(ctx).Info("transaction inclusion reorged; resuming pending lifecycle",
@@ -1579,6 +1582,9 @@ func (m *Manager) waitForConfirmations(
 	if err := validateReceipt(hash, receipt); err != nil {
 		return receipt, err
 	}
+	if _, err := confirmationWitnessNumber(receipt, confirmations); err != nil {
+		return receipt, err
+	}
 	log := observability.Log(ctx)
 	ticker := time.NewTicker(m.cfg.PollInterval)
 	defer ticker.Stop()
@@ -1586,9 +1592,6 @@ func (m *Manager) waitForConfirmations(
 	var headReads, receiptReads, ancestryReads readStreak
 	missing := 0
 	for {
-		if _, err := confirmationWitnessNumber(receipt, confirmations); err != nil {
-			return receipt, err
-		}
 		head, refreshed, headErr, err := m.confirmationOpening(ctx, hash)
 		if headErr != nil {
 			headReads.failed(log, headErr, "confirmation head unavailable", "hash", hash.Hex())
@@ -1710,11 +1713,6 @@ func confirmationWitnessNumber(receipt *types.Receipt, depth uint64) (*big.Int, 
 	return number, nil
 }
 
-func (m *Manager) confirmCanonicalReceipt(ctx context.Context, receipt *types.Receipt) error {
-	_, err := m.confirmReceiptWitness(ctx, receipt, 0)
-	return err
-}
-
 // confirmReceiptWitness proves inclusion through an exact numbered descendant.
 // The latest head may advance freely: only this witness must remain canonical
 // after the receipt is reread. Parent work is bounded by depth, even for old receipts.
@@ -1758,15 +1756,6 @@ func (m *Manager) confirmReceiptAncestry(
 	head *types.Header,
 	receipt *types.Receipt,
 ) error {
-	return m.confirmReceiptAncestryUsing(ctx, head, receipt, m.backend.HeaderByHash)
-}
-
-func (m *Manager) confirmReceiptAncestryUsing(
-	ctx context.Context,
-	head *types.Header,
-	receipt *types.Receipt,
-	parentHeader func(context.Context, common.Hash) (*types.Header, error),
-) error {
 	if head == nil || head.Number == nil || receipt == nil || receipt.BlockNumber == nil {
 		return errors.New("confirmation ancestry requires head and receipt block numbers")
 	}
@@ -1777,7 +1766,7 @@ func (m *Manager) confirmReceiptAncestryUsing(
 	current := head
 	for current.Number.Uint64() > included {
 		lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
-		parent, err := parentHeader(lookupCtx, current.ParentHash)
+		parent, err := m.backend.HeaderByHash(lookupCtx, current.ParentHash)
 		cancel()
 		if err != nil {
 			return errors.Errorf("parent header %s: %w", current.ParentHash.Hex(), err)

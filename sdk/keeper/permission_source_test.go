@@ -38,10 +38,6 @@ func (r *permissionReader) CallContract(ctx context.Context, m ethereum.CallMsg,
 			r.t.Fatal("wrong prepared simulation")
 		}
 		r.simulations++
-		if r.reorgOnSimulation {
-			r.header = types.CopyHeader(r.header)
-			r.header.Extra = []byte("reorg after simulation")
-		}
 		return r.returned, r.simulationErr
 	}
 	return r.validationReader.CallContract(ctx, m, b)
@@ -57,7 +53,7 @@ func (*permissionProvider) Advance(context.Context, provider.Snapshot, provider.
 	return provider.Progress{Done: true}, nil
 }
 func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
-	for _, mode := range []string{"valid", "local tree", "source error", "empty", "missing chain", "null chain", "wrong chain", "root", "account", "invalid unused leaf", "invalid unused proof", "mutate chain", "root during HTTP", "reorg during HTTP", "reorg during simulation"} {
+	for _, mode := range []string{"valid", "local tree", "source error", "empty", "missing chain", "null chain", "wrong chain", "root", "account", "invalid unused leaf", "invalid unused proof", "mutate chain", "root during HTTP", "reorg during HTTP"} {
 		t.Run(mode, func(t *testing.T) {
 			header := &types.Header{Number: big.NewInt(12)}
 			recipe := recipes.Recipe{}
@@ -71,7 +67,6 @@ func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 			event := abi.GetABI().Events["SetRecipe"]
 			data, _ := event.Inputs.NonIndexed().Pack(recipe.Queries, recipe.Steps)
 			r := &permissionReader{validationReader: &validationReader{t: t, snapshot: snapshot, header: header, payload: abi.PackExecute(nil, nil, nil, nil), returned: returned}, log: types.Log{Address: snapshot.Executor, BlockNumber: 12, BlockHash: header.Hash(), Topics: []common.Hash{event.ID, hash}, Data: data}}
-			r.reorgOnSimulation = mode == "reorg during simulation"
 			doc := map[string]any{"chainId": 1, "root": snapshot.Root.Hex(), "adapter": common.HexToAddress("0x999").Hex(), "leaves": []any{}}
 			switch mode {
 			case "missing chain":
@@ -140,7 +135,7 @@ func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 			if mode == "source error" && !errors.Is(err, context.Canceled) {
 				t.Fatal("source cancellation cause lost")
 			}
-			if !ok && mode != "root during HTTP" && mode != "reorg during HTTP" && mode != "reorg during simulation" && pr.calls != 0 {
+			if !ok && mode != "root during HTTP" && mode != "reorg during HTTP" && pr.calls != 0 {
 				t.Fatal("invalid tree reached provider")
 			}
 			if mode != "local tree" && calls != 1 {

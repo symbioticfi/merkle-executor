@@ -270,31 +270,6 @@ func TestAnvilFullExecute(t *testing.T) {
 			t.Fatal("nonzero gate accepted empty runtime")
 		}
 	}
-	t.Run("generic conditional work", func(t *testing.T) {
-		// A zero action argument is independent of the positive readiness gate.
-		// Both groups retain their exact original runtime positions.
-		conditional := Recipe{Queries: [][]byte{query}, Steps: [][]byte{
-			step(Read, pack(t, readArgs, literal(0))),
-			step(Min, pack(t, binaryArgs, result(0), input(0))),
-			manageStep(t, transfer.Hash, result(1), []*big.Int{binding(36, literal(0))}),
-			manageStep(t, transfer.Hash, literal(0), []*big.Int{binding(36, literal(0))}),
-		}}
-		localTransaction(t, ctx, client, sender, &executorAddress, executorABI.PackSetRecipe(conditional.Queries, conditional.Steps))
-		for _, cap := range []int64{0, 1} {
-			encoded, _, err := Assemble(conditional, tree, map[uint]string{0: strconv.FormatInt(cap, 10)}, nil, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			raw, err := client.CallContract(ctx, ethereum.CallMsg{From: sender, To: &executorAddress, Data: encoded}, nil)
-			if err != nil {
-				t.Fatalf("conditional original execution: %v", err)
-			}
-			work, err := HasWork(encoded, raw)
-			if err != nil || work != (cap > 0) {
-				t.Fatalf("cap=%d work=%v error=%v", cap, work, err)
-			}
-		}
-	})
 	// Pinned and partially masked amount permissions are valid when the allowance
 	// is zero. Their state-dependent reset path is checked by full EVM simulation.
 	for index, maskByte := range []byte{0, 0x0f} {

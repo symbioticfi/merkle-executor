@@ -124,18 +124,13 @@ func (c *Client) JSON(ctx context.Context, method, path string, in, out any) (in
 func httpFailure(ctx context.Context, message string, cause error) error {
 	// Only these public sentinels are safe to retain. Raw transport errors and
 	// context.Cause can include URLs, credentials or response/provider payloads.
-	var safe error
-	switch ctx.Err() {
-	case context.Canceled:
-		safe = context.Canceled
-	case context.DeadlineExceeded:
-		safe = context.DeadlineExceeded
-	default:
-		switch {
-		case errors.Is(cause, context.Canceled):
-			safe = context.Canceled
-		case errors.Is(cause, context.DeadlineExceeded):
-			safe = context.DeadlineExceeded
+	safe := ctx.Err()
+	if safe == nil {
+		for _, sentinel := range []error{context.Canceled, context.DeadlineExceeded} {
+			if errors.Is(cause, sentinel) {
+				safe = sentinel
+				break
+			}
 		}
 	}
 	if safe != nil {

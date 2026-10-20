@@ -175,14 +175,8 @@ func (s *receiptSweep) allAttemptsMissing(pending *pendingTransaction) bool {
 // ConfirmReceipt checks canonical ancestry and confirmation depth. Nil without error means a reorged
 // attempt: continue scanning other owned hashes. This adds no broadcast path.
 func (m *Manager) ConfirmReceipt(ctx context.Context, receipt *types.Receipt, depth uint64) (*types.Receipt, error) {
-	if receipt == nil {
-		return nil, errors.New("receipt required")
-	}
-	if err := validateReceipt(receipt.TxHash, receipt); err != nil {
-		return nil, err
-	}
-	err := m.confirmCanonicalReceipt(ctx, receipt)
-	if err == nil {
+	receipt, err := m.confirmReceiptWitness(ctx, receipt, 0)
+	if err == nil && depth > 0 {
 		receipt, err = m.waitForConfirmations(ctx, receipt.TxHash, receipt, depth)
 	}
 	if errors.Is(err, errReceiptReorged) {

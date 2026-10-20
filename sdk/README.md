@@ -26,23 +26,13 @@ receipts for owned hashes and never replays a non-idempotent recipe. A recovered
 reservation must be restored before other host jobs start.
 
 `keeper.Config.Revision` fingerprints all host provider configuration. Removing
-or changing an active workflow is rejected. Account reservations follow the
-validated durable inventory described below.
+or changing an active workflow is rejected. Each keeper tick collects account owners during its recovery scan and refreshes
+the current strategy from durable state before advancing another strategy. This
+keeps journal reads linear while retaining reservations after uncertain writes;
+an unreadable ownership refresh stops the tick.
 
 Store lifetime must extend past the
 host sender's shutdown drain: callbacks may still persist during that drain.
-
-Each serialized keeper `Tick` loads and validates the complete historical job
-inventory once. Its private iteration view supplies sender-first recovery and
-account reservations; successful durable job saves and deletes update that view.
-Working jobs are copied so mutable provider maps and slices cannot change the
-view before persistence succeeds. Any uncertain write stops the iteration with
-one sanitized global failure; the next `Tick` reloads actual disk state, including
-a write that failed after replacement. No view survives between iterations, and
-public `CheckRecovery` always reads fresh state. This assumes the existing single
-keeper writer and serialized `Tick` contract; it is not a multi-record snapshot
-for concurrent writers. SDK source changes reach a daemon only after an authorized
-SDK release and an immutable consumer module pin update.
 
 Run `make check` and `make integration` here without a parent module/workspace.
 Root `make check` and `make integration` also check this module explicitly.

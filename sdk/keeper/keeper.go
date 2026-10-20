@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"slices"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
@@ -57,8 +59,81 @@ func key(name string) string { return "strategy." + name + ".v1" }
 // CheckRecovery rejects an orphan transaction or changed workflow configuration.
 // A deployment must retain configured strategies until their durable work ends.
 func (k *Keeper) CheckRecovery() error {
-	_, err := k.loadInventory()
+	_, err := k.checkRecovery()
 	return err
+}
+
+// checkRecovery also collects active account owners while each journal is read.
+func (k *Keeper) checkRecovery() (map[string]common.Address, error) {
+	owners := make(map[string]common.Address)
+	names, err := k.inventory()
+	if err != nil {
+		return nil, err
+	}
+	configured := make(map[string]Strategy)
+	for _, s := range k.Strategies {
+		configured[s.Config.Name] = s
+	}
+	pending := ""
+	if k.Sender != nil {
+		pending = k.Sender.PendingID()
+	}
+	matched := pending == ""
+	for _, name := range names {
+		var job Job
+		found, err := k.Store.Load(key(name), &job)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		if job.Phase == "prepared" || job.Phase == "authorized" {
+			owners[name] = job.Plan.Snapshot.Account
+		}
+		s, exists := configured[name]
+		if !exists {
+			if job.Phase != "settled" && job.Phase != "failed" {
+				return nil, errors.Errorf("active strategy %s removed from configuration", name)
+			}
+		} else if err := validateJob(job, s); err != nil {
+			return nil, err
+		}
+		if pending != "" && job.ID == pending {
+			if !exists {
+				return nil, errors.Errorf("transaction owner strategy %s removed from configuration", name)
+			}
+			matched = true
+		}
+	}
+	if !matched {
+		return nil, errors.New("unresolved transaction has no configured workflow; restore its strategy configuration")
+	}
+	return owners, nil
+}
+
+// Inventory precedes job creation so removing a configured strategy cannot hide
+// an external order after its authorization transaction has been acknowledged.
+func (k *Keeper) inventory() ([]string, error) {
+	var names []string
+	_, err := k.Store.Load("strategies.v1", &names)
+	if err != nil {
+		return nil, err
+	}
+	changed := false
+	for _, s := range k.Strategies {
+		if !slices.Contains(names, s.Config.Name) {
+			names = append(names, s.Config.Name)
+			changed = true
+		}
+	}
+	if changed {
+		slices.Sort(names)
+		if err := k.Store.Save("strategies.v1", names); err != nil {
+			return nil, err
+		}
+	}
+	return names, nil
 }
 
 func validateJob(job Job, s Strategy) error {
@@ -85,7 +160,7 @@ func validateJob(job Job, s Strategy) error {
 }
 
 func (k *Keeper) Tick(ctx context.Context) error {
-	inventory, err := k.loadInventory()
+	owners, err := k.checkRecovery()
 	if err != nil {
 		return k.globalFailure(err)
 	}
@@ -93,7 +168,11 @@ func (k *Keeper) Tick(ctx context.Context) error {
 	ordered := append([]Strategy(nil), k.Strategies...)
 	if k.Sender != nil && k.Sender.PendingID() != "" {
 		for i, s := range ordered {
-			job, found := inventory.jobs[s.Config.Name]
+			var job Job
+			found, err := k.Store.Load(key(s.Config.Name), &job)
+			if err != nil {
+				return k.globalFailure(err)
+			}
 			if found && job.ID == k.Sender.PendingID() {
 				ordered[0], ordered[i] = ordered[i], ordered[0]
 				break
@@ -106,10 +185,20 @@ func (k *Keeper) Tick(ctx context.Context) error {
 			return ctx.Err()
 		}
 		operation, cancel := context.WithTimeout(ctx, k.OperationTimeout)
-		err := k.tickStrategy(operation, s, inventory)
+		err := k.tickStrategy(operation, s, owners)
 		cancel()
-		if !inventory.valid {
-			return errors.Join(append(failures, k.globalFailure(err))...)
+		if k.Mode != "simulate" {
+			// A write error can occur after rename. Reload the durable result
+			// before another strategy can use this account; unreadable state stops the tick.
+			var job Job
+			found, loadErr := k.Store.Load(key(s.Config.Name), &job)
+			if loadErr != nil {
+				return k.globalFailure(loadErr)
+			}
+			delete(owners, s.Config.Name)
+			if found && (job.Phase == "prepared" || job.Phase == "authorized") {
+				owners[s.Config.Name] = job.Plan.Snapshot.Account
+			}
 		}
 		outcome := "ok"
 		if errors.Is(err, provider.ErrNotReady) {
@@ -127,7 +216,7 @@ func (k *Keeper) Tick(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
-func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, inventory *iterationInventory) error {
+func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, owners map[string]common.Address) error {
 	if k.Mode == "simulate" {
 		_, err := k.Planner.Prepare(ctx, s)
 		if err == nil {
@@ -138,7 +227,8 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, inventory *iterat
 	if k.Sender == nil {
 		return errors.New("send mode requires transaction manager")
 	}
-	job, found, err := inventory.job(s.Config.Name)
+	var job Job
+	found, err := k.Store.Load(key(s.Config.Name), &job)
 	if err != nil {
 		return err
 	}
@@ -150,7 +240,7 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, inventory *iterat
 	// No journal means these bytes were never broadcast. Refresh expiring quotes
 	// after restart or a failed pre-admission attempt, even if sign() still simulates.
 	if found && job.Phase == "prepared" && k.Sender.PendingID() == "" {
-		if err := inventory.delete(k.Store, s.Config.Name); err != nil {
+		if err := k.Store.Delete(key(s.Config.Name)); err != nil {
 			return err
 		}
 		found = false
@@ -174,8 +264,10 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, inventory *iterat
 		if k.Sender.PendingID() != "" {
 			return nil
 		}
-		if inventory.accountBusy(s) {
-			return nil
+		for name, account := range owners {
+			if name != s.Config.Name && account == common.HexToAddress(s.Config.Account) {
+				return nil
+			}
 		}
 		plan, err := k.Planner.Prepare(ctx, s)
 		if err != nil {
@@ -189,7 +281,7 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, inventory *iterat
 			return errors.New("generate job identity failed")
 		}
 		job = Job{ID: s.Config.Name + "-" + hex.EncodeToString(random[:]), ConfigHash: s.Config.Fingerprint(), Phase: "prepared", Plan: plan, Progress: make([]provider.Progress, len(s.Providers))}
-		if err := inventory.save(k.Store, s.Config.Name, job); err != nil {
+		if err := k.Store.Save(key(s.Config.Name), job); err != nil {
 			return err
 		}
 	}
@@ -201,7 +293,7 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, inventory *iterat
 		// cannot tell whether an already broadcast transaction landed.
 		if k.Sender.PendingID() == "" {
 			if err := k.Planner.Validate(ctx, job.Plan); err != nil {
-				if deleteErr := inventory.delete(k.Store, s.Config.Name); deleteErr != nil {
+				if deleteErr := k.Store.Delete(key(s.Config.Name)); deleteErr != nil {
 					return deleteErr
 				}
 				return err
@@ -223,7 +315,7 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, inventory *iterat
 			job.Phase = "failed"
 			job.FinishedAt = time.Now().UTC()
 		}
-		if err := inventory.save(k.Store, s.Config.Name, job); err != nil {
+		if err := k.Store.Save(key(s.Config.Name), job); err != nil {
 			return err
 		}
 		if err := k.Sender.Acknowledge(ctx, job.ID); err != nil {
@@ -261,7 +353,7 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, inventory *iterat
 				return err
 			}
 			job.Progress[i] = progress
-			if err := inventory.save(k.Store, s.Config.Name, job); err != nil {
+			if err := k.Store.Save(key(s.Config.Name), job); err != nil {
 				return err
 			}
 			done = done && progress.Done
@@ -269,7 +361,7 @@ func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, inventory *iterat
 		if done {
 			job.Phase = "settled"
 			job.FinishedAt = time.Now().UTC()
-			if err := inventory.save(k.Store, s.Config.Name, job); err != nil {
+			if err := k.Store.Save(key(s.Config.Name), job); err != nil {
 				return err
 			}
 			outcomes := make([]string, len(job.Progress))

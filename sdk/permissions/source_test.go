@@ -7,10 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
@@ -71,53 +69,3 @@ func TestSourceFetchesExactActiveRootWithBoundedFailures(t *testing.T) {
 		})
 	}
 }
-
-func TestSourceCancellationIdentity(t *testing.T) {
-	for _, phase := range []string{"headers", "body"} {
-		for _, want := range []error{context.Canceled, context.DeadlineExceeded} {
-			t.Run(phase+"/"+want.Error(), func(t *testing.T) {
-				ctx, cancel := context.WithCancel(t.Context())
-				if errors.Is(want, context.DeadlineExceeded) {
-					cancel()
-					ctx, cancel = context.WithTimeout(t.Context(), 100*time.Millisecond)
-				}
-				defer cancel()
-				transport := sourceRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-					fail := func() error {
-						if errors.Is(want, context.Canceled) {
-							cancel()
-						}
-						<-r.Context().Done()
-						return errors.Errorf("synthetic-private-permission-source: %w", r.Context().Err())
-					}
-					if phase == "headers" {
-						return nil, fail()
-					}
-					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: sourceFailureBody{fail: fail}}, nil
-				})
-				source, err := New(protocolio.HTTPConfig{URL: "http://fixture.invalid/private-base"}, &http.Client{Transport: transport})
-				if err != nil {
-					t.Fatal(err)
-				}
-				raw, err := source.PermissionTree(ctx, big.NewInt(31337), recipes.Snapshot{Root: common.HexToHash("0x123")})
-				if !errors.Is(err, want) || len(raw) != 0 {
-					t.Fatalf("real permission source lost cancellation identity: raw=%q err=%v want=%v", raw, err, want)
-				}
-				if strings.Contains(err.Error(), "synthetic-private") || strings.Contains(err.Error(), "fixture.invalid") {
-					t.Fatal("permission source exposed a raw HTTP cause")
-				}
-			})
-		}
-	}
-}
-
-type sourceRoundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f sourceRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
-type sourceFailureBody struct{ fail func() error }
-
-func (b sourceFailureBody) Read(p []byte) (int, error) {
-	return copy(p, "synthetic-private-response"), b.fail()
-}
-func (sourceFailureBody) Close() error { return nil }

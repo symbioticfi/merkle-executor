@@ -231,7 +231,7 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRoute(t *testing.T) {
 	if err = yaml.Unmarshal(data, &catalogue); err != nil {
 		t.Fatal(err)
 	}
-	wanted := strings.Fields("mF-ONE mROX mHYPER CarryTradeUSDTRYLeverage StockMarketTRBasisTrade mM1-USD JAAA JTRSY HYB deJAAA deJTRSY HYBOND PRIME mGLO mGLOBAL AA_FalconXUSDC sUSN USN")
+	wanted := strings.Fields("mF-ONE mROX mHYPER CarryTradeUSDTRYLeverage StockMarketTRBasisTrade mM1-USD JAAA JTRSY HYB deJAAA deJTRSY HYBOND PRIME mGLOBAL AA_FalconXUSDC sUSN USN")
 	seen := map[string]bool{}
 	routes := map[string]bool{}
 	for _, entry := range catalogue.Assets {

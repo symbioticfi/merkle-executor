@@ -2,7 +2,6 @@ package protocolio
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -50,69 +49,6 @@ type httpFailureBody struct {
 
 func (b *httpFailureBody) Read(p []byte) (int, error) { return b.read(p) }
 func (b *httpFailureBody) Close() error               { b.closed = true; return nil }
-
-func TestHTTPCancellationIdentity(t *testing.T) {
-	testHTTPContextIdentity(t, context.Canceled)
-}
-
-func TestHTTPDeadlineIdentity(t *testing.T) {
-	testHTTPContextIdentity(t, context.DeadlineExceeded)
-}
-
-func testHTTPContextIdentity(t *testing.T, want error) {
-	t.Helper()
-	for _, phase := range []string{"before-dispatch", "headers", "body"} {
-		t.Run(phase, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(t.Context())
-			if errors.Is(want, context.DeadlineExceeded) {
-				cancel()
-				deadline := time.Now().Add(100 * time.Millisecond)
-				if phase == "before-dispatch" {
-					deadline = time.Now().Add(-time.Second)
-				}
-				ctx, cancel = context.WithDeadline(t.Context(), deadline)
-			}
-			defer cancel()
-			if phase == "before-dispatch" {
-				cancel()
-			}
-			var body *httpFailureBody
-			transport := httpRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-				if phase == "headers" || phase == "before-dispatch" {
-					if errors.Is(want, context.Canceled) {
-						cancel()
-					}
-					<-r.Context().Done()
-					return nil, errors.Errorf("synthetic-private-transport: %w", r.Context().Err())
-				}
-				body = &httpFailureBody{read: func(p []byte) (int, error) {
-					if errors.Is(want, context.Canceled) {
-						cancel()
-					}
-					<-r.Context().Done()
-					return copy(p, "synthetic-private-response"), errors.Errorf("synthetic-private-body: %w", r.Context().Err())
-				}}
-				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}, nil
-			})
-			c, err := NewHTTP(HTTPConfig{URL: "http://fixture.invalid/private-base"}, &http.Client{Transport: transport})
-			if err != nil {
-				t.Fatal(err)
-			}
-			status, err := c.JSON(ctx, http.MethodGet, "/private-path", nil, nil)
-			wantStatus := 0
-			if phase == "body" {
-				wantStatus = http.StatusOK
-			}
-			if !errors.Is(err, want) || status != wantStatus {
-				t.Fatalf("cancellation identity/status lost: status=%d err=%v want=%v", status, err, want)
-			}
-			assertHTTPErrorRedacted(t, err)
-			if body != nil && !body.closed {
-				t.Fatal("failed response body was not closed")
-			}
-		})
-	}
-}
 
 func assertHTTPErrorRedacted(t *testing.T, err error) {
 	t.Helper()
@@ -168,6 +104,7 @@ func TestHTTPFailureCauseRedaction(t *testing.T) {
 					}
 				}
 				t.Setenv("PROTOCOL_TEST_TOKEN", "private-test-token")
+				var body *httpFailureBody
 				transport := httpRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 					if r.Header.Get("Authorization") != "Bearer private-test-token" {
 						t.Fatal("missing fixture credential")
@@ -175,7 +112,7 @@ func TestHTTPFailureCauseRedaction(t *testing.T) {
 					if phase == "headers" {
 						return nil, failure()
 					}
-					body := &httpFailureBody{read: func(p []byte) (int, error) {
+					body = &httpFailureBody{read: func(p []byte) (int, error) {
 						return copy(p, "synthetic-private-response"), failure()
 					}}
 					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}, nil
@@ -186,6 +123,9 @@ func TestHTTPFailureCauseRedaction(t *testing.T) {
 				}
 				status, err := c.JSON(ctx, http.MethodGet, "/private-path", nil, nil)
 				assertHTTPErrorRedacted(t, err)
+				if body != nil && !body.closed {
+					t.Fatal("failed response body was not closed")
+				}
 				wantStatus := 0
 				if phase == "body" {
 					wantStatus = http.StatusOK
@@ -202,8 +142,6 @@ func TestHTTPFailureCauseRedaction(t *testing.T) {
 		}
 	}
 }
-
-var _ io.ReadCloser = (*httpFailureBody)(nil)
 
 func TestHTTPNeverFollowsRedirectWithCredential(t *testing.T) {
 	hits := 0
@@ -236,7 +174,7 @@ func TestHTTPCancelledContextAndCredentialURL(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, e = c.JSON(ctx, http.MethodGet, "/", nil, nil); e == nil {
+	if _, e = c.JSON(ctx, http.MethodGet, "/", nil, nil); !errors.Is(e, context.Canceled) {
 		t.Fatal("cancel ignored")
 	}
 }

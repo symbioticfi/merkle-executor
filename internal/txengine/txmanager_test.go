@@ -1116,7 +1116,7 @@ func (b *witnessBatchBackend) BatchRead(ctx context.Context, requests []protocol
 
 func TestConfirmationWitnessOldReceiptAdvancingHead(t *testing.T) {
 	for _, batched := range []bool{false, true} {
-		name := "legacy"
+		name := "single"
 		if batched {
 			name = "batch"
 		}
@@ -1154,7 +1154,7 @@ func TestConfirmationWitnessDepthBoundedReads(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 				defer cancel()
 				receipt := b.receipts[tx.Hash()]
-				if err := m.confirmCanonicalReceipt(ctx, receipt); err != nil {
+				if _, err := m.confirmReceiptWitness(ctx, receipt, 0); err != nil {
 					t.Fatalf("bounded canonical inclusion: %v", err)
 				}
 				if b.parentReads != 0 {

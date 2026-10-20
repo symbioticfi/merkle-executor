@@ -74,7 +74,7 @@ claim belongs to a separate approved recipe.
 
 The checked-in catalogue is copied exactly into
 `internal/providers/redemptions/catalogue/liquid-lane.yaml`, SHA-256
-`e11e2ce31f0e1864d158fd5ecfdd6a6e3624304f8b2bb546601eb5a870f6bb2d`.
+`14f5c8979da891a85b913244d9829d93f53d507263413d990d73026ff9139fe6`.
 Tests enforce byte-for-byte equality with the reviewed source. A catalogue update
 requires deliberate review, copy and policy-version update. Recovery validates
 stored configuration, account, action bytes and numerical inputs against this
@@ -254,8 +254,3 @@ use the unmodified handler source, existing RecipeExecutor bytecode and a
 permission-enforcing account fixture with local burnable token/oracle fixtures.
 They prove local burn/payment/cleanup and fail-closed execution; they do not
 establish live issuer enrollment, treasury liquidity or production token behavior.
-
-The mGLO standard USDC request route retains the Liquid Lane account factory
-`0x2FB3B8321951954b18cE5bF06Da1cF5a6363bC0a`, captured at Ethereum block 26227234.
-Deployment identity is recorded in [core PR #21](https://github.com/symbioticfi/core-mirror/pull/21).
-The factory field is catalogue metadata; direct issuer execution uses the admitted token and target.

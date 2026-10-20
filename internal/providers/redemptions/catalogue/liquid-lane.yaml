@@ -274,7 +274,6 @@ assets:
     token: "0x1dd91a111606382b77a917633ed90feaf25e0f76"
     outputAsset: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
     target: "0x55f3ab43e49ffb6b1fff5e2b310c21278bdaf0f5"
-    factory: "0x2FB3B8321951954b18cE5bF06Da1cF5a6363bC0a"
     requestModes: [request]
     claimModes: []
     settlement: issuer-push
