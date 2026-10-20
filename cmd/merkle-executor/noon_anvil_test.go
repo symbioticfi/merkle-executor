@@ -163,8 +163,9 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 		entries[i] = map[string]any{"hash": v.Hash.Hex(), "target": v.Target.Hex(), "value": "zero", "data": hexutil.Encode(v.Data), "dataMask": hexutil.Encode(v.DataMask), "proof": []string{v.Proof[0].Hex()}}
 	}
 	rawTree, _ := json.Marshal(map[string]any{"root": root.Hex(), "chainId": 1, "account": account.Hex(), "leaves": entries})
+	rawTree = servicePermissionCertificate(t, rawTree, account, account)
 	curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/merkle-trees/"+root.Hex() || r.URL.Query().Get("chainId") != "1" {
+		if r.URL.Path != "/api/v1/merkle/"+strings.ToLower(account.Hex())+"/"+root.Hex() || r.URL.RawQuery != "" {
 			t.Error("wrong active-root curator request")
 		}
 		_, _ = w.Write(rawTree)

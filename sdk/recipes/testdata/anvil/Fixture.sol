@@ -7,6 +7,7 @@ contract FixtureAccount {
     struct Action { address target; uint96 value; bytes data; bytes dataMask; bytes32[] proof; }
     event Manage(Action[] actions);
     bytes32 public root;
+    function adapter() external view returns (address) { return address(this); }
     mapping(bytes32 => mapping(address => bool)) public hasRole;
 
     function configure(bytes32 newRoot, bytes32[] calldata leaves, address executor) external {

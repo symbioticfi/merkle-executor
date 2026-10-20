@@ -129,6 +129,13 @@ provider getter or mutable account state is cached. Invalidating a frozen hint u
 entry version so it cannot erase a concurrent replacement. Transient per-attempt copies
 are not part of the retained-byte budget.
 
+`permissions.New` requires the host chain reader to resolve the pinned account
+adapter. It fetches the current backend certificate at
+`/merkle/{adapter}/{root}`, verifies bundle/call scope and leaf
+coverage, and returns the unchanged metadata artifact. One pinned EVM read and
+one bounded HTTP request are added to each new preparation; saved recovery does
+not acquire permissions.
+
 `keeper.Planner.PermissionSource` optionally supplies encoded permission JSON from
 context, a copied chain ID and the authenticated `recipes.Snapshot`. The SDK decodes
 the bytes and validates every leaf and proof, including unused leaves. Source responses

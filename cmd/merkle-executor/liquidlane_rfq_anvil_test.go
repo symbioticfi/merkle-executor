@@ -151,12 +151,17 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	for _, leaf := range leaves {
 		permission = append(permission, map[string]any{"hash": leaf.Hash.Hex(), "target": leaf.Target.Hex(), "value": "zero", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": []string{leaf.Proof[0].Hex()}})
 	}
+	rawPermission, err := json.Marshal(map[string]any{"root": root.Hex(), "chainId": 31337, "leaves": permission})
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := servicePermissionCertificate(t, rawPermission, account, account)
 	curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		curatorCalls.Add(1)
-		if r.URL.Path != "/api/v1/merkle-trees/"+root.Hex() || r.URL.Query().Get("chainId") != "31337" {
+		if r.URL.Path != "/api/v1/merkle/"+strings.ToLower(account.Hex())+"/"+root.Hex() || r.URL.RawQuery != "" {
 			t.Error("wrong curator identity")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"root": root.Hex(), "chainId": 31337, "adapter": owner.Hex(), "leaves": permission})
+		_, _ = w.Write(certificate)
 	}))
 	defer curator.Close()
 	const quoteID = "11111111-1111-4111-8111-111111111111"

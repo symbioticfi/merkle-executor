@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -275,13 +276,14 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	permission = servicePermissionCertificate(t, permission, accountAddress, accountAddress)
 	var curatorCalls atomic.Int32
 	var curatorUnavailable atomic.Bool
 	var wrongPermissionChain atomic.Bool
 	var changeRootDuringHTTP atomic.Bool
 	permissionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		curatorCalls.Add(1)
-		if r.URL.Path != "/api/v1/merkle-trees/"+leaf.Hash.Hex() || r.URL.Query().Get("chainId") != "31337" {
+		if r.URL.Path != "/api/v1/merkle/"+strings.ToLower(accountAddress.Hex())+"/"+leaf.Hash.Hex() || r.URL.RawQuery != "" {
 			t.Error("wrong active-root request")
 		}
 		if curatorUnavailable.Load() {
@@ -425,4 +427,30 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || curatorCalls.Load() != permissionRequests {
 		t.Fatalf("restart repeated completed work: nonce=%d / %v", nonce, err)
 	}
+}
+
+// Match the generic backend certificate wire shape; call proofs remain independently verified.
+func servicePermissionCertificate(t *testing.T, raw []byte, adapter, account common.Address) []byte {
+	t.Helper()
+	var metadata map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&metadata); err != nil {
+		t.Fatal(err)
+	}
+	if leaves, ok := metadata["leaves"]; ok {
+		metadata["calls"] = leaves
+		delete(metadata, "leaves")
+	}
+	metadata["adapter"], metadata["account"] = strings.ToLower(adapter.Hex()), strings.ToLower(account.Hex())
+	hashes := []string{}
+	for _, call := range metadata["calls"].([]any) {
+		hashes = append(hashes, call.(map[string]any)["hash"].(string))
+	}
+	sort.Strings(hashes)
+	body, err := json.Marshal(map[string]any{"bundle": map[string]any{"chainId": metadata["chainId"], "adapter": metadata["adapter"], "account": metadata["account"], "root": metadata["root"], "leaves": hashes, "metadata": metadata}, "bundleHash": common.Hash{}.Hex(), "signer": account.Hex(), "signature": "0x", "deadline": "1800000000", "createdAt": "2026-10-20T00:00:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }

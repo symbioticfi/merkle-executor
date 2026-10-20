@@ -5,5 +5,5 @@
   "src/interfaces/merkle-adapter/IMerkleAccount.sol": "e8a25f4f4549454351c962ba6bc85137db4c22ac7713c3c36f525b69583386f8",
   "src/interfaces/merkle-adapter/IRecipes.sol": "9670be8e70c17b26e45fdb3e21678b459a0278d238250af3597192af702cd2f4",
   "src/interfaces/merkle-adapter/automations/IRecipeExecutor.sol": "5bb8a2b24f72b7868d87116660d5f2a3f9740647918219acb7d476d0ab3de8e0",
-  "Fixture.sol": "3548b06b391b442b19f156041e115494cd413df0e44b83e2a704dff80812d104"
+  "Fixture.sol": "be296546613f57b043256b1524076e33c1f15045b90492a4fcf05f41a0449649"
 }
