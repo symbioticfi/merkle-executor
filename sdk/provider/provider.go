@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
+	"net/http"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -12,6 +13,14 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 )
+
+// Deps supplies caller-owned transports for runtime data acquisition.
+type Deps struct {
+	Chain Reader
+	HTTP  *http.Client
+	// LookupSecret resolves configured credential references without environment access in the SDK.
+	LookupSecret func(string) string
+}
 
 // Reader pins protocol reads to the same block used for recipe discovery.
 type Reader interface {

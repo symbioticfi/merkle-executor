@@ -84,7 +84,7 @@ func TestSourceFetchesExactActiveRootWithBoundedFailures(t *testing.T) {
 			}
 			source, err := New(protocolio.HTTPConfig{URL: server.URL + "/api/v1", MaxResponseBytes: 1024}, client, readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 				return common.LeftPadBytes(adapter.Bytes(), 32), nil
-			}))
+			}), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -136,7 +136,7 @@ func TestSourceCancelsWhileReadingHTTPBody(t *testing.T) {
 	adapter := common.HexToAddress("0x99")
 	source, err := New(protocolio.HTTPConfig{URL: server.URL}, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 		return common.LeftPadBytes(adapter.Bytes(), 32), nil
-	}))
+	}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestSourceRejectsInvalidChainBeforeAnyIO(t *testing.T) {
 			source, err := New(protocolio.HTTPConfig{URL: "http://permissions.invalid"}, nil, readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 				t.Fatal("invalid chain reached reader")
 				return nil, nil
-			}))
+			}), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

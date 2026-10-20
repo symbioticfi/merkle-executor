@@ -49,7 +49,7 @@ func TestSourceReadsCurrentBackendCertificate(t *testing.T) {
 			t.Fatal("account adapter was not read at the authenticated pin")
 		}
 		return common.LeftPadBytes(common.HexToAddress(bundle.Adapter).Bytes(), 32), nil
-	}))
+	}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestSourceRejectsCertificateScopeAndLeafChanges(t *testing.T) {
 			defer server.Close()
 			source, err := New(protocolio.HTTPConfig{URL: server.URL}, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 				return common.LeftPadBytes(adapter.Bytes(), 32), nil
-			}))
+			}), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -177,7 +177,7 @@ func TestSourceRejectsFailedAccountAdapterBeforeHTTP(t *testing.T) {
 			calls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
 			defer server.Close()
-			source, err := New(protocolio.HTTPConfig{URL: server.URL}, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) { return tc.data, tc.err }))
+			source, err := New(protocolio.HTTPConfig{URL: server.URL}, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) { return tc.data, tc.err }), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -223,7 +223,7 @@ func TestSourcePreservesUint256ChainIDPrecision(t *testing.T) {
 				defer server.Close()
 				source, err := New(protocolio.HTTPConfig{URL: server.URL}, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 					return common.LeftPadBytes(adapter.Bytes(), 32), nil
-				}))
+				}), nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -266,7 +266,7 @@ func TestSourceHonorsExactHTTPResponseBound(t *testing.T) {
 		t.Run(fmt.Sprintf("responseOverBound=%d", extra), func(t *testing.T) {
 			source, err := New(protocolio.HTTPConfig{URL: server.URL, MaxResponseBytes: int64(len(body)) - extra}, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 				return common.LeftPadBytes(common.HexToAddress(bundle.Adapter).Bytes(), 32), nil
-			}))
+			}), nil)
 			if err != nil {
 				t.Fatal(err)
 			}

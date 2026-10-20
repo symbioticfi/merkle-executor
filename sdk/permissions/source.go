@@ -25,7 +25,7 @@ const HostTimeoutSeconds = 10
 const HostMaxResponseBytes int64 = 2 << 20
 
 // ValidateConfig performs no network or environment access. Construction with
-// New reads the configured credential only when a run/plan actually starts.
+// New resolves credentials through the host only when a run/plan actually starts.
 func ValidateConfig(c protocolio.HTTPConfig) error {
 	u, err := url.Parse(c.URL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -45,11 +45,11 @@ type Source struct {
 	chain  provider.Reader
 }
 
-func New(c protocolio.HTTPConfig, h *http.Client, chain provider.Reader) (*Source, error) {
+func New(c protocolio.HTTPConfig, h *http.Client, chain provider.Reader, lookup func(string) string) (*Source, error) {
 	if err := ValidateConfig(c); err != nil {
 		return nil, err
 	}
-	client, err := protocolio.NewHTTP(c, h)
+	client, err := protocolio.NewHTTP(c, h, lookup)
 	if err != nil {
 		return nil, err
 	}

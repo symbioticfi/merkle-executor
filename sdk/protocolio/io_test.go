@@ -25,7 +25,7 @@ func TestHTTPRedactsAndBounds(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer s.Close()
-			c, e := NewHTTP(HTTPConfig{URL: s.URL, MaxResponseBytes: tc.limit}, s.Client())
+			c, e := NewHTTP(HTTPConfig{URL: s.URL, MaxResponseBytes: tc.limit}, s.Client(), nil)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -103,7 +103,6 @@ func TestHTTPFailureCauseRedaction(t *testing.T) {
 						return privateCause
 					}
 				}
-				t.Setenv("PROTOCOL_TEST_TOKEN", "private-test-token")
 				var body *httpFailureBody
 				transport := httpRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 					if r.Header.Get("Authorization") != "Bearer private-test-token" {
@@ -117,7 +116,7 @@ func TestHTTPFailureCauseRedaction(t *testing.T) {
 					}}
 					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: body}, nil
 				})
-				c, err := NewHTTP(HTTPConfig{URL: "http://fixture.invalid/private-base", APIKeyEnv: "PROTOCOL_TEST_TOKEN"}, &http.Client{Transport: transport})
+				c, err := NewHTTP(HTTPConfig{URL: "http://fixture.invalid/private-base", APIKeyEnv: "PROTOCOL_TEST_TOKEN"}, &http.Client{Transport: transport}, func(string) string { return "private-test-token" })
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -143,19 +142,50 @@ func TestHTTPFailureCauseRedaction(t *testing.T) {
 	}
 }
 
+func TestHTTPCredentialsRequireExplicitLookup(t *testing.T) {
+	t.Setenv("PROTOCOL_TEST_TOKEN", "implicit-environment-secret")
+	for _, tc := range []struct {
+		name   string
+		lookup func(string) string
+		want   string
+	}{
+		{"no lookup", nil, ""},
+		{"missing", func(string) string { return "" }, ""},
+		{"invalid", func(string) string { return "secret\r\nheader" }, ""},
+		{"valid", func(key string) string {
+			if key != "PROTOCOL_TEST_TOKEN" {
+				t.Fatalf("unexpected credential reference: %q", key)
+			}
+			return "host-secret"
+		}, "host-secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := NewHTTP(HTTPConfig{URL: "https://fixture.invalid", APIKeyEnv: "PROTOCOL_TEST_TOKEN"}, nil, tc.lookup)
+			if tc.want == "" {
+				if err == nil || err.Error() != "configured protocol API key is missing or invalid" {
+					t.Fatalf("missing or invalid credential accepted: %v", err)
+				}
+				return
+			}
+			if err != nil || client.bearer != tc.want {
+				t.Fatalf("host credential not used: %v", err)
+			}
+		})
+	}
+}
+
 func TestHTTPNeverFollowsRedirectWithCredential(t *testing.T) {
 	hits := 0
 	dest := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
 	defer dest.Close()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer private-test-token" {
-			t.Error("missing environment credential")
+			t.Error("missing host credential")
 		}
 		http.Redirect(w, r, dest.URL, http.StatusTemporaryRedirect)
 	}))
 	defer s.Close()
-	t.Setenv("PROTOCOL_TEST_TOKEN", "private-test-token")
-	c, e := NewHTTP(HTTPConfig{URL: s.URL, APIKeyEnv: "PROTOCOL_TEST_TOKEN"}, s.Client())
+	c, e := NewHTTP(HTTPConfig{URL: s.URL, APIKeyEnv: "PROTOCOL_TEST_TOKEN"}, s.Client(), func(string) string { return "private-test-token" })
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -165,10 +195,10 @@ func TestHTTPNeverFollowsRedirectWithCredential(t *testing.T) {
 	}
 }
 func TestHTTPCancelledContextAndCredentialURL(t *testing.T) {
-	if _, e := NewHTTP(HTTPConfig{URL: "https://user:password@example.invalid"}, nil); e == nil {
+	if _, e := NewHTTP(HTTPConfig{URL: "https://user:password@example.invalid"}, nil, nil); e == nil {
 		t.Fatal("credential URL accepted")
 	}
-	c, e := NewHTTP(HTTPConfig{URL: "https://example.invalid"}, nil)
+	c, e := NewHTTP(HTTPConfig{URL: "https://example.invalid"}, nil, nil)
 	if e != nil {
 		t.Fatal(e)
 	}
