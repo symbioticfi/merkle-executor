@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 
 HERE = Path(__file__).resolve().parent
+SOURCE = json.loads((HERE.parents[1] / "abi/source.json").read_text())
 parser = argparse.ArgumentParser()
 parser.add_argument("--check", action="store_true", help="verify committed artifacts without editing")
 args = parser.parse_args()
@@ -25,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix="merkle-recipe-lens-") as temporary:
         result = {"compiler": artifact["metadata"]["compiler"]["version"],
                   "evmVersion": "cancun", "sourceSHA256": hashlib.sha256((HERE / source).read_bytes()).hexdigest(),
                   "runtimeSHA256": hashlib.sha256(bytes.fromhex(runtime.removeprefix("0x"))).hexdigest(),
-                  "recipesRevision": "bd5e235899de5e175a0001a913d47596f6f4f801", "runtime": runtime}
+                  "recipesRevision": SOURCE["revision"], "runtime": runtime}
         if contract != "RecipePrefixLens":
             result.update(abi=artifact["abi"], bytecode=artifact["bytecode"]["object"])
         text = json.dumps(result, indent=2)+"\n"

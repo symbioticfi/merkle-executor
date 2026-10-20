@@ -7,7 +7,7 @@ interface IPrefixAccount {
     function manage(Action[] calldata actions) external returns (bytes[] memory);
 }
 
-/// @notice Exact supported prefix of packed Recipes at adapters bd5e2358.
+/// @notice Exact supported prefix of packed Recipes at the revision in sdk/abi/source.json.
 /// @dev eth_call code override at the original executor preserves msg.sender and
 /// tx.origin for external reads/effects. Original execute is still authoritative.
 contract RecipePrefixLens {

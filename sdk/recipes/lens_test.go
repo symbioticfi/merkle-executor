@@ -17,6 +17,14 @@ import (
 )
 
 func TestLensArtifactIdentity(t *testing.T) {
+	pin, err := os.ReadFile("../abi/source.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contracts struct{ Revision string }
+	if err = json.Unmarshal(pin, &contracts); err != nil {
+		t.Fatal(err)
+	}
 	var artifact struct {
 		Compiler        string
 		EVMVersion      string `json:"evmVersion"`
@@ -34,7 +42,7 @@ func TestLensArtifactIdentity(t *testing.T) {
 	}
 	sourceHash := sha256.Sum256(source)
 	runtimeHash := sha256.Sum256(artifact.Runtime)
-	if !strings.HasPrefix(artifact.Compiler, "0.8.37+") || artifact.EVMVersion != "cancun" || artifact.RecipesRevision != "bd5e235899de5e175a0001a913d47596f6f4f801" || artifact.SourceSHA256 != hex.EncodeToString(sourceHash[:]) || artifact.RuntimeSHA256 != hex.EncodeToString(runtimeHash[:]) {
+	if !strings.HasPrefix(artifact.Compiler, "0.8.37+") || artifact.EVMVersion != "cancun" || len(contracts.Revision) != 40 || artifact.RecipesRevision != contracts.Revision || artifact.SourceSHA256 != hex.EncodeToString(sourceHash[:]) || artifact.RuntimeSHA256 != hex.EncodeToString(runtimeHash[:]) {
 		t.Fatal("lens artifact/compiler/source/runtime identity differs")
 	}
 }

@@ -1,13 +1,14 @@
 # Contract interfaces
 
-These ABI arrays are copied from the sibling adapters Foundry artifacts at
-`bd5e235899de5e175a0001a913d47596f6f4f801` (Solidity 0.8.37):
+These ABI arrays are generated from adapters `codex/bailsec-normalized` at
+`0427c657375512a87158010c323556739fe96d1b` (Solidity 0.8.37):
 
 - `out/RecipeExecutor.sol/RecipeExecutor.json`
 - `out/MerkleAccount.sol/MerkleAccount.json`
 - `out/IERC20.sol/IERC20.json` (vendored as `ERC20.json`)
 
-Refresh the `.abi` arrays from those artifacts after rebuilding adapters, then
+The source pin is `source.json`. After rebuilding that exact clean checkout, run
+`MERKLE_ADAPTERS_REPO=/path/to/adapters python3 hack/sync-adapters.py`, then
 regenerate Go bindings with `make generate`, using abigen 1.17.5 and
 its `--v2` generator. The Recipes instruction payloads are declared in
 `sdk/recipes/codec.go`, because they are encoded data rather than public

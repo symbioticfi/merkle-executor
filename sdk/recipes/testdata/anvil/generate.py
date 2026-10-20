@@ -2,18 +2,30 @@
 """Rebuild local integration fixtures; requires Foundry and current adapters/out."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
-ADAPTERS = ROOT.parent / "adapters"
+checkout = os.environ.get("MERKLE_ADAPTERS_REPO")
+if not checkout:
+    raise SystemExit("Set MERKLE_ADAPTERS_REPO to the pinned adapters checkout")
+ADAPTERS = Path(checkout).resolve()
+source_pin = json.loads((ROOT / "sdk/abi/source.json").read_text())
+revision = subprocess.check_output(["git", "-C", str(ADAPTERS), "rev-parse", "HEAD"], text=True).strip()
+if revision != source_pin["revision"]:
+    raise SystemExit(f"Expected adapters {source_pin['revision']}, got {revision}")
+if subprocess.check_output(["git", "-C", str(ADAPTERS), "status", "--porcelain", "--untracked-files=all", "--", "src", "lib", "foundry.toml", "remappings.txt"], text=True):
+    raise SystemExit("Adapters checkout has source or dependency changes")
 
 def artifact(source, path, output):
     document = json.loads(path.read_text())
     result = {"abi": document["abi"], "bytecode": document["bytecode"]["object"],
               "source": source, "compiler": document["metadata"]["compiler"]["version"]}
+    if output == "RecipeExecutor.json":
+        result["contractsRevision"] = source_pin["revision"]
     (HERE / output).write_text(json.dumps(result, indent=2) + "\n")
 
 with tempfile.TemporaryDirectory(prefix="merkle-keeper-fixtures-") as temporary:
@@ -28,8 +40,6 @@ with tempfile.TemporaryDirectory(prefix="merkle-keeper-fixtures-") as temporary:
 source = "src/contracts/merkle-adapter/automations/RecipeExecutor.sol"
 executor_artifact = json.loads((ADAPTERS / "out/RecipeExecutor.sol/RecipeExecutor.json").read_text())
 for name, metadata in executor_artifact["metadata"]["sources"].items():
-    if not name.startswith("src/"):
-        continue
     current = subprocess.run(["cast", "keccak", "0x" + (ADAPTERS / name).read_bytes().hex()],
                              check=True, capture_output=True, text=True).stdout.strip()
     if current != metadata["keccak256"]:
