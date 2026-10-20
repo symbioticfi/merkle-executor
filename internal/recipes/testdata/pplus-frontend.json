@@ -22,7 +22,7 @@
       ],
       "refs": [
         {
-          "permission": "0x399adaa1c3ef0c9150c614ef02822f973e7678d234aedcf31cb9f4171b2e3f02",
+          "permission": "0xe0dfc72c06c34bd785ede1d62491a99002ba8bb42973ced149bfd7d795c2a2aa",
           "name": "push"
         }
       ],
@@ -52,7 +52,7 @@
       ],
       "refs": [
         {
-          "permission": "0x2015a5a3e04389e55d45d2e4ce323ceaa1afdb1fea437efc8052187fb9248f83",
+          "permission": "0x6c44d348e1a572130ddd6050371128fe28ab41f57521c20acb7f60b568982e23",
           "name": "request"
         }
       ],
@@ -86,7 +86,7 @@
       },
       "refs": [
         {
-          "permission": "0x2015a5a3e04389e55d45d2e4ce323ceaa1afdb1fea437efc8052187fb9248f83",
+          "permission": "0x6c44d348e1a572130ddd6050371128fe28ab41f57521c20acb7f60b568982e23",
           "name": "approveShares"
         }
       ],
@@ -116,7 +116,7 @@
       ],
       "refs": [
         {
-          "permission": "0x2015a5a3e04389e55d45d2e4ce323ceaa1afdb1fea437efc8052187fb9248f83",
+          "permission": "0x6c44d348e1a572130ddd6050371128fe28ab41f57521c20acb7f60b568982e23",
           "name": "deposit"
         }
       ],
@@ -146,7 +146,7 @@
       ],
       "refs": [
         {
-          "permission": "0x399adaa1c3ef0c9150c614ef02822f973e7678d234aedcf31cb9f4171b2e3f02",
+          "permission": "0xe0dfc72c06c34bd785ede1d62491a99002ba8bb42973ced149bfd7d795c2a2aa",
           "name": "pull"
         }
       ],
@@ -179,7 +179,7 @@
       },
       "refs": [
         {
-          "permission": "0x2015a5a3e04389e55d45d2e4ce323ceaa1afdb1fea437efc8052187fb9248f83",
+          "permission": "0x6c44d348e1a572130ddd6050371128fe28ab41f57521c20acb7f60b568982e23",
           "name": "approve"
         }
       ],
@@ -191,9 +191,9 @@
   ],
   "permissions": [
     {
-      "id": "0x399adaa1c3ef0c9150c614ef02822f973e7678d234aedcf31cb9f4171b2e3f02",
+      "id": "0xe0dfc72c06c34bd785ede1d62491a99002ba8bb42973ced149bfd7d795c2a2aa",
       "type": "funding",
-      "typeVersion": 4,
+      "typeVersion": 1,
       "group": "Funding",
       "title": "Strategy funding",
       "subtitle": "USDC between the adapter and the strategy account",
@@ -392,9 +392,9 @@
       }
     },
     {
-      "id": "0x2015a5a3e04389e55d45d2e4ce323ceaa1afdb1fea437efc8052187fb9248f83",
+      "id": "0x6c44d348e1a572130ddd6050371128fe28ab41f57521c20acb7f60b568982e23",
       "type": "erc4626_vault",
-      "typeVersion": 4,
+      "typeVersion": 1,
       "group": "Vaults",
       "title": "PPLUS",
       "subtitle": "USDC deposits \u00b7 queued withdrawals",
@@ -703,12 +703,12 @@
       "contracts": [],
       "display": {
         "category": "Passive yield",
-        "protocol": "pplus",
+        "protocol": "ember",
         "venue": {
           "id": "vault:0xbc5d3722376d44f3bc316c6ea61c9bd553be8cbe",
           "label": "PPLUS",
           "group": {
-            "id": "pplus",
+            "id": "ember",
             "label": "Ember"
           },
           "url": "https://ember.so/earn/PPLUS"

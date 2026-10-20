@@ -25,15 +25,17 @@ external RPC endpoint or a real signing key.
 
 ## PPLUS native-call compatibility
 
-`pplus-frontend.json` is the unmodified metadata tree from the actual portable
-curator-frontend compiler bundle generated for Plan064 at base
-`b2d1b31fafecd6e7b9a8268cbfafa104b7ebeee3` plus canonical PPLUS support. Its
-ERC4626 permission type version is 4. The original bundle fixture and compiler
-source hashes are retained in curator-backend
+`pplus-frontend.json` is the `bundle.metadata` object extracted from the
+`compilePermissions` and `freezeTreeBundle` output of curator-frontend commit
+`964898559f06551a3d66fbac108f8edd1354de89`, using the deterministic facts in
+`src/shared/lib/merkle/operations/authoring/catalog/types/pplus.test.ts`.
+Permission type versions are 1, as emitted by that compiler. Protocol and venue
+group IDs are `ember`; PPLUS remains the native vault and token label. The full
+bundle fixture and its provenance are retained in curator-backend
 `test/fixtures/tree-storage/pplus-frontend.json` and its `SOURCE.md`. Only the
 `bundle.metadata` object was extracted with Python JSON serialization.
 
-SHA256: `9681b65cbf2734de6d4dc7d6e4400b6b28bfd19bd2e9a13c9978bd1fcd40242f`.
+SHA256: `dd737ca273d82c42fd4781aca6156eae7a5f0665403d9a87023afe83fbe72154`.
 
 `TestPplusFrontendNativeCallsUseGenericAssembly` validates all actual tree proofs
 and assembles USDC deposit and self-approved PPLUS `redeemShares` requests using
