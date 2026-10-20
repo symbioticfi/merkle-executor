@@ -137,7 +137,7 @@ configuration fingerprint effect or authority to bypass a read or validation fai
 ## Recipe encoding
 
 The contract of record is adapters `IRecipes.sol` and `IRecipeExecutor.sol` at
-`bd5e235899de5e175a0001a913d47596f6f4f801`. Both queries and steps are `bytes[]`;
+`0427c657375512a87158010c323556739fe96d1b`. Both queries and steps are `bytes[]`;
 each step begins with one opcode byte followed by its ABI-encoded payload.
 The commitment is `keccak256(abi.encode(queries, steps))`. Discovery decodes
 `SetRecipe(bytes32,bytes[],bytes[])`; execution calls

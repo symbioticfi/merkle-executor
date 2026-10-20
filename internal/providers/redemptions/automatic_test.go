@@ -188,7 +188,7 @@ func TestAutomaticIssuerZeroBudget(t *testing.T) {
 							}
 							guards := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("uint256")}}
 							manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
-							r.Steps = [][]byte{r.Steps[0], packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Literal, 1), packedValue(recipes.Input, 7)), r.Steps[1], packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(4, recipes.Input, 7)}}), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[1].Hash}, [][]*big.Int{{packedBinding(4, recipes.Result, 3)}})}
+							r.Steps = [][]byte{r.Steps[0], packedStep(t, recipes.Equal, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Literal, 1), packedValue(recipes.Input, 7)), r.Steps[1], packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(4, recipes.Input, 7)}}), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[1].Hash}, [][]*big.Int{{packedBinding(4, recipes.Result, 3)}})}
 							results[3] = results[1]
 							break
 						}
@@ -198,7 +198,7 @@ func TestAutomaticIssuerZeroBudget(t *testing.T) {
 						guards := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("uint256")}}
 						manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
 						steps := append([][]byte{}, r.Steps[:at]...)
-						steps = append(steps, packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Literal, 1), packedValue(recipes.Input, 7)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(offset, recipes.Input, 7)}}))
+						steps = append(steps, packedStep(t, recipes.Equal, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Literal, 1), packedValue(recipes.Input, 7)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(offset, recipes.Input, 7)}}))
 						r.Steps = append(steps, r.Steps[at+1:]...)
 					}
 					if _, e := p.RecipeRequirements(s, r, tree); e != nil {
@@ -336,6 +336,14 @@ func TestAutomaticAllEmbeddedIssuerRoutes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				generic, _, err := recipes.Assemble(recipe, tree, nil, nil, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				prepared, _, err := recipes.Assemble(recipe, tree, out.Inputs, out.Actions, out.SkipSteps)
+				if err != nil || !bytes.Equal(generic, prepared) {
+					t.Fatalf("generic and issuer calldata differ: %v", err)
+				}
 				claims, err := p.ExclusiveOutputTargets(out)
 				if err != nil || len(claims) != len(out.Actions) {
 					t.Fatalf("restore ownership: %v", err)
@@ -472,31 +480,54 @@ func TestAutomaticIssuerRejectsDurablePolicyAndPayloadChanges(t *testing.T) {
 	}
 }
 
-func TestAutomaticIssuerBoundedAmountAndExactClaimIdentity(t *testing.T) {
+func TestAutomaticIssuerRecipeSelectedAmountAndExactClaimIdentity(t *testing.T) {
 	raw, err := NewAutomatic(registry.Deps{Chain: &issuerReader{t: t, block: big.NewInt(42), results: map[string][]byte{}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	p := raw.(*automatic)
 	cfg := automaticConfig(p.assets[0], "request")
+	cfg.Amount = "80"
 	s, reader := issuerFixture(t, cfg)
 	p.deps.Chain = reader
 	r, tree := automaticRecipe(t, cfg, s, reader)
 	guards := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("uint256")}}
 	manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
-	r.Steps = [][]byte{r.Steps[0], packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Input, 7), packedValue(recipes.Literal, 80)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(36, recipes.Input, 7)}})}
+	r.Steps = [][]byte{r.Steps[0], packedStep(t, recipes.Min, guards, packedValue(recipes.Result, 0), packedValue(recipes.Literal, 80)), packedStep(t, recipes.Equal, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 1)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(36, recipes.Input, 7)}})}
 	req, err := p.RecipeRequirements(s, r, tree)
-	if err != nil || len(req.Values) != 3 || len(req.Actions) != 1 || len(req.Inputs) != 1 || req.Inputs[0] != 7 {
-		t.Fatalf("bounded requirements %+v %v", req, err)
+	if err != nil || len(req.Values) != 1 || len(req.Actions) != 1 || len(req.Inputs) != 1 || req.Inputs[0] != 7 {
+		t.Fatalf("exact requirements %+v %v", req, err)
 	}
-	out, err := p.PrepareRecipe(context.Background(), s, r, tree, map[uint]*big.Int{0: big.NewInt(100)})
+	out, err := p.PrepareRecipe(context.Background(), s, r, tree, map[uint]*big.Int{0: big.NewInt(100), 1: big.NewInt(80)})
 	if err != nil || out.Inputs[7] != "80" {
-		t.Fatalf("bounded amount %+v %v", out, err)
+		t.Fatalf("recipe-selected amount %+v %v", out, err)
+	}
+	anchors, err := recipes.AnchoredInputs(r, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	amount, err := recipes.EconomicResult(anchors[7], map[uint]*big.Int{0: big.NewInt(100), 1: big.NewInt(80)})
+	if err != nil || amount.String() != out.Inputs[7] {
+		t.Fatalf("generic and issuer amounts differ: %v %v", amount, err)
+	}
+	generic, _, err := recipes.Assemble(r, tree, map[uint]string{7: amount.String()}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, _, err := recipes.Assemble(r, tree, out.Inputs, out.Actions, out.SkipSteps)
+	if err != nil || !bytes.Equal(generic, prepared) {
+		t.Fatalf("generic and issuer calldata differ: %v", err)
+	}
+	bounded := recipes.CloneRecipe(r)
+	bounded.Steps[2] = packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 1))
+	before := reader.reads
+	if _, err = p.RecipeRequirements(s, bounded, tree); err == nil || reader.reads != before {
+		t.Fatal("issuer inferred a maximum amount from bounds")
 	}
 	var bundle durableRoutes
 	_, _, err = derived.Decode(PolicyVersion, out, &bundle)
 	if err != nil || bundle.Routes[0].Config.Amount != "80" {
-		t.Fatalf("bounded durable amount %+v %v", bundle, err)
+		t.Fatalf("recipe-selected durable amount %+v %v", bundle, err)
 	}
 	for _, asset := range p.assets {
 		if asset.Family == "noon" {
@@ -594,7 +625,7 @@ func TestAutomaticIssuerUsesComputedClaimIndex(t *testing.T) {
 	}
 }
 
-func TestAutomaticFigureLinksBoundedUnwrapInput(t *testing.T) {
+func TestAutomaticFigureLinksExactUnwrapInput(t *testing.T) {
 	reader := &issuerReader{t: t, block: big.NewInt(42), results: map[string][]byte{}}
 	raw, err := NewAutomatic(registry.Deps{Chain: reader})
 	if err != nil {
@@ -618,14 +649,14 @@ func TestAutomaticFigureLinksBoundedUnwrapInput(t *testing.T) {
 	}
 	binary := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("uint256")}}
 	manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
-	r.Steps = [][]byte{r.Steps[0], packedStep(t, recipes.LessOrEqual, binary, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), r.Steps[1], packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(4, recipes.Input, 7)}}), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[1].Hash}, [][]*big.Int{{packedBinding(4, recipes.Result, 2)}})}
+	r.Steps = [][]byte{r.Steps[0], packedStep(t, recipes.Equal, binary, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), r.Steps[1], packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(4, recipes.Input, 7)}}), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[1].Hash}, [][]*big.Int{{packedBinding(4, recipes.Result, 2)}})}
 	req, err := p.RecipeRequirements(s, r, tree)
 	if err != nil || len(req.Inputs) != 1 || req.Inputs[0] != 7 || len(req.Actions) != 2 {
-		t.Fatalf("bounded Figure requirements %+v %v", req, err)
+		t.Fatalf("exact Figure requirements %+v %v", req, err)
 	}
 	out, err := p.PrepareRecipe(context.Background(), s, r, tree, map[uint]*big.Int{0: big.NewInt(100), 2: big.NewInt(125)})
 	if err != nil || out.Inputs[7] != "100" {
-		t.Fatalf("bounded Figure output %+v %v", out, err)
+		t.Fatalf("exact Figure output %+v %v", out, err)
 	}
 	if _, err = p.ExclusiveOutputTargets(out); err != nil {
 		t.Fatal(err)
@@ -744,7 +775,7 @@ func TestAutomaticNativeNoonSelectionAndRestoration(t *testing.T) {
 }
 
 func TestAutomaticNativeNoonBudgetAndPreflight(t *testing.T) {
-	for _, fault := range []string{"valid", "free amount", "masked pair", "bound pair", "wrong collateral", "known wrong target", "wrong chain", "misaligned binding", "ETH value", "ambiguous route"} {
+	for _, fault := range []string{"valid", "bounded amount", "free amount", "masked pair", "bound pair", "wrong collateral", "known wrong target", "wrong chain", "misaligned binding", "ETH value", "ambiguous route"} {
 		t.Run(fault, func(t *testing.T) {
 			cfg, snapshot, reader := nativeNoonFixture(t)
 			cfg.Amount = "100"
@@ -753,13 +784,15 @@ func TestAutomaticNativeNoonBudgetAndPreflight(t *testing.T) {
 			recipe, tree := automaticRecipe(t, cfg, snapshot, reader)
 			guards := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("uint256")}}
 			manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
-			recipe.Steps = [][]byte{recipe.Steps[0], packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Input, 7), packedValue(recipes.Literal, 80)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(36, recipes.Input, 7)}})}
+			recipe.Steps = [][]byte{recipe.Steps[0], packedStep(t, recipes.Min, guards, packedValue(recipes.Result, 0), packedValue(recipes.Literal, 80)), packedStep(t, recipes.Equal, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 1)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(36, recipes.Input, 7)}})}
 			raw, e := NewAutomatic(registry.Deps{Chain: reader})
 			if e != nil {
 				t.Fatal(e)
 			}
 			p := raw.(*automatic)
 			switch fault {
+			case "bounded amount":
+				recipe.Steps[2] = packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 1))
 			case "free amount":
 				recipe.Steps = [][]byte{recipe.Steps[0], recipe.Steps[3]}
 			case "masked pair":
@@ -796,36 +829,36 @@ func TestAutomaticNativeNoonBudgetAndPreflight(t *testing.T) {
 				return
 			}
 			if e != nil || len(req.Inputs) != 1 || req.Inputs[0] != 7 || reader.reads != 0 {
-				t.Fatalf("bounded native requirements: %+v %v", req, e)
+				t.Fatalf("exact native requirements: %+v %v", req, e)
 			}
 			if e = keeper.ValidateRecipeComposition(recipe, tree, []keeper.RecipeRequirements{req}); e != nil {
 				t.Fatal(e)
 			}
 			reader.reply(common.HexToAddress(cfg.Target), native.NewNoonRedeemHandlerV2().GetABI(), "calculateCollateralAmount", []any{common.HexToAddress(cfg.OutputAsset), big.NewInt(80)}, big.NewInt(1_234_567))
-			out, e := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, map[uint]*big.Int{0: big.NewInt(100)})
+			out, e := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, map[uint]*big.Int{0: big.NewInt(100), 1: big.NewInt(80)})
 			if e != nil || out.Inputs[7] != "80" {
-				t.Fatalf("native maximum bounded amount: %+v %v", out.Inputs, e)
+				t.Fatalf("native recipe-selected amount: %+v %v", out.Inputs, e)
 			}
 			var bundle durableRoutes
 			_, _, e = derived.Decode(PolicyVersion, out, &bundle)
 			if e != nil || bundle.Routes[0].Config.Amount != "80" || bundle.Routes[0].Config.Mode != "redeem-usn" {
 				t.Fatalf("native durable budget differs: %+v %v", bundle, e)
 			}
-			// Every read-derived upper bound participates; the smaller read also beats the literal cap.
+			// The recipe explicitly selects the smaller read and applies its literal cap.
 			tighter := recipe
-			tighter.Steps = [][]byte{recipe.Steps[0], recipe.Steps[0], packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 1)), recipe.Steps[1], recipe.Steps[2], recipe.Steps[3]}
+			tighter.Steps = [][]byte{recipe.Steps[0], recipe.Steps[0], packedStep(t, recipes.Min, guards, packedValue(recipes.Result, 0), packedValue(recipes.Result, 1)), packedStep(t, recipes.Min, guards, packedValue(recipes.Result, 2), packedValue(recipes.Literal, 80)), packedStep(t, recipes.Equal, guards, packedValue(recipes.Input, 7), packedValue(recipes.Result, 3)), recipe.Steps[3]}
 			reader.reply(common.HexToAddress(cfg.Target), native.NewNoonRedeemHandlerV2().GetABI(), "calculateCollateralAmount", []any{common.HexToAddress(cfg.OutputAsset), big.NewInt(70)}, big.NewInt(1_234_567))
-			tighterOut, e := p.PrepareRecipe(t.Context(), snapshot, tighter, tree, map[uint]*big.Int{0: big.NewInt(100), 1: big.NewInt(70)})
+			tighterOut, e := p.PrepareRecipe(t.Context(), snapshot, tighter, tree, map[uint]*big.Int{0: big.NewInt(100), 1: big.NewInt(70), 2: big.NewInt(70), 3: big.NewInt(70)})
 			if e != nil || tighterOut.Inputs[7] != "70" {
 				t.Fatalf("second native read cap ignored: %+v %v", tighterOut.Inputs, e)
 			}
 			lower := recipe
 			lower.Steps = [][]byte{recipe.Steps[0], recipe.Steps[1], recipe.Steps[2], packedStep(t, recipes.LessOrEqual, guards, packedValue(recipes.Literal, 50), packedValue(recipes.Input, 7)), recipe.Steps[3]}
 			before := reader.reads
-			if _, e = p.PrepareRecipe(t.Context(), snapshot, lower, tree, map[uint]*big.Int{0: big.NewInt(40)}); e == nil || reader.reads != before {
+			if _, e = p.PrepareRecipe(t.Context(), snapshot, lower, tree, map[uint]*big.Int{0: big.NewInt(40), 1: big.NewInt(40)}); e == nil || reader.reads != before {
 				t.Fatal("native minimum bound ignored/read", e)
 			}
-			if _, e = p.PrepareRecipe(t.Context(), snapshot, recipe, tree, map[uint]*big.Int{0: big.NewInt(0)}); !errors.Is(e, provider.ErrNotReady) || reader.reads != before {
+			if _, e = p.PrepareRecipe(t.Context(), snapshot, recipe, tree, map[uint]*big.Int{0: big.NewInt(0), 1: big.NewInt(0)}); !errors.Is(e, provider.ErrNotReady) || reader.reads != before {
 				t.Fatal("zero native derived amount accepted/read", e)
 			}
 		})

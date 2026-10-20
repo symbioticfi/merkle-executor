@@ -204,3 +204,22 @@ The handler runtime/source is real; USN/USDC token behavior, oracle and account
 are local fixtures. These tests do not verify live account enrollment, production
 USN/USDC pause, blacklist or whitelist restrictions, deployment liquidity,
 future upgrades or issuer availability.
+
+
+## Canonical normalized contracts — 2026-10-20
+
+The active source is adapters `codex/bailsec-normalized` at
+`0427c657375512a87158010c323556739fe96d1b`. The generated account ABI includes
+`addCapability(address,bytes32)` and the connector ABI includes
+`addTokenToRedeem(address,address)`. The shared recipe instruction schema remains
+operations 0–11. The SDK source pin lives in `sdk/abi/source.json`; regeneration
+requires that exact clean checkout and validates every compiled source/dependency
+hash before copying ABIs and the local executor fixture.
+
+The published SDK is `v0.0.0-20261020094539-64f054908460`. With `GOWORK=off`,
+`make check`, `make integration`, `make generate` and
+`python3 sdk/recipes/lens/generate.py --check` passed using this source.
+Both the service and SDK lint reported zero issues. ABI generation and source
+hash checks passed against the canonical checkout. These are local fixture and
+ephemeral Anvil checks; they do not establish complete recipe runtime-provider
+coverage, live protocol acceptance or deployed-contract parity.

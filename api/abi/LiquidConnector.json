@@ -80,6 +80,11 @@
         "name": "tokenToRedeem",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "expectedOracle",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],

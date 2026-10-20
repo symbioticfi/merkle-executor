@@ -7,7 +7,7 @@ interface IPrefixAccount {
     function manage(Action[] calldata actions) external returns (bytes[] memory);
 }
 
-/// @notice Exact supported prefix of packed Recipes at adapters bd5e2358.
+/// @notice Exact supported prefix of packed Recipes at the revision in sdk/abi/source.json.
 /// @dev eth_call code override at the original executor preserves msg.sender and
 /// tx.origin for external reads/effects. Original execute is still authoritative.
 contract RecipePrefixLens {
@@ -92,11 +92,7 @@ contract RecipePrefixLens {
             if(value>=s.inputs.length) revert InvalidReference();
             if(s.known[value]) return s.inputs[value];
             if(s.anchors[value].length==0) revert InvalidReference();
-            (bool exact,uint256 expression,uint256[] memory upper,uint256[] memory lower)=abi.decode(s.anchors[value],(bool,uint256,uint256[],uint256[]));
-            uint256 selected=_value(expression,steps,s);
-            for(uint256 i;i<upper.length;++i) { uint256 cap=_value(upper[i],steps,s); if(exact && selected>cap) revert CheckFailed(); if(!exact && cap<selected) selected=cap; }
-            for(uint256 i;i<lower.length;++i) { if(selected<_value(lower[i],steps,s)) revert CheckFailed(); }
-            return selected;
+            return _value(abi.decode(s.anchors[value],(uint256)),steps,s);
         }
         if(source!=2 || value>=s.index || uint8(steps[value][0])>6 || !s.needed[value]) revert InvalidReference();
         return s.values[value];

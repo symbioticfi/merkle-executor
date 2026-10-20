@@ -8,7 +8,7 @@ import (
 
 var testTarget = common.HexToAddress("0x11")
 
-func TestBudgetSelectsRecipeBounds(t *testing.T) {
+func TestBudgetRequiresRecipeSelectedAmount(t *testing.T) {
 	read := step(Read, pack(t, readArgs, big.NewInt(0)))
 	upper := func(a, b *big.Int) []byte { return step(LessOrEqual, pack(t, binaryArgs, a, b)) }
 	equal := func(a, b *big.Int) []byte { return step(Equal, pack(t, binaryArgs, a, b)) }
@@ -21,12 +21,13 @@ func TestBudgetSelectsRecipeBounds(t *testing.T) {
 		invalid bool
 		exact   bool
 	}{
-		{"read maximum", [][]byte{read, upper(input(0), result(0))}, map[uint]*big.Int{0: big.NewInt(100)}, 100, false, false},
-		{"literal cap", [][]byte{read, upper(input(0), result(0)), upper(input(0), literal(17))}, map[uint]*big.Int{0: big.NewInt(100)}, 17, false, false},
-		{"multiple caps", [][]byte{read, step(Min, pack(t, binaryArgs, result(0), literal(50))), upper(input(0), result(0)), upper(input(0), result(1))}, map[uint]*big.Int{0: big.NewInt(100), 1: big.NewInt(50)}, 50, false, false},
+		{"read ceiling leaves amount unspecified", [][]byte{read, upper(input(0), result(0))}, map[uint]*big.Int{0: big.NewInt(100)}, 0, true, false},
+		{"literal cap leaves amount unspecified", [][]byte{read, upper(input(0), result(0)), upper(input(0), literal(17))}, map[uint]*big.Int{0: big.NewInt(100)}, 0, true, false},
+		{"multiple caps leave amount unspecified", [][]byte{read, step(Min, pack(t, binaryArgs, result(0), literal(50))), upper(input(0), result(0)), upper(input(0), result(1))}, map[uint]*big.Int{0: big.NewInt(100), 1: big.NewInt(50)}, 0, true, false},
+		{"explicit minimum", [][]byte{read, step(Min, pack(t, binaryArgs, result(0), literal(17))), equal(input(0), result(1))}, map[uint]*big.Int{0: big.NewInt(100), 1: big.NewInt(17)}, 17, false, true},
 		{"equality precedence", [][]byte{read, equal(input(0), result(0)), upper(input(0), literal(200))}, map[uint]*big.Int{0: big.NewInt(100)}, 100, false, true},
 		{"exact violates cap", [][]byte{read, equal(input(0), result(0)), upper(input(0), literal(17))}, map[uint]*big.Int{0: big.NewInt(100)}, 0, true, true},
-		{"cap violates lower", [][]byte{read, upper(input(0), result(0)), upper(input(0), literal(17)), upper(literal(20), input(0))}, map[uint]*big.Int{0: big.NewInt(100)}, 0, true, false},
+		{"exact violates lower", [][]byte{read, equal(input(0), result(0)), upper(literal(20), input(0))}, map[uint]*big.Int{0: big.NewInt(17)}, 0, true, true},
 		{"literal alone", [][]byte{upper(input(0), literal(17))}, nil, 0, true, false},
 		{"free", [][]byte{read}, nil, 0, true, false},
 	}
@@ -56,8 +57,8 @@ func TestReadDependencyAnchoredInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	recipe.Steps[1] = step(LessOrEqual, pack(t, binaryArgs, input(0), result(0)))
-	if err := ReadDependent(recipe, Value{Source: Result, Value: big.NewInt(2)}); err != nil {
-		t.Fatal(err)
+	if err := ReadDependent(recipe, Value{Source: Result, Value: big.NewInt(2)}); err == nil {
+		t.Fatal("query accepted input with only an upper bound")
 	}
 	recipe.Steps[1] = step(LessOrEqual, pack(t, binaryArgs, result(0), input(0)))
 	if err := ReadDependent(recipe, Value{Source: Result, Value: big.NewInt(2)}); err == nil {
@@ -69,12 +70,8 @@ func TestEconomicAnchoredBoundsAndMixedFloors(t *testing.T) {
 	query := pack(t, queryArgs, testTarget, []byte{1, 2, 3, 4}, []*big.Int{}, big.NewInt(0))
 	r := Recipe{Queries: [][]byte{query}, Steps: [][]byte{step(Read, pack(t, readArgs, big.NewInt(0))), step(Equal, pack(t, binaryArgs, input(1), result(0))), step(LessOrEqual, pack(t, binaryArgs, input(0), input(1)))}}
 	budget, err := Budget(r, Value{Source: Input, Value: big.NewInt(0)}, uint(len(r.Steps)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	v, err := EconomicResult(budget, map[uint]*big.Int{0: big.NewInt(50)})
-	if err != nil || v.Int64() != 50 {
-		t.Fatalf("budget=%v error=%v", v, err)
+	if err == nil {
+		t.Fatalf("input bounded by an exact input still permits multiple values: %+v", budget)
 	}
 	r.Steps = [][]byte{step(Read, pack(t, readArgs, big.NewInt(0))), step(LessOrEqual, pack(t, binaryArgs, literal(1), input(0))), step(LessOrEqual, pack(t, binaryArgs, result(0), input(0)))}
 	floors, err := Floor(r, Value{Source: Input, Value: big.NewInt(0)}, uint(len(r.Steps)))

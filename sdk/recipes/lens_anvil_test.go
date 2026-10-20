@@ -96,9 +96,8 @@ func TestAnvilLensContextAnchorsAndDivergence(t *testing.T) {
 	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(r.Queries, r.Steps))
 	header, _ = client.HeaderByNumber(ctx, nil)
 	snapshot.BlockNumber = header.Number.Uint64()
-	bounded, err := ResolveValues(ctx, reader, snapshot, r, []Value{{Source: Result, Value: big.NewInt(2)}})
-	if err != nil || bounded[2].Int64() != 84 {
-		t.Fatalf("bounded preview=%v error=%v", bounded, err)
+	if _, err = ResolveValues(ctx, reader, snapshot, r, []Value{{Source: Result, Value: big.NewInt(2)}}); err == nil {
+		t.Fatal("lens chose an input from an upper bound")
 	}
 
 	for _, zero := range []bool{false, true} {
@@ -183,20 +182,45 @@ func TestAnvilLensStatefulPrefix(t *testing.T) {
 	localTransaction(t, ctx, client, sender, &token, fixtureCalldata(t, ta, "mint", account, big.NewInt(1000)))
 	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetCaller(sender))
 	query := pack(t, queryArgs, token, fixtureCalldata(t, ta, "balanceOf", account), []*big.Int{}, big.NewInt(0))
-	r := Recipe{Queries: [][]byte{query}, Steps: [][]byte{step(Read, pack(t, readArgs, big.NewInt(0))), step(LessOrEqual, pack(t, binaryArgs, input(0), result(0))), step(LessOrEqual, pack(t, binaryArgs, input(0), literal(17))), step(Approve, pack(t, approveArgs, input(0), token, recipient, approval.Hash)), manageStep(t, transfer.Hash, literal(1), []*big.Int{binding(36, input(0))}), step(Call, pack(t, callArgs, token, fixtureCalldata(t, ta, "touch", new(big.Int)), []*big.Int{binding(4, input(0))})), step(Read, pack(t, readArgs, big.NewInt(0)))}}
-	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(r.Queries, r.Steps))
 	reader := &lensAnvilReader{Client: client}
-	for i := int64(0); i < 2; i++ {
+	for _, externalInput := range []bool{false, true} {
+		amount := result(1)
+		check := result(1)
+		inputs := map[uint]string{}
+		if externalInput {
+			amount, check = input(0), input(0)
+		}
+		r := Recipe{Queries: [][]byte{query}, Steps: [][]byte{
+			step(Read, pack(t, readArgs, big.NewInt(0))),
+			step(Min, pack(t, binaryArgs, result(0), literal(17))),
+			step(Equal, pack(t, binaryArgs, check, result(1))),
+			step(Approve, pack(t, approveArgs, amount, token, recipient, approval.Hash)),
+			manageStep(t, transfer.Hash, literal(1), []*big.Int{binding(36, amount)}),
+			step(Call, pack(t, callArgs, token, fixtureCalldata(t, ta, "touch", new(big.Int)), []*big.Int{binding(4, amount)})),
+			step(Read, pack(t, readArgs, big.NewInt(0))),
+		}}
+		localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(r.Queries, r.Steps))
 		header, _ := client.HeaderByNumber(ctx, nil)
 		s := Snapshot{Executor: executor, Account: account, Caller: sender, BlockNumber: header.Number.Uint64()}
 		resolved, err := ResolveValuesWithRuntime(ctx, reader, s, r, []Value{{Source: Result, Value: big.NewInt(6)}}, PrefixRuntime{Tree: tree})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resolved[6].Int64() != 983-i*17 {
-			t.Fatalf("post-effect balance=%s", resolved[6])
+		if resolved[1].Int64() != 17 || resolved[6].Int64() != 983 {
+			t.Fatalf("external input=%v: values=%v", externalInput, resolved)
 		}
-		encoded, _, err := Assemble(r, tree, map[uint]string{0: "17"}, nil, nil)
+		if externalInput {
+			anchors, e := AnchoredInputs(r, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			selected, e := EconomicResult(anchors[0], resolved)
+			if e != nil {
+				t.Fatal(e)
+			}
+			inputs[0] = selected.String()
+		}
+		encoded, _, err := Assemble(r, tree, inputs, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -207,10 +231,23 @@ func TestAnvilLensStatefulPrefix(t *testing.T) {
 		if err = VerifyResults(encoded, original, ResultsWitness(resolved)); err != nil {
 			t.Fatal(err)
 		}
-		if got := fixtureRead(t, ctx, client, ta, token, "balanceOf", account)[0].(*big.Int); got.Int64() != 1000-i*17 {
+		if got := fixtureRead(t, ctx, client, ta, token, "balanceOf", account)[0].(*big.Int); got.Int64() != 1000 {
 			t.Fatal("lens wrote live state")
 		}
-		localTransaction(t, ctx, client, sender, &executor, encoded)
+		if externalInput {
+			// A different amount cannot satisfy the same recipe and state.
+			wrong, _, e := Assemble(r, tree, map[uint]string{0: "16"}, nil, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if _, e = client.CallContract(ctx, ethereum.CallMsg{From: sender, To: &executor, Data: wrong}, header.Number); e == nil {
+				t.Fatal("original executor accepted a different selected amount")
+			}
+			localTransaction(t, ctx, client, sender, &executor, encoded)
+			if got := fixtureRead(t, ctx, client, ta, token, "balanceOf", account)[0].(*big.Int); got.Int64() != 983 {
+				t.Fatalf("executed balance=%s", got)
+			}
+		}
 	}
 	if reader.calls != 2 {
 		t.Fatalf("lens RPCs=%d", reader.calls)
@@ -223,7 +260,7 @@ func TestAnvilLensStatefulPrefix(t *testing.T) {
 	zeroLeaf.Hash, _ = HashLeaf(zeroLeaf)
 	tree = &Tree{Root: zeroLeaf.Hash, Leaves: []Leaf{zeroLeaf}}
 	localTransaction(t, ctx, client, sender, &account, fixtureCalldata(t, aa, "configure", tree.Root, [][32]byte{zeroLeaf.Hash}, executor))
-	r = Recipe{Queries: [][]byte{query}, Steps: [][]byte{step(Approve, pack(t, approveArgs, literal(0), zeroToken, recipient, zeroLeaf.Hash)), step(Read, pack(t, readArgs, big.NewInt(0)))}}
+	r := Recipe{Queries: [][]byte{query}, Steps: [][]byte{step(Approve, pack(t, approveArgs, literal(0), zeroToken, recipient, zeroLeaf.Hash)), step(Read, pack(t, readArgs, big.NewInt(0)))}}
 	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(r.Queries, r.Steps))
 	header, _ := client.HeaderByNumber(ctx, nil)
 	s := Snapshot{Executor: executor, Account: account, Caller: sender, BlockNumber: header.Number.Uint64()}

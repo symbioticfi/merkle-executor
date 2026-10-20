@@ -8,7 +8,7 @@ a temporary directory and never writes sibling repositories.
 `FixtureRFQAccount` reproduces permission proofs, roles and Manage dispatch from
 the existing local account fixture, plus the hash program, original-buffer Sign
 and ERC1271 behavior from SDK-pinned adapters revision
-`bd5e235899de5e175a0001a913d47596f6f4f801`. It retains the `root()` interface.
+`0427c657375512a87158010c323556739fe96d1b`. It retains the `root()` interface.
 `FixtureRFQReactor` reproduces Request EIP712, nonce use, strict deadline, atomic
 ERC20 input/output transfers and Fill/InvalidateNonce tuples from RFQ revision
 `22b04a850ca3680103e797bfae0e1a3b997fac83`. The protocol/filler caller substitutes

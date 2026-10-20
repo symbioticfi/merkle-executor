@@ -113,86 +113,45 @@ type EconomicValue struct {
 	Exact bool
 }
 
-// Budget selects the exact equality result when present, otherwise the maximum
-// amount permitted by all preceding upper bounds. At least one bound must have
-// a recipe read dependency; literal caps alone cannot supply financial policy.
+// Budget requires the recipe to select an exact read-derived amount. Bounds
+// validate that amount; they never choose it. Use MIN/MAX arithmetic in the
+// recipe to express a capped amount, bound directly or through an input equality.
 func Budget(recipe Recipe, value Value, before uint) (EconomicValue, error) {
-	economic, err := budgetSource(recipe, value, before)
+	economic, err := ExactValue(recipe, value, before)
 	if err != nil {
 		return EconomicValue{}, err
 	}
-	readSources := economic.Upper
-	if economic.Exact {
-		readSources = []Value{economic.Expression}
-	}
-	_, read, err := dependencies(recipe, readSources)
-	if err != nil {
+	if err = ReadDependent(recipe, economic.Expression); err != nil {
 		return EconomicValue{}, err
 	}
-	if !read {
-		return EconomicValue{}, errors.New("trade amount has no recipe read dependency")
+	if value.Source == Input {
+		for i := uint(0); i < before && i < uint(len(recipe.Steps)); i++ {
+			step := recipe.Steps[i]
+			if step[0] != LessOrEqual {
+				continue
+			}
+			args, e := binaryArgs.Unpack(step[1:])
+			if e != nil {
+				return EconomicValue{}, e
+			}
+			a, b := decodeValue(args[0].(*big.Int)), decodeValue(args[1].(*big.Int))
+			var bounds *[]Value
+			if sameValue(a, value) {
+				bounds, a = &economic.Upper, b
+			} else if sameValue(b, value) {
+				bounds = &economic.Lower
+			} else {
+				continue
+			}
+			a, e = boundSource(recipe, a, i)
+			if e != nil {
+				return EconomicValue{}, e
+			}
+			*bounds = append(*bounds, a)
+		}
 	}
 	if _, _, err = dependencies(recipe, EconomicExpressions(economic)); err != nil {
 		return EconomicValue{}, err
-	}
-	return economic, nil
-}
-
-// budgetSource selects structure only. Dependency walks use it directly so DAG
-// memoization is shared rather than recursively restarting validation per Input.
-func budgetSource(recipe Recipe, value Value, before uint) (EconomicValue, error) {
-	if value.Source == Result {
-		return EconomicValue{Expression: value, Exact: true}, nil
-	}
-	if value.Source != Input || value.Value == nil || !value.Value.IsUint64() {
-		return EconomicValue{}, errors.New("trade amount must depend on a recipe result")
-	}
-	index := uint(value.Value.Uint64())
-	economic := EconomicValue{Input: &index}
-	for i := uint(0); i < before && i < uint(len(recipe.Steps)); i++ {
-		step := recipe.Steps[i]
-		if step[0] != Equal && step[0] != LessOrEqual {
-			continue
-		}
-		args, err := binaryArgs.Unpack(step[1:])
-		if err != nil {
-			return EconomicValue{}, err
-		}
-		a, b := decodeValue(args[0].(*big.Int)), decodeValue(args[1].(*big.Int))
-		if step[0] == Equal {
-			if sameValue(a, value) {
-				a, b = b, a
-			}
-			if !sameValue(b, value) {
-				continue
-			}
-			if a.Source != Result {
-				return EconomicValue{}, errors.New("trade amount equality has no numerical result")
-			}
-			if economic.Exact && !sameValue(economic.Expression, a) {
-				return EconomicValue{}, errors.New("trade amount has ambiguous equality sources")
-			}
-			economic.Expression = a
-			economic.Exact = true
-		} else if sameValue(a, value) {
-			bound, e := boundSource(recipe, b, i)
-			if e != nil {
-				return EconomicValue{}, e
-			}
-			economic.Upper = append(economic.Upper, bound)
-		} else if sameValue(b, value) {
-			bound, e := boundSource(recipe, a, i)
-			if e != nil {
-				return EconomicValue{}, e
-			}
-			economic.Lower = append(economic.Lower, bound)
-		}
-	}
-	if !economic.Exact {
-		if len(economic.Upper) == 0 {
-			return EconomicValue{}, errors.New("trade amount input lacks a recipe result bound")
-		}
-		economic.Expression = economic.Upper[0]
 	}
 	return economic, nil
 }
@@ -364,26 +323,11 @@ func dependencies(recipe Recipe, values []Value) (map[uint]bool, bool, error) {
 			}
 			economic, err := exactSource(recipe, v, before)
 			if err != nil {
-				economic, err = budgetSource(recipe, v, before)
-			}
-			if err != nil {
 				return false, errors.New("recipe expression depends on an input without a preceding deterministic result source")
 			}
-			read := false
-			capRead := false
-			expressions := EconomicExpressions(economic)
-			for i, expression := range expressions {
-				hasRead, e := visit(expression, before)
-				if e != nil {
-					return false, e
-				}
-				read = read || hasRead
-				if i <= len(economic.Upper) {
-					capRead = capRead || hasRead
-				}
-			}
-			if !economic.Exact && !capRead {
-				return false, errors.New("bounded recipe input has no read-derived upper bound")
+			read, err := visit(economic.Expression, before)
+			if err != nil {
+				return false, err
 			}
 			inputMemo[key] = read
 			return read, nil
@@ -478,11 +422,8 @@ func EconomicResult(v EconomicValue, results map[uint]*big.Int) (*big.Int, error
 		if e != nil {
 			return nil, e
 		}
-		if v.Exact && x.Cmp(maximum) > 0 {
+		if x.Cmp(maximum) > 0 {
 			return nil, errors.New("exact recipe amount exceeds an upper bound")
-		}
-		if !v.Exact && maximum.Cmp(x) < 0 {
-			x = maximum
 		}
 	}
 	for _, bound := range v.Lower {

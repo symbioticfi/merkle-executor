@@ -24,7 +24,7 @@ type PrefixRuntime struct {
 
 type prefixProgram struct {
 	needed  map[uint]bool
-	anchors map[uint]EconomicValue
+	anchors map[uint]Value
 	runtime [][]byte
 	size    uint
 }
@@ -36,7 +36,7 @@ func ValidatePrefix(recipe Recipe, expressions []Value, runtime PrefixRuntime) e
 }
 
 func buildPrefix(recipe Recipe, expressions []Value, runtime PrefixRuntime) (prefixProgram, error) {
-	p := prefixProgram{anchors: map[uint]EconomicValue{}}
+	p := prefixProgram{anchors: map[uint]Value{}}
 	needed, _, err := dependencies(recipe, expressions)
 	if err != nil {
 		return p, err
@@ -69,9 +69,6 @@ func buildPrefix(recipe Recipe, expressions []Value, runtime PrefixRuntime) (pre
 			}
 			economic, e := ExactValue(recipe, v, uint(len(recipe.Steps)))
 			if e != nil {
-				economic, e = Budget(recipe, v, uint(len(recipe.Steps)))
-			}
-			if e != nil {
 				return errors.Errorf("unsupported prefix: input %d has no known authorized value", index)
 			}
 			for _, expression := range EconomicExpressions(economic) {
@@ -86,7 +83,7 @@ func buildPrefix(recipe Recipe, expressions []Value, runtime PrefixRuntime) (pre
 					p.needed[i] = true
 				}
 			}
-			p.anchors[index] = economic
+			p.anchors[index] = economic.Expression
 			return nil
 		}
 		dependencies, _, e := dependencies(recipe, []Value{v})
@@ -247,16 +244,8 @@ func prefixInputs(p prefixProgram, inputs map[uint]string) ([]*big.Int, []bool, 
 		values[index] = value
 		known[index] = true
 	}
-	for index, economic := range p.anchors {
-		upper := make([]*big.Int, len(economic.Upper))
-		lower := make([]*big.Int, len(economic.Lower))
-		for i, v := range economic.Upper {
-			upper[i] = encodeValue(v)
-		}
-		for i, v := range economic.Lower {
-			lower[i] = encodeValue(v)
-		}
-		raw, err := lensAnchorArgs.Pack(economic.Exact, encodeValue(economic.Expression), upper, lower)
+	for index, expression := range p.anchors {
+		raw, err := lensAnchorArgs.Pack(encodeValue(expression))
 		if err != nil {
 			return nil, nil, nil, err
 		}

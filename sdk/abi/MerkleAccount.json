@@ -132,6 +132,11 @@
         "name": "capability",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "expectedSelectorsHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ],
     "outputs": [],
