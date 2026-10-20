@@ -10,6 +10,8 @@ standalone daemon and vault-solver consume this same implementation.
   recovery and provider reconciliation with canonical execution evidence.
 - `provider`: host-implemented Prepare/Advance contracts. Protocol discovery,
   pricing, auctions, API authentication and settlement policy belong to the host.
+- `providers/aave`: authenticated Aave V3 capacity preparation shared by both hosts.
+- `providers/derived`: immutable provider envelopes and authenticated signed fields.
 - `protocolio`: pinned block reads and execution-log validation.
 - `submission`: sender-independent signed-attempt journal and canonical receipts.
 - `state`: optional exclusive local file store with atomic replacement and fsync.
@@ -30,7 +32,8 @@ interpreter retains original caller/account identities and permission checks.
 Unresolved inputs and unprepared mutable actions fail closed. Its numerical
 witnesses belong in `provider.Output.Results`; the planner merges them after all
 providers prepare and verifies them against full original execution, including on
-recovery. The host owns protocol-specific probe code and admission policy.
+recovery. Protocol-specific probe code and admission policy live in isolated providers;
+`providers/aave` supplies the shared Aave implementation.
 
 Permission sources and protocol I/O wrap a host-supplied HTTP transport; pinned
 read batching wraps a host-supplied RPC transport and generated aggregate codec. A host implements `submission.Transport` over its existing sender.
@@ -78,7 +81,7 @@ independent stages at 256 members and returns ordered member results, separately
 from transport errors. Existing backends keep lazy individual reads; a failed real
 batch never falls back to singles. `MulticallSafe` is an explicit assertion of
 caller independence and read-only behavior, not an ABI `view` inference. The host
-chooses the transport and deployment; SDK code contains no protocol-specific rules.
+chooses the transport and deployment; generic SDK transport code contains no protocol-specific rules.
 Member errors are consumed in validation order, preserving idle/terminal branches
 that do not need speculative results. Missing members invalidate the whole group.
 
