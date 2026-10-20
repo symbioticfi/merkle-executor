@@ -15,11 +15,11 @@ jobs:
         with:
           go-version: '1.27.1'
           cache: true
-      - run: make check
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: v1.8.1
-      - run: make generate && git diff --exit-code -- api sdk/bindings sdk/recipes/lens
+      - run: make check
+      - run: make generate && git diff --exit-code -- api sdk/bindings sdk/recipes/lens internal/providers/aave/lens
       - run: make integration
 
       - env:
