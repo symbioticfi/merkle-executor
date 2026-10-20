@@ -221,7 +221,7 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 	serviceSeedTransaction(t, ctx, client, owner, &share, servicePack(t, shareArtifact, "mint", account, big.NewInt(100)))
 	run()
 	requested := load(cfg.Strategies[0])
-	if requested.Phase != "settled" || len(requested.Progress) != 4 || !requested.Progress[3].Done || requested.Result.Execution == nil {
+	if requested.Phase != "settled" || len(requested.Progress) != 5 || !requested.Progress[4].Done || requested.Result.Execution == nil {
 		t.Fatal("confirmed recipe request did not release account ownership with correlated execution evidence")
 	}
 	if read(issuer, issuerArtifact, "pendingShares", account).Int64() != 100 || read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(share, shareArtifact, "allowance", account, issuer).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Sign() != 0 {
@@ -237,7 +237,7 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 	serviceSeedTransaction(t, ctx, client, owner, &issuer, servicePack(t, issuerArtifact, "finalize", account))
 	run() // Separate claim strategy may now own the same account and nonce lane.
 	claimed := load(cfg.Strategies[1])
-	if claimed.Phase != "settled" || len(claimed.Progress) != 4 || !claimed.Progress[3].Done || claimed.Result.Execution == nil || claimed.Result.Hash == requested.Result.Hash {
+	if claimed.Phase != "settled" || len(claimed.Progress) != 5 || !claimed.Progress[4].Done || claimed.Result.Execution == nil || claimed.Result.Hash == requested.Result.Hash {
 		t.Fatal("matured issuer claim did not finish as its own confirmed execution")
 	}
 	if read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Int64() != 200 || read(issuer, issuerArtifact, "claimCount").Int64() != 1 {

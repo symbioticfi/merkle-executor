@@ -12,7 +12,7 @@ require (
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
 	github.com/spf13/cobra v1.10.2
-	github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261020150820-78d587975ca6
+	github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261020171951-b4596b727fcc
 	go.opentelemetry.io/otel v1.41.0
 	go.opentelemetry.io/otel/sdk v1.41.0
 	go.opentelemetry.io/otel/trace v1.41.0

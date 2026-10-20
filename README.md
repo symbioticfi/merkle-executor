@@ -141,8 +141,11 @@ Manage step still occupies a runtime slot and must pass full simulation.
 
 For a claim → Morpho-cap → Aave-overflow recipe, commit the claim and issuer
 operations, eligibility checks, balance reads and routing arithmetic in the recipe.
-Startup registers CoW, Merkl and Liquid Lane RFQ providers plus generic recipe
-Inputs. Those providers supply HTTP orders, quotes and reward proofs;
+Startup registers CoW, Merkl, Liquid Lane RFQ and Aave V3 capacity providers plus
+generic recipe Inputs. Aave capacity comes from an authenticated post-supply eth_call probe;
+[its recipe](internal/providers/aave/README.md) selects the actual borrow amount
+and enforces the health floor. The other providers supply HTTP orders, quotes
+and reward proofs;
 native protocol actions use the generic execution path. Request IDs and claim
 eligibility must come from committed literals, reads and results. Runtime inputs
 use exact recipe-result anchors; bounds alone never select an amount and unknown

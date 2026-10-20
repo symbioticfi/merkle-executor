@@ -21,7 +21,9 @@ another module's internal packages or change the solver or adapters checkouts.
   installs its fixed automatic providers directly. There is no manual YAML factory registry.
 - `providers`: CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs, selected
   from authenticated recipes. Generic `keeper.NewRecipeInputs()` resolves exact
-  recipe constraints. Native protocol semantics belong entirely in recipe bytes.
+  recipe constraints. The isolated Aave V3 provider supplies one authenticated
+  borrow-capacity Input through an eth_call-only post-supply prefix probe;
+  actual amount selection and health guards remain in recipe bytes.
 - `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
 - `curator`: bounded HTTP acquisition of the exact active permission root; the SDK
   validates the returned bytes independently.
@@ -109,14 +111,21 @@ providers retain their exact account authorization and settlement attestations.
 A canonical native receipt settles generic execution. The keeper does not interpret
 issuer events, discover requests, apply protocol-specific readiness rules or wait
 for an issuer payout. Calls, reads, amount selection, authorization, claim gates
-and output checks are committed in the recipe. Native protocols require no selector
+and output checks are committed in the recipe. Other native protocols require no selector
 or deployment catalogue in Go. Separate request and claim recipes read their own
 current pending/eligible state; a successful request transaction does not establish
 later settlement.
 
+The Aave V3 capacity provider supplies Input 0 only to the recognized borrow
+`Min` chain. Its bounded native calculation replays the authenticated supply prefix
+at the original executor before reading capacity. Persisted numerical witnesses
+must match full original execution. Multiple capacity groups, interleaved effects
+and unresolved prior provider data fail closed. The helper exists only as RPC
+code-override runtime. See [Aave capacity](../internal/providers/aave/README.md).
+
 Inputs must resolve through exact generic recipe constraints or an authenticated
 off-chain provider. A native request ID can be committed directly or derived by
-recipe reads/results. Provider-created native Inputs must be replaced with such a
+recipe reads/results. Other provider-created native Inputs require such a
 constraint or a Result binding. Unknown and unresolved dependencies fail closed;
 the keeper never adds a protocol-specific discovery fallback.
 

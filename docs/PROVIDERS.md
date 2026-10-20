@@ -5,8 +5,9 @@ used as lowercase state, log and metric identifiers. Duplicate normalized addres
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
 The recovery fingerprint includes runtime policy version `1`, executor, account,
-caller, chain ID, curator configuration and transaction-manager fee policy. The daemon installs automatic CoW, Merkl and Liquid Lane RFQ providers plus
-`keeper.NewRecipeInputs()` in a fixed order. Typed provider settings are internal
+caller, chain ID, curator configuration and transaction-manager fee policy. The
+daemon installs automatic CoW, Merkl, Liquid Lane RFQ and Aave V3 capacity providers,
+then `keeper.NewRecipeInputs()`, in a fixed order. Typed provider settings are internal
 recipe and recovery data.
 Token pairs, amounts, minimum proceeds, action/input mappings, deployment targets
 and authorization shapes come from the
@@ -60,10 +61,19 @@ These numerical anchoring rules apply to the native input resolver and
 read-budgeted order providers. Merkl proof witnesses follow their owning provider
 policy below, with the original contract checks preserved.
 
+## Aave V3 capacity
+
+The default [Aave provider](../internal/providers/aave/README.md) owns Input 0 for
+one authenticated guarded borrow. It computes capacity after replaying the supply
+prefix at the pinned block using eth_call-only code. The committed recipe still
+chooses the borrow amount, caps total debt and verifies health. No manual amount
+configuration, deployment catalogue or signing credential is required. Other
+native Inputs retain the exact-source rules below.
+
 ## Native on-chain recipes
 
-Native protocol execution has no Go provider, selector catalogue or deployment
-admission list. The committed recipe owns protocol calls and reads, eligibility
+Other native protocol execution has no Go provider, selector catalogue or
+deployment admission list. The committed recipe owns protocol calls and reads, eligibility
 and pause checks, account/recipient identity, approvals, amount selection, request
 IDs, claims and proceeds guards. The permission tree authorizes each managed call;
 the generic planner preserves its targets, masks, proofs and bindings. The shared

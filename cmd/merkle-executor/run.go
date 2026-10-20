@@ -16,6 +16,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/curator"
 	"github.com/symbioticfi/merkle-executor/internal/observability"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/internal/providers/aave"
 	"github.com/symbioticfi/merkle-executor/internal/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/internal/providers/liquidlanerfq"
 	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
@@ -90,7 +91,7 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 		for _, registration := range []struct {
 			name string
 			new  func(providerRegistry.Deps) (provider.Provider, error)
-		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}} {
+		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}, {"aave", aave.NewAutomatic}} {
 			p, err := registration.new(providerRegistry.Deps{Chain: client, HTTP: httpClient})
 			if err != nil {
 				return errors.Errorf("configure provider %s: %w", registration.name, err)
