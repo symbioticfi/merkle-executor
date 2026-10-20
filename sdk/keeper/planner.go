@@ -200,6 +200,17 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 				}
 			}
 		}
+		if plan.Results == nil {
+			plan.Results = map[uint]string{}
+		}
+		for _, output := range plan.Outputs {
+			for index, value := range output.Results {
+				if old, ok := plan.Results[index]; ok && old != value {
+					return nil, nil, errors.New("provider prefix witness conflicts with recipe result")
+				}
+				plan.Results[index] = value
+			}
+		}
 		plan.Calldata, plan.Leaves, err = recipes.Assemble(recipe, tree, inputs, actions, skips)
 		if err != nil {
 			return nil, nil, errors.Errorf("assemble runtime: %w", err)

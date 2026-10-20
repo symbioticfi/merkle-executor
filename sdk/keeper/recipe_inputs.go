@@ -11,7 +11,7 @@ import (
 )
 
 // NewRecipeInputs enables generic recipe-result input derivation without manual
-// fixed data. Financial inputs must equal a READ-derived recipe expression;
+// fixed data. Unowned financial inputs must equal a READ-derived recipe expression;
 // bounds alone do not determine an amount.
 func NewRecipeInputs() provider.Provider { return recipeInputs{} }
 

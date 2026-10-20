@@ -93,6 +93,8 @@ type Snapshot struct {
 // values replace calldata only, never the target, mask, proof or native value.
 // Inputs are decimal uint256 strings. Duplicate assignments are rejected.
 type Output struct {
+	// Results binds replayed prefix reads to the full original execution.
+	Results   map[uint]string          `json:"results,omitempty"`
 	Inputs    map[uint]string          `json:"inputs,omitempty"`
 	Actions   map[string]hexutil.Bytes `json:"actions,omitempty"`
 	SkipSteps []uint                   `json:"skipSteps,omitempty"`

@@ -16,13 +16,21 @@ standalone daemon and vault-solver consume this same implementation.
 - `bindings`, `abi`: generated core interfaces and vendored provenance.
 
 The SDK creates no signer, nonce manager, fee engine, metrics server or daemon.
-Financial amount derivation requires an exact read-dependent recipe result,
+Generic derivation of inputs without a host provider requires an exact read-dependent recipe result,
 bound directly or through an input equality. For example, `amount = min(balance,
 cap)` selects one amount; `amount <= balance` and `amount <= cap` do not. Bounds
 remain checks, and bounds-only inputs are rejected rather than filled by an
-executor policy. Generic input derivation and host providers share this rule.
+executor policy. A host provider can own an input under its authenticated policy.
 Quote outputs may exceed an authenticated minimum; their external data still
 requires a provider. No on-chain recipe ABI or permission change is required.
+
+`recipes.ProbePrefix` replays an authenticated prefix at the original executor with
+host-owned eth_call-only code, then probes the resulting state. The shared prefix
+interpreter retains original caller/account identities and permission checks.
+Unresolved inputs and unprepared mutable actions fail closed. Its numerical
+witnesses belong in `provider.Output.Results`; the planner merges them after all
+providers prepare and verifies them against full original execution, including on
+recovery. The host owns protocol-specific probe code and admission policy.
 
 Permission sources and protocol I/O wrap a host-supplied HTTP transport; pinned
 read batching wraps a host-supplied RPC transport and generated aggregate codec. A host implements `submission.Transport` over its existing sender.
