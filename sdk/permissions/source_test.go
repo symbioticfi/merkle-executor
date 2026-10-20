@@ -38,7 +38,7 @@ func TestSourceFetchesExactActiveRootWithBoundedFailures(t *testing.T) {
 			defer target.Close()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
-				if r.Method != "GET" || r.URL.Path != "/api/v1/merkle/"+strings.ToLower(adapter.Hex())+"/permission-sets/"+root.Hex() || r.URL.RawQuery != "" {
+				if r.Method != "GET" || r.URL.Path != "/api/v1/merkle/"+strings.ToLower(adapter.Hex())+"/"+root.Hex() || r.URL.RawQuery != "" {
 					t.Error("source requested another root/chain")
 				}
 				switch mode {

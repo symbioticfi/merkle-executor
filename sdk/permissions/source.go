@@ -78,7 +78,7 @@ func (s *Source) PermissionTree(ctx context.Context, chainID *big.Int, snapshot 
 			Metadata json.RawMessage `json:"metadata"`
 		} `json:"bundle"`
 	}
-	_, err = s.client.JSON(ctx, http.MethodGet, "/merkle/"+strings.ToLower(adapter.Hex())+"/permission-sets/"+snapshot.Root.Hex(), nil, &response)
+	_, err = s.client.JSON(ctx, http.MethodGet, "/merkle/"+strings.ToLower(adapter.Hex())+"/"+snapshot.Root.Hex(), nil, &response)
 	if err != nil {
 		return nil, err
 	}

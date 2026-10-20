@@ -131,7 +131,7 @@ are not part of the retained-byte budget.
 
 `permissions.New` requires the host chain reader to resolve the pinned account
 adapter. It fetches the current backend certificate at
-`/merkle/{adapter}/permission-sets/{root}`, verifies bundle/call scope and leaf
+`/merkle/{adapter}/{root}`, verifies bundle/call scope and leaf
 coverage, and returns the unchanged metadata artifact. One pinned EVM read and
 one bounded HTTP request are added to each new preparation; saved recovery does
 not acquire permissions.

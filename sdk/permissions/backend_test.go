@@ -34,7 +34,7 @@ func TestSourceReadsCurrentBackendCertificate(t *testing.T) {
 	}
 	bundle := response.Bundle
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle/"+bundle.Adapter+"/permission-sets/"+bundle.Root || r.URL.RawQuery != "" {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle/"+bundle.Adapter+"/"+bundle.Root || r.URL.RawQuery != "" {
 			t.Errorf("wrong current backend request: %s %s", r.Method, r.URL.RequestURI())
 		}
 		_, _ = w.Write(body)
