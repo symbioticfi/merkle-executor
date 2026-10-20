@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
-	engine "github.com/symbioticfi/merkle-executor/internal/txengine"
+	engine "github.com/symbioticfi/merkle-executor/sdk/txengine"
 )
 
 // TxManager exposes the deployment's absolute transaction spend limit.

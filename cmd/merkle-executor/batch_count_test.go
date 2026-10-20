@@ -16,17 +16,16 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	distributor "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
-	multicall "github.com/symbioticfi/merkle-executor/api/bindings/multicall3"
-	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	"github.com/symbioticfi/merkle-executor/internal/chain"
-	registry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
+	distributor "github.com/symbioticfi/merkle-executor/sdk/bindings/merkldistributor"
 	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	multicall "github.com/symbioticfi/merkle-executor/sdk/bindings/multicall3"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
+	"github.com/symbioticfi/merkle-executor/sdk/chain"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/merkl"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
@@ -204,7 +203,7 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 	}
 	defer backend.Close()
 	cfg := merkl.Config{HTTP: protocolio.HTTPConfig{URL: rewards.URL}, Distributor: dist.Hex(), Multicall3: aggregate.Hex(), Tokens: []string{token.Hex()}, ProofLengths: []int{0}, Action: "0:0", CalldataBytes: len(claim), MinClaimable: "1"}
-	p, err := merkl.New(cfg, registry.Deps{Chain: backend, HTTP: rewards.Client()})
+	p, err := merkl.New(cfg, provider.Deps{Chain: backend, HTTP: rewards.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -72,8 +72,8 @@ RFQ tests preserve the saved Request/quote identity across publication ambiguity
 paginated lookup and restart. They reject API-only filled status, contradictory
 cancellation and incomplete or overly dense event evidence. The local Reactor
 fixture verifies canonical input/output transfers and nonce usage; its protocol
-authentication is simplified. [RFQ fixture limitations](../internal/providers/liquidlanerfq/testdata/README.md)
-and [wire provenance](../api/schemas/LIQUID_LANE_RFQ.md) record that boundary.
+authentication is simplified. [RFQ fixture limitations](../sdk/providers/liquidlanerfq/testdata/README.md)
+and [wire provenance](../sdk/schemas/LIQUID_LANE_RFQ.md) record that boundary.
 
 ## Generated contract sources
 

@@ -152,8 +152,8 @@ use exact recipe-result anchors; bounds alone never select an amount and unknown
 sources are rejected. Recipes that depended on issuer-provider-created Inputs or
 request discovery must express that source as an exact recipe constraint or bind a
 Result directly. [Native recipe requirements](docs/PROVIDERS.md#native-on-chain-recipes).
-SDK hosts implement their own providers through the SDK provider interfaces;
-the daemon does not expose manual provider configuration.
+SDK hosts can reuse these providers or implement the same provider interfaces.
+The daemon selects its automatic providers at startup.
 
 ## Lifecycle and recovery
 
@@ -257,6 +257,6 @@ identities, permitted layouts and economic constraints; protocol endpoints, expi
 bounds use fixed policies. CoW uses its own automatic slippage calculation.
 
 The curator route is verified against source and local fixtures; its availability
-on a particular deployment must be checked before rollout. [Wire contract](api/schemas/CURATOR_PERMISSIONS.md).
+on a particular deployment must be checked before rollout. [Wire contract](sdk/schemas/CURATOR_PERMISSIONS.md).
 
 The shared execution implementation is an independently versioned [Go SDK](sdk/README.md). See [host integration and ownership](docs/MERKLE-SDK.md).

@@ -5,30 +5,21 @@ funding priorities, postconditions and asset limits remain in the on-chain recip
 The service discovers that program, resolves its runtime inputs, verifies the current
 permission package, simulates the exact transaction and manages its lifecycle.
 
-## Repository alignment
-
-Studied `../vault-solver` at `c5cae70`: Cobra entrypoints under `cmd`, generic
-infrastructure under `internal`, isolated protocol packages, strict YAML
-configuration, Go 1.27.1, go-errors, logr/zap, generated abigen v2 bindings, and
-context-aware I/O. The new service is independently buildable. It does not import
-another module's internal packages or change the solver or adapters checkouts.
-
 ## Boundaries
 
-- `recipes`: ABI codec, SetRecipe discovery, tree/role validation and runtime assembly.
+- SDK `recipes`: ABI codec, SetRecipe discovery, tree/role validation and runtime assembly.
 - SDK `provider`: integration-neutral snapshots, runtime outputs and asynchronous progress.
-  The daemon keeps only shared chain/HTTP dependencies in `internal/provider`; startup
-  installs its fixed automatic providers directly. There is no manual YAML factory registry.
-- `providers`: CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs, selected
+  Hosts supply explicit chain/HTTP dependencies and select providers at startup.
+- SDK `providers`: CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs, selected
   from authenticated recipes. Generic `keeper.NewRecipeInputs()` resolves exact
   recipe constraints. The isolated Aave V3 provider supplies one authenticated
   borrow-capacity Input through an eth_call-only post-supply prefix probe;
   actual amount selection and health guards remain in recipe bytes.
-- `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
-- `curator`: bounded HTTP acquisition of the exact active permission root; the SDK
+- SDK `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
+- SDK `permissions`: bounded HTTP acquisition of the exact active permission root; the SDK
   validates the returned bytes independently.
-- `txengine`: local nonce admission, adaptive fees, gas estimation, replacements, canonical receipts and graceful drain.
-- `state`, `signer`, `txmanager`: exclusive process ownership and a durable recipe journal around the engine. See [transaction design](TRANSACTIONS.md).
+- SDK `txengine`: nonce admission, adaptive fees, gas estimation, replacements, canonical receipts and graceful drain.
+- SDK `state`, `signer`, `txmanager`: exclusive process ownership and a durable recipe journal around the engine. See [transaction design](TRANSACTIONS.md).
 - `config`, `observability`, `cmd`: startup wiring, strict configuration and operational controls.
 
 Provider output may fill numerical inputs or masked calldata fields only. It cannot
@@ -36,7 +27,7 @@ replace targets, masks, proofs, recipe instructions or caller identity. External
 does not grant authority. The final full execute simulation validates on-chain bindings
 and postconditions; the keeper does not duplicate the Solidity arithmetic interpreter.
 
-Liquid Lane RFQ consumers use the separate host provider `liquidlane-rfq` to
+Liquid Lane RFQ consumers use the SDK provider `liquidlane-rfq` to
 acquire exact-input quotes, populate an approved account Sign action and reconcile
 canonical Reactor events. It persists the quote, Request digest and fixed `0x00`
 signature before publication, preserving identity through ambiguous HTTP responses.
@@ -133,7 +124,7 @@ the keeper never adds a protocol-specific discovery fallback.
 
 The keeper can plan independent provider reads from a provisional value-only block
 pin and configured identity. This optional SDK contract lives in `protocolio`, keeping
-provider policy in the host and avoiding an import cycle through `provider`. Planning
+policy in isolated providers and avoiding an import cycle through `provider`. Planning
 is pure local encoding. Initial metadata and planned calls share a bounded read group;
 only authenticated discovery plus active permission-tree validation can invoke their resolvers.
 Each resolver sees its own lazy results and must match the exact provisional pin.

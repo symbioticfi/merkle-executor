@@ -1,6 +1,12 @@
 # Transaction processing
 
-The service owns `internal/txengine` for transaction mechanics and `internal/txmanager` for durable recipe ownership. Logs and tracing use the shared `internal/observability` package. Transaction metrics use the service namespace `merkle_executor_txmanager_*` with bounded operation labels. The engine was adapted from [vault-solver transaction processing](https://github.com/symbioticfi/vault-solver/tree/cc75494298aa3c9b4a17021564d569b811a8fd42); it is local code with local regression tests and requires no sibling checkout, module dependency, telemetry bridge or copied-source parity check.
+The SDK exposes `txengine` for transaction mechanics and `txmanager` for durable
+recipe ownership. Hosts explicitly construct and start these components, supplying
+RPC connections, signing credentials and telemetry. Logging/tracing helpers live
+in `sdk/telemetry`; process setup stays in `internal/observability`. Transaction
+metrics retain the namespace `merkle_executor_txmanager_*` with bounded operation
+labels. A host with an existing sender can implement `submission.Transport`
+instead; vault-solver uses its shared sender rather than starting another engine.
 
 The engine owns one signed lifecycle at a time. It reads the write endpoint's mined nonce before preparation, retains that nonce through estimation/signing, and ignores pending counts for selection. It keeps a floor for canonically confirmed owned nonces. Fees use the next base fee, its exact EIP-1559 growth bound and recent block fullness. Gas is estimated against the next block; unsupported block overrides use latest-state estimates with larger headroom. New-block validity, congestion or stall evidence triggers same-nonce replacements; unavailable fee windows use bounded fallback bumps. All variants remain eligible for receipt discovery. Ambiguous sends get an exact-byte rebroadcast, with no new nonce. Pending timeout and shutdown drain are bounded. The engine never sends cancellation self-transfers.
 

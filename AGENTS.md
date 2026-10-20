@@ -16,9 +16,12 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
   are validated by contracts; the daemon does not size connector swaps or verify
   their signatures.
 - Never store secret values in configuration or logs. Use environment variable names.
-- Contract interfaces are vendored under `api/abi` and generated with abigen v2.
+- All reusable execution components live in the independently versioned `sdk/`
+  module. Hosts own configuration, credentials, provider selection, telemetry setup
+  and process lifecycle; SDK components start only through explicit host calls.
+- Contract interfaces are vendored under `sdk/abi` and generated with abigen v2.
   Regenerate artifacts instead of editing generated bindings. Protocol wire schema
-  provenance and deliberate subset limitations belong in `api/schemas`.
+  provenance and deliberate subset limitations belong in `sdk/schemas`.
 - Runtime providers may fill authorized data only. Do not mutate recipe instructions,
   permission masks, targets or proofs to make a transaction succeed.
 - A failed/ambiguous submission retains nonce ownership. Persist before network

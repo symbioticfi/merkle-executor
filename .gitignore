@@ -2,7 +2,7 @@
 /state/
 /coverage.out
 /.cache/
-/.tools/
+.tools/
 .env*
 *.local.*
 *.key

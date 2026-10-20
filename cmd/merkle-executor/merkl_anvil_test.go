@@ -17,12 +17,11 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	binding "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
-	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
+	binding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkldistributor"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/merkl"
 )
 
 type merklAnvilReader func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
@@ -33,7 +32,7 @@ func (f merklAnvilReader) CallContract(ctx context.Context, msg ethereum.CallMsg
 
 func loadMerklArtifact(t *testing.T, name string) serviceArtifact {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "providers", "merkl", "testdata", name+".json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "sdk", "providers", "merkl", "testdata", name+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +99,7 @@ func TestAnvilMerklMulticallUsesPinnedDistributorState(t *testing.T) {
 		return client.CallContract(received, msg, block)
 	})
 	cfg := merkl.Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: distributor.Hex(), Multicall3: aggregate.Hex(), Tokens: []string{token.Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: 452, MinClaimable: "10", AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: true, DedicatedClaimGroup: true}
-	p, err := merkl.New(cfg, providerRegistry.Deps{Chain: reader, HTTP: srv.Client()})
+	p, err := merkl.New(cfg, provider.Deps{Chain: reader, HTTP: srv.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}

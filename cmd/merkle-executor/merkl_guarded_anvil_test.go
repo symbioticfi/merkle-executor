@@ -21,11 +21,11 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
-	distributor "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
-	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	distributor "github.com/symbioticfi/merkle-executor/sdk/bindings/merkldistributor"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
@@ -63,7 +63,7 @@ func runFrontendGuardedMerkl(t *testing.T, native bool) {
 		t.Fatal(err)
 	}
 	owner := owners[0]
-	raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "providers", "merkl", "testdata", "frontend-guarded.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "sdk", "providers", "merkl", "testdata", "frontend-guarded.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

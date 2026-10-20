@@ -31,7 +31,7 @@ SDK validates chain, adapter, account, root, all leaves and proofs before adapte
 preflight. Backend display
 metadata does not authorize a target, token or numerical mapping. Recipes, masks,
 targets, proofs, steps and bindings remain immutable. Providers only fill the
-runtime data those bytes authorize. [Permission schema](../api/schemas/CURATOR_PERMISSIONS.md).
+runtime data those bytes authorize. [Permission schema](../sdk/schemas/CURATOR_PERMISSIONS.md).
 
 Protocol token pairs, recipients, domain/type identifiers and ABI framing must be
 fully pinned. A sign binding must cover an entire supported numeric word. A trade
@@ -139,7 +139,7 @@ Reviewed metadata/role/provider getters share standard Multicall3
 execute inside the lens, preserving the executor context. Unknown getters and full
 simulations remain isolated while independent calls may share an HTTP array.
 Failed/malformed aggregates never fall back to individual calls.
-[Getter provenance and compatibility limits](../api/schemas/READ_BATCHING.md).
+[Getter provenance and compatibility limits](../sdk/schemas/READ_BATCHING.md).
 
 Each Merkl claim action performs one dedicated strict aggregate of effective root, default recipient,
 and claimed/recipient getters for each token: `2 + 2N` inner reads, at most 66 for
@@ -176,7 +176,7 @@ usage evidence. Paginated lookup and bounded event scanning fail closed on missi
 ambiguous or overly dense evidence. Lookup checkpoints after 10 API pages per tick
 and resumes across restarts, preserving duplicate checks and withholding publication
 until the scan completes. No new quote is obtained for an existing job.
-[Consumer wire schema and evidence](../api/schemas/LIQUID_LANE_RFQ.md).
+[Consumer wire schema and evidence](../sdk/schemas/LIQUID_LANE_RFQ.md).
 
 ## Merkl cumulative account rewards
 
@@ -227,7 +227,7 @@ protocol fallback when suggestions are unavailable. There is no operator slippag
 parameter. Deterministic full appData and its signed hash are persisted with the
 selected gross amount, minimum proceeds, quote/order identity and exact sign bytes.
 The recipe's derived minimum remains binding even when AUTO proposes a lower value.
-[CoW AUTO policy and pinned provenance](../api/schemas/COW_AUTO.md).
+[CoW AUTO policy and pinned provenance](../sdk/schemas/COW_AUTO.md).
 
 Advance verifies the exact confirmed account sign call before order POST. Idempotent
 lookup/POST preserves the UID through ambiguity and restart; recovery uses only

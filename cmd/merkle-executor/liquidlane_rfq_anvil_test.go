@@ -23,20 +23,20 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-	reactor "github.com/symbioticfi/merkle-executor/api/bindings/liquidlanereactor"
-	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	reactor "github.com/symbioticfi/merkle-executor/sdk/bindings/liquidlanereactor"
 	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func loadRFQArtifact(t *testing.T, name string) serviceArtifact {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "internal", "providers", "liquidlanerfq", "testdata", name+".json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "sdk", "providers", "liquidlanerfq", "testdata", name+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
