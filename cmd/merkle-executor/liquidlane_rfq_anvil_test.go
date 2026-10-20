@@ -158,7 +158,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	certificate := servicePermissionCertificate(t, rawPermission, account, account)
 	curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		curatorCalls.Add(1)
-		if r.URL.Path != "/api/v1/merkle/"+strings.ToLower(account.Hex())+"/permission-sets/"+root.Hex() || r.URL.RawQuery != "" {
+		if r.URL.Path != "/api/v1/merkle/"+strings.ToLower(account.Hex())+"/"+root.Hex() || r.URL.RawQuery != "" {
 			t.Error("wrong curator identity")
 		}
 		_, _ = w.Write(certificate)

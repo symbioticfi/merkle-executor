@@ -283,7 +283,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	var changeRootDuringHTTP atomic.Bool
 	permissionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		curatorCalls.Add(1)
-		if r.URL.Path != "/api/v1/merkle/"+strings.ToLower(accountAddress.Hex())+"/permission-sets/"+leaf.Hash.Hex() || r.URL.RawQuery != "" {
+		if r.URL.Path != "/api/v1/merkle/"+strings.ToLower(accountAddress.Hex())+"/"+leaf.Hash.Hex() || r.URL.RawQuery != "" {
 			t.Error("wrong active-root request")
 		}
 		if curatorUnavailable.Load() {

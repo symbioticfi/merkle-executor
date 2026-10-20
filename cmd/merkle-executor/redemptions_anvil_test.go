@@ -173,7 +173,7 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	}
 	permission = servicePermissionCertificate(t, permission, account, account)
 	permissionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/merkle/"+strings.ToLower(account.Hex())+"/permission-sets/"+root.Hex() || r.URL.RawQuery != "" {
+		if r.URL.Path != "/api/v1/merkle/"+strings.ToLower(account.Hex())+"/"+root.Hex() || r.URL.RawQuery != "" {
 			t.Error("wrong active-root permission request")
 		}
 		_, _ = w.Write(permission)
