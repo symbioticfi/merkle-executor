@@ -11,8 +11,8 @@ import (
 )
 
 // NewRecipeInputs enables generic recipe-result input derivation without manual
-// fixed data. Exact equalities take precedence; bounded financial inputs select
-// the maximum allowed READ-derived amount in the shared numerical lens call.
+// fixed data. Financial inputs must equal a READ-derived recipe expression;
+// bounds alone do not determine an amount.
 func NewRecipeInputs() provider.Provider { return recipeInputs{} }
 
 type recipeInputs struct{}

@@ -16,6 +16,14 @@ standalone daemon and vault-solver consume this same implementation.
 - `bindings`, `abi`: generated core interfaces and vendored provenance.
 
 The SDK creates no signer, nonce manager, fee engine, metrics server or daemon.
+Financial amount derivation requires an exact read-dependent recipe result,
+bound directly or through an input equality. For example, `amount = min(balance,
+cap)` selects one amount; `amount <= balance` and `amount <= cap` do not. Bounds
+remain checks, and bounds-only inputs are rejected rather than filled by an
+executor policy. Generic input derivation and host providers share this rule.
+Quote outputs may exceed an authenticated minimum; their external data still
+requires a provider. No on-chain recipe ABI or permission change is required.
+
 Permission sources and protocol I/O wrap a host-supplied HTTP transport; pinned
 read batching wraps a host-supplied RPC transport and generated aggregate codec. A host implements `submission.Transport` over its existing sender.
 `Hold` fences every other job using that signer; `SendAsync` calls `Persist` on

@@ -20,7 +20,7 @@ import (
 var lensArtifact []byte
 
 var lensArguments = abi.Arguments{{Type: mustType("address", nil)}, {Type: mustType("bytes[]", nil)}, {Type: mustType("bytes[]", nil)}, {Type: mustType("uint256[]", nil)}, {Type: mustType("bool[]", nil)}, {Type: mustType("bytes[]", nil)}, {Type: mustType("bytes[]", nil)}, {Type: mustType("uint256[]", nil)}}
-var lensAnchorArgs = abi.Arguments{{Type: mustType("bool", nil)}, {Type: mustType("uint256", nil)}, {Type: mustType("uint256[]", nil)}, {Type: mustType("uint256[]", nil)}}
+var lensAnchorArgs = abi.Arguments{{Type: mustType("uint256", nil)}}
 var lensResults = abi.Arguments{{Type: mustType("uint256[]", nil)}}
 
 // ResolveValues resolves a pure numerical prefix. Hosts with authenticated prior
