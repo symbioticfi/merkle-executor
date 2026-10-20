@@ -23,7 +23,8 @@ No schema or endpoint is fetched automatically during a normal build.
   The automatic provider also accepts the frontend's canonical guarded account
   `execute(bytes[],bytes[],uint256[])` claim, including its checked-operation outer
   wrapper. It follows pinned CALL input bindings and fills only cumulative/proof
-  words. Root, recipient, claimed-ledger and exact cash-delta checks remain pinned.
+  words. The live nonzero root must remain unchanged through the claim; that check,
+  recipient guards, claimed-ledger and exact cash-delta checks remain pinned.
   The recipient-override shape requires recipients equal the authenticated account
   and empty callback data.
   `internal/providers/merkl/testdata/generate-frontend.mjs` regenerates the two-token

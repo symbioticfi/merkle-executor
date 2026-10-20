@@ -232,7 +232,7 @@ func TestAutomaticRejectsChangedCanonicalClaimGuard(t *testing.T) {
 	s, r, tree := frontendClaims(t)
 	// Even fully pinned alternative instructions cannot impersonate the supported
 	// root/recipient/ledger/cash guard wire format.
-	raw, _ := pairArguments.Pack(new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(18)), new(big.Int).Lsh(big.NewInt(1), 216))
+	raw, _ := pairArguments.Pack(new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(18)), new(big.Int).Lsh(big.NewInt(2), 216))
 	needle := append([]byte{recipes.Equal}, raw...)
 	actions, err := recipes.ManagedActions(r, tree)
 	if err != nil {

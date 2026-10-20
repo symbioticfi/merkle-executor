@@ -7,10 +7,12 @@ interface FixtureMint { function mint(address,uint256) external; }
 contract FixtureGuardedDistributor {
     struct Claim { uint208 amount; uint48 timestamp; bytes32 merkleRoot; }
     bytes32 public root;
+    bytes32 public rootAfterClaim;
     mapping(address => mapping(address => Claim)) public claimed;
     mapping(address => mapping(address => address)) public claimRecipient;
     uint256 public payoutBps = 10000;
     function setRoot(bytes32 value) external { root = value; }
+    function setRootAfterClaim(bytes32 value) external { rootAfterClaim = value; }
     function setClaimed(address user,address token,uint208 amount) external { claimed[user][token] = Claim(amount,uint48(block.timestamp),root); }
     function setRecipient(address user,address token,address recipient) external { claimRecipient[user][token] = recipient; }
     function setPayoutBps(uint256 value) external { payoutBps = value; }
@@ -34,5 +36,6 @@ contract FixtureGuardedDistributor {
         uint256 delta=amount-claimed[user][token].amount;
         claimed[user][token]=Claim(uint208(amount),uint48(block.timestamp),root);
         FixtureMint(token).mint(recipient,delta*payoutBps/10000);
+        if (rootAfterClaim!=bytes32(0)) root=rootAfterClaim;
     }
 }

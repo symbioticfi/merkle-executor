@@ -217,13 +217,15 @@ func runFrontendGuardedMerkl(t *testing.T, native bool) {
 	curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(permissionRaw) }))
 	defer curator.Close()
 	var fetches atomic.Int32
+	var rewardRows atomic.Value
+	rows := make([]wire.MerklReward, len(fixture.Rewards))
+	for i, reward := range fixture.Rewards {
+		rows[i] = wire.MerklReward{Token: wire.MerklToken{Address: reward.Token.Hex(), Decimals: 18}, Amount: reward.Cumulative, Claimed: "0", Pending: "0", Proofs: reward.Proof}
+	}
+	rewardRows.Store(rows)
 	rewardServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fetches.Add(1)
-		rows := make([]wire.MerklReward, len(fixture.Rewards))
-		for i, reward := range fixture.Rewards {
-			rows[i] = wire.MerklReward{Token: wire.MerklToken{Address: reward.Token.Hex(), Decimals: 18}, Amount: reward.Cumulative, Claimed: "0", Pending: "0", Proofs: reward.Proof}
-		}
-		_ = json.NewEncoder(w).Encode([]wire.MerklEntry{{Chain: wire.MerklChain{ID: 31337}, Rewards: rows}})
+		_ = json.NewEncoder(w).Encode([]wire.MerklEntry{{Chain: wire.MerklChain{ID: 31337}, Rewards: rewardRows.Load().([]wire.MerklReward)}})
 	}))
 	defer rewardServer.Close()
 	rewrite, _ := url.Parse(rewardServer.URL)
@@ -289,6 +291,68 @@ func runFrontendGuardedMerkl(t *testing.T, native bool) {
 		claimed, err := dist.UnpackClaimed(raw)
 		if err != nil || claimed.Amount.String() != reward.Cumulative {
 			t.Fatalf("ledger differs from cumulative: %+v %v", claimed, err)
+		}
+	}
+	if native {
+		return
+	}
+	// A later valid distributor root must work with the identical scheduled
+	// recipe/permission artifact when its token and proof layout still fit.
+	amounts := []*big.Int{big.NewInt(150), big.NewInt(300)}
+	leaves := make([]common.Hash, len(fixture.Rewards))
+	for i, reward := range fixture.Rewards {
+		leaves[i] = crypto.Keccak256Hash(common.LeftPadBytes(fixture.Account.Bytes(), 32), common.LeftPadBytes(reward.Token.Bytes(), 32), common.LeftPadBytes(amounts[i].Bytes(), 32))
+	}
+	a, b := leaves[0], leaves[1]
+	if a.Cmp(b) > 0 {
+		a, b = b, a
+	}
+	newRoot := crypto.Keccak256Hash(a[:], b[:])
+	call(fixture.Distributor, da, "setRoot", newRoot)
+	newRows := make([]wire.MerklReward, len(rows))
+	for i, reward := range rows {
+		newRows[i] = reward
+		newRows[i].Amount = amounts[i].String()
+		newRows[i].Proofs = []string{leaves[1-i].Hex()}
+	}
+	badRows := append([]wire.MerklReward(nil), newRows...)
+	badRows[0].Proofs = rows[0].Proofs
+	rewardRows.Store(badRows)
+	if err = runBotWithHTTP(ctx, path, true, true, new(bytes.Buffer), httpClient); err == nil || !strings.Contains(err.Error(), "proof does not match effective on-chain root") {
+		t.Fatal("rollover accepted a proof for another root", err)
+	}
+	rewardRows.Store(newRows)
+	call(fixture.Distributor, da, "setRootAfterClaim", fixture.RewardRoot)
+	if err = runBotWithHTTP(ctx, path, true, true, new(bytes.Buffer), httpClient); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
+		t.Fatal("frontend guard accepted a root change during claim", err)
+	}
+	call(fixture.Distributor, da, "setRootAfterClaim", common.Hash{})
+	output.Reset()
+	if err = runBotWithHTTP(ctx, path, true, true, &output, httpClient); err != nil {
+		t.Fatal("scheduled recipe rejected a valid later root", err)
+	}
+	if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
+		t.Fatal(err)
+	}
+	plan = plans[cfg.Strategies[0]]
+	for i, want := range []string{"150", "50", "300", "100"} {
+		if plan.Outputs[1].Inputs[uint(i)] != want {
+			t.Fatalf("later-root cumulative/delta differs: %v", plan.Outputs[1].Inputs)
+		}
+	}
+	serviceSeedTransaction(t, ctx, client, owner, &target, plan.Calldata)
+	for i, reward := range fixture.Rewards {
+		balance, err := client.CallContract(ctx, ethereum.CallMsg{To: &reward.Token, Data: tokens.PackBalanceOf(fixture.Account)}, nil)
+		if err != nil || new(big.Int).SetBytes(balance).Cmp([]*big.Int{big.NewInt(50), big.NewInt(300)}[i]) != 0 {
+			t.Fatalf("later-root token balance differs: %x %v", balance, err)
+		}
+		raw, err := client.CallContract(ctx, ethereum.CallMsg{To: &fixture.Distributor, Data: dist.PackClaimed(fixture.Account, reward.Token)}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimed, err := dist.UnpackClaimed(raw)
+		if err != nil || claimed.Amount.Cmp(amounts[i]) != 0 {
+			t.Fatalf("later-root ledger differs: %+v %v", claimed, err)
 		}
 	}
 }

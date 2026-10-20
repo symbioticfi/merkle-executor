@@ -21,7 +21,7 @@ const tokens = [address(0x201), address(0x202)], amounts = [100n, 200n];
 const leaves = tokens.map((token, index) => keccak256(encodeAbiParameters(parseAbiParameters('address,address,uint256'), [account, token, amounts[index]])));
 const rewardRoot = keccak256(concatHex(BigInt(leaves[0]) < BigInt(leaves[1]) ? leaves : [...leaves].reverse()));
 const zeroAddress = address(0), zeroHash = '0x' + '00'.repeat(32);
-const compiled = await compilePermissions(tokens.map(token => ({ type: 'merkl_rewards', params: { token, root: rewardRoot, proofDepth: '1' } })), {
+const compiled = await compilePermissions(tokens.map(token => ({ type: 'merkl_rewards', params: { token, proofDepth: '1' } })), {
   chainId: 1, account, adapter, vaultAsset: tokens[0], deployments: { ...deploymentFor(1), recipeCapability: capability },
   facts: {
     read: async (_target, signature, args) => signature.startsWith('getMerkleRoot') ? rewardRoot : signature.startsWith('claimed') ? [0n, 0n, zeroHash] : args[1] === zeroAddress ? zeroAddress : account,

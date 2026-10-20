@@ -107,7 +107,7 @@ while sharing JSON arrays with getters.
 Dependent reads and the later closing canonical checks remain ordered.
 Automatic Merkl learns its distributors after recipe authentication, fetches all
 committed reward witnesses once and uses a later strict aggregate per claim action.
-It supports the frontend guarded execute calls while preserving their root,
+It supports the frontend guarded execute calls while preserving their live-root stability,
 recipient and exact-delta checks. Numeric values for all adapters share one prefix lens call. Verified recipe-event bodies can
 be reused after fresh metadata and canonical event-header checks; account state,
 permissions and simulation remain fresh. The retained recipe cache has a fixed

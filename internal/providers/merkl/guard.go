@@ -27,20 +27,20 @@ func validateClaimGuard(action recipes.ManagedAction, frame *capabilityFrame, la
 	if frame == nil {
 		return nil
 	}
-	if len(layout.tokens) != 1 || len(frame.inputs) != 4 || len(frame.queries) != 5 || len(frame.steps) != 20 || frame.callIndex != 11 {
+	if len(layout.tokens) != 1 || len(frame.inputs) != 3 || len(frame.queries) != 5 || len(frame.steps) != 20 || frame.callIndex != 11 {
 		return errors.New("unsupported Merkl claim guard layout")
 	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 2; i++ {
 		at, err := resolve(frame.inputBase + 32*i)
 		if err != nil {
 			return err
 		}
 		if err = action.Pinned(at, 32); err != nil {
-			return errors.New("Merkl root and recipient guards must be pinned")
+			return errors.New("Merkl recipient guards must be pinned")
 		}
 	}
-	if frame.inputs[0].Sign() == 0 || frame.inputs[1].BitLen() > 160 || frame.inputs[2].BitLen() > 160 {
-		return errors.New("invalid Merkl root or recipient guard")
+	if frame.inputs[0].BitLen() > 160 || frame.inputs[1].BitLen() > 160 {
+		return errors.New("invalid Merkl recipient guard")
 	}
 	a := binding.NewMerklDistributor()
 	token := layout.tokens[0]
@@ -75,14 +75,14 @@ func validateClaimGuard(action recipes.ManagedAction, frame *capabilityFrame, la
 		return append([]byte{op}, raw...)
 	}
 	amountOffset := 4 + int(new(big.Int).SetBytes(layout.data[68:100]).Uint64()) + 32
-	bindingWord := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(int64(amountOffset)), 224), input(3))
+	bindingWord := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(int64(amountOffset)), 224), input(2))
 	call, _ := nestedCallArgs.Pack(layout.distributor, layout.data, []*big.Int{bindingWord})
 	maximum := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 208), big.NewInt(1))
 	steps := [][]byte{
-		read(0), binary(recipes.Equal, result(0), input(0)), read(1), binary(recipes.Equal, result(2), input(1)), read(2), binary(recipes.Equal, result(4), input(2)),
-		read(3), binary(recipes.Add, result(6), big.NewInt(1)), binary(recipes.LessOrEqual, result(7), input(3)), binary(recipes.LessOrEqual, input(3), maximum),
-		read(4), append([]byte{recipes.Call}, call...), read(3), binary(recipes.Equal, result(12), input(3)), read(4), binary(recipes.Sub, result(14), result(10)),
-		binary(recipes.Sub, input(3), result(6)), binary(recipes.Equal, result(15), result(16)), read(0), binary(recipes.Equal, result(18), input(0)),
+		read(0), binary(recipes.LessOrEqual, big.NewInt(1), result(0)), read(1), binary(recipes.Equal, result(2), input(0)), read(2), binary(recipes.Equal, result(4), input(1)),
+		read(3), binary(recipes.Add, result(6), big.NewInt(1)), binary(recipes.LessOrEqual, result(7), input(2)), binary(recipes.LessOrEqual, input(2), maximum),
+		read(4), append([]byte{recipes.Call}, call...), read(3), binary(recipes.Equal, result(12), input(2)), read(4), binary(recipes.Sub, result(14), result(10)),
+		binary(recipes.Sub, input(2), result(6)), binary(recipes.Equal, result(15), result(16)), read(0), binary(recipes.Equal, result(18), result(0)),
 	}
 	for i, expected := range steps {
 		if !bytes.Equal(expected, frame.steps[i]) {

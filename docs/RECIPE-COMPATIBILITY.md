@@ -39,12 +39,14 @@ or failed required getters revert instead of silently truncating. Native 3F
 selection similarly requires an explicit complete inventory baseline and bounded
 factory scope. See the adapters repository's `docs/RECIPE-CLAIM-SELECTION.md`.
 
-Merkl uses off-chain allocation/proof witnesses plus pinned distributor roots and
+Merkl uses off-chain allocation/proof witnesses plus pinned-block distributor roots and
 claimed ledgers. It supports multiple configured guarded claims and independent
 zero gates, so idle rewards do not prevent a ready native claim. Tokens, array
-shape, proof depths and pinned root/recipient guards remain committed. New tokens,
-changed proof depths or changed pinned guards require a refreshed permission
-artifact; the keeper cannot expand the tree from unused permissions.
+shape, proof depths, recipient guards and root-stability checks remain committed.
+The guarded claim captures its live nonzero root and verifies that it stays unchanged
+through the claim; later valid roots do not require permission refresh when their
+proof layout still fits. New tokens, changed proof depths or changed recipient guards
+require a refreshed permission artifact; the keeper cannot expand the tree from unused permissions.
 
 ## Signed LL service prerequisite
 

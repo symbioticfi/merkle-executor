@@ -39,7 +39,7 @@ type wordReference struct {
 
 // claimLayoutOf follows the capability's committed CALL bindings through nested
 // execute inputs. Only cumulative/proof words may be exposed; every instruction,
-// query, recipient, root and ABI framing byte remains pinned by derive.
+// query, recipient, root-stability check and ABI framing byte remains pinned by derive.
 func claimLayoutOf(action recipes.ManagedAction, account common.Address) (*claimLayout, error) {
 	refs := map[int]wordReference{}
 	resolve := func(at int) (int, error) {

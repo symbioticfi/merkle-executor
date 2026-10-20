@@ -175,7 +175,8 @@ The automatic adapter recognizes canonical committed `claim` and
 `claimWithRecipient` actions and the frontend's guarded account execute wrappers.
 It requires the authenticated account as every user, pinned token addresses, equal
 arrays of 1..32 entries, committed proof depths and a pinned distributor. Wrapped
-claims retain the canonical root, recipient, cumulative-ledger and exact cash-delta
+claims capture a nonzero live distributor root and require it to remain unchanged
+through the claim, alongside recipient, cumulative-ledger and exact cash-delta
 checks. It follows committed CALL input bindings through at most eight account
 capability wrappers; all instructions, queries and framing stay pinned. Explicit
 recipient overrides must pin this account with empty callback data.
@@ -184,8 +185,9 @@ One rewards HTTP request supplies witnesses for every claim action in the recipe
 Every configured token must have a unique API row with an exact approved proof
 shape, a proof matching the pinned-block effective root, and a cumulative amount
 at least the pinned-block claimed ledger. Each action uses one strict distributor
-aggregate. Proof length growth and root/recipient guard changes require refreshed
-permissions; the provider never expands arrays, edits instructions or adds claims
+aggregate. A later valid effective root can use the same permissions while its
+tokens and proof layout still fit. Proof length growth and recipient guard changes
+require refreshed permissions; the provider never expands arrays, edits instructions or adds claims
 from unused permission leaves.
 
 All claim actions are prepared together. A raw multi-token claim can contain idle
@@ -198,8 +200,9 @@ replace gates or skip steps. When all these optional claims are idle, their zero
 other ready actions; the engine classifies idle work across the whole recipe.
 All-idle Merkl claims without dedicated optional gates remain not ready. The normal daemon
 Anvil fixture `TestAnvilFrontendGuardedMerklMixedRewards` executes two freshly
-frontend-generated guarded claims, checks the idle/positive combination and rejects
-underpayment through the unchanged exact-cash-delta guard.
+frontend-generated guarded claims, checks the idle/positive combination, executes
+a later valid root without permission changes, and rejects wrong proofs, root
+changes during the claim and underpayment through the original guards.
 
 ## CoW asynchronous ERC-1271 sell order
 
