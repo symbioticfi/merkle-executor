@@ -171,8 +171,9 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	permission = servicePermissionCertificate(t, permission, account, account)
 	permissionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/merkle-trees/"+root.Hex() || r.URL.Query().Get("chainId") != "31337" {
+		if r.URL.Path != "/api/v1/merkle/"+strings.ToLower(account.Hex())+"/permission-sets/"+root.Hex() || r.URL.RawQuery != "" {
 			t.Error("wrong active-root permission request")
 		}
 		_, _ = w.Write(permission)
@@ -257,7 +258,7 @@ func runIssuerFixture(ctx context.Context, path string, policies []redemptions.C
 		return err
 	}
 	defer client.Close()
-	source, err := curator.New(cfg.Curator.HTTPConfig(), &http.Client{Timeout: config.DefaultHTTPTimeout})
+	source, err := curator.New(cfg.Curator.HTTPConfig(), &http.Client{Timeout: config.DefaultHTTPTimeout}, client)
 	if err != nil {
 		return err
 	}

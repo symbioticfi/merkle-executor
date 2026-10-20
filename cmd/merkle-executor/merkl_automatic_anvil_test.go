@@ -112,6 +112,7 @@ func TestAnvilAutomaticMerklClaimFeedsRecipeBalance(t *testing.T) {
 		entries[i] = map[string]any{"hash": l.Hash.Hex(), "target": l.Target.Hex(), "value": "zero", "data": hexutil.Encode(l.Data), "dataMask": hexutil.Encode(l.DataMask), "proof": []string{leaves[1-i].Hash.Hex()}}
 	}
 	permission, _ := json.Marshal(map[string]any{"root": root.Hex(), "chainId": 31337, "account": account.Hex(), "leaves": entries})
+	permission = servicePermissionCertificate(t, permission, account, account)
 	curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(permission) }))
 	defer curator.Close()
 	var rewardsHTTP atomic.Int32

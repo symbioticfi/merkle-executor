@@ -59,7 +59,7 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: config.DefaultHTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
-	source, err := curator.New(cfg.Curator.HTTPConfig(), httpClient)
+	source, err := curator.New(cfg.Curator.HTTPConfig(), httpClient, client)
 	if err != nil {
 		return err
 	}
