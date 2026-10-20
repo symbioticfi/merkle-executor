@@ -23,6 +23,7 @@ const ConsumerAPI = "https://swap.symbiotic.fi/api/v1"
 const automaticPolicy = "liquid-lane-consumer/recipe-v1"
 const minValidity = uint64(60)
 const maxValidity = uint64(1800)
+const maxRecipeRequests = 64
 
 type Automatic struct{ deps provider.Deps }
 type recipeRequest struct {
@@ -47,7 +48,7 @@ func consumerHTTP() protocolio.HTTPConfig {
 	return protocolio.HTTPConfig{URL: ConsumerAPI, MaxResponseBytes: 4 << 20}
 }
 
-func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (*recipeRequest, error) {
+func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) ([]*recipeRequest, error) {
 	actions, err := recipes.ManagedActions(r, t)
 	if err != nil {
 		return nil, err
@@ -56,7 +57,7 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 	if err != nil {
 		return nil, err
 	}
-	var result *recipeRequest
+	var requests []*recipeRequest
 	for _, action := range actions {
 		sign, matched, err := derived.Sign(action, s.Account)
 		if err != nil {
@@ -80,8 +81,8 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 		if !looksLikeRequest && len(candidates) == 0 {
 			continue
 		}
-		if result != nil {
-			return nil, errors.New("multiple RFQ authorizations require separate executors")
+		if len(requests) == maxRecipeRequests {
+			return nil, errors.New("RFQ recipe exceeds 64 authorizations")
 		}
 		if len(candidates) != 1 {
 			return nil, errors.New("RFQ recipe must commit one unambiguous Reactor approval or invalidation target")
@@ -148,7 +149,7 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 		if err != nil {
 			return nil, err
 		}
-		result = &recipeRequest{template: sign, budget: budget, floors: floors, requirements: requirements, cfg: Config{HTTP: consumerHTTP(), Reactor: address.Hex(), Protocol: protocol.Hex(), TokenIn: input.Hex(), TokenOut: output.Hex(), Action: action.Key, MinValiditySeconds: minValidity, MaxValiditySeconds: maxValidity, MaxLookupPages: 10, EventRangeBlocks: 2000, AmountInInput: budget.Input}}
+		result := &recipeRequest{template: sign, budget: budget, floors: floors, requirements: requirements, cfg: Config{HTTP: consumerHTTP(), Reactor: address.Hex(), Protocol: protocol.Hex(), TokenIn: input.Hex(), TokenOut: output.Hex(), Action: action.Key, MinValiditySeconds: minValidity, MaxValiditySeconds: maxValidity, MaxLookupPages: 10, EventRangeBlocks: 2000, AmountInInput: budget.Input}}
 		if minimum.Source == recipes.Input {
 			index := uint(minimum.Value.Uint64())
 			result.cfg.AmountOutInput = &index
@@ -165,8 +166,18 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 				result.cfg.NonceInput = &index
 			}
 		}
+		requests = append(requests, result)
 	}
-	return result, nil
+	if len(requests) > 1 {
+		for _, request := range requests {
+			gate := request.template.Action.Slot.Gate
+			amount, err := request.template.Field(2)
+			if err != nil || gate.Source != amount.Source || gate.Value.Cmp(amount.Value) != 0 {
+				return nil, errors.New("grouped RFQ authorization gate must equal its signed amount")
+			}
+		}
+	}
+	return requests, nil
 }
 
 func sameHashPlan(actual []account.IMerkleAccountHash) bool {
@@ -182,37 +193,75 @@ func sameHashPlan(actual []account.IMerkleAccountHash) bool {
 	return true
 }
 func (p *Automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (keeper.RecipeRequirements, error) {
-	request, err := p.derive(s, r, t)
-	if err != nil || request == nil {
+	requests, err := p.derive(s, r, t)
+	if err != nil {
 		return keeper.RecipeRequirements{}, err
 	}
-	return request.requirements, nil
+	var requirements keeper.RecipeRequirements
+	seen := map[uint]bool{}
+	for _, request := range requests {
+		requirements.Values = append(requirements.Values, request.requirements.Values...)
+		requirements.Actions = append(requirements.Actions, request.requirements.Actions...)
+		for _, index := range request.requirements.Inputs {
+			if !seen[index] {
+				requirements.Inputs = append(requirements.Inputs, index)
+				seen[index] = true
+			}
+		}
+	}
+	return requirements, nil
 }
+
+// The committed recipe chooses a single route. The provider never ranks assets
+// or divides a budget between quotes.
+func selectRequest(requests []*recipeRequest, results map[uint]*big.Int) (*recipeRequest, *big.Int, *big.Int, error) {
+	var selected *recipeRequest
+	var selectedAmount, selectedMinimum *big.Int
+	for _, request := range requests {
+		amount, err := recipes.EconomicResult(request.budget, results)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		minimum := new(big.Int)
+		for _, floor := range request.floors {
+			value, err := recipes.EconomicResult(floor, results)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if value.Cmp(minimum) > 0 {
+				minimum = value
+			}
+		}
+		if amount.Sign() == 0 {
+			continue
+		}
+		if minimum.Sign() == 0 {
+			return nil, nil, nil, errors.New("active RFQ authorization has zero output floor")
+		}
+		if selected != nil {
+			return nil, nil, nil, errors.New("RFQ recipe activates multiple authorizations")
+		}
+		selected, selectedAmount, selectedMinimum = request, amount, minimum
+	}
+	if selected == nil {
+		return nil, nil, nil, provider.ErrNotReady
+	}
+	return selected, selectedAmount, selectedMinimum, nil
+}
+
 func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
-	request, err := p.derive(s, r, t)
+	requests, err := p.derive(s, r, t)
 	if err != nil {
 		return provider.Output{}, err
 	}
-	if request == nil {
+	if len(requests) == 0 {
 		return derived.Empty(automaticPolicy)
 	}
-	amount, err := recipes.EconomicResult(request.budget, results)
+	request, amount, minimum, err := selectRequest(requests, results)
 	if err != nil {
 		return provider.Output{}, err
 	}
-	minimum := new(big.Int)
-	for _, floor := range request.floors {
-		value, err := recipes.EconomicResult(floor, results)
-		if err != nil {
-			return provider.Output{}, err
-		}
-		if value.Cmp(minimum) > 0 {
-			minimum = value
-		}
-	}
-	if amount.Sign() == 0 || minimum.Sign() == 0 {
-		return provider.Output{}, provider.ErrNotReady
-	}
+
 	request.cfg.AmountIn = amount.String()
 	request.cfg.MinAmountOut = minimum.String()
 	runtime, err := New(request.cfg, p.deps)
