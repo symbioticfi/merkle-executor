@@ -19,8 +19,7 @@ another module's internal packages or change the solver or adapters checkouts.
 - SDK `provider`: integration-neutral snapshots, runtime outputs and asynchronous progress.
   The daemon keeps only shared chain/HTTP dependencies in `internal/provider`; startup
   installs its fixed automatic providers directly. There is no manual YAML factory registry.
-- `providers`: CoW orders, Liquid Lane HTTP RFQ, connector signed-discount witnesses
-  and Merkl HTTP proofs, selected
+- `providers`: CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs, selected
   from authenticated recipes. Generic `keeper.NewRecipeInputs()` resolves exact
   recipe constraints. Native protocol semantics belong entirely in recipe bytes.
 - `keeper`: prepare, simulate, persist, send, reconcile external settlement and repeat.
@@ -42,12 +41,13 @@ signature before publication, preserving identity through ambiguous HTTP respons
 Only complete all-status lookup permits an idempotent retry. Bounded canonical event
 scan cursors survive restart; API statuses and used nonce bits are not settlement.
 
-Signed connector discounts use the `liquidlane-discount` provider. It verifies the
-connector-domain witness, pinned identities and canonical outer cash/RWA guards,
-then selects a purchase within pinned inventory, quote, funding and connector budget.
-The current backend adapter-domain service is incompatible and fails closed;
-[discount provenance](../api/schemas/LIQUID_LANE_DISCOUNT.md) records the exact wire,
-source pins, read bounds and hosted prerequisite. CoW authorization and settlement
+Liquid Lane connector acquisition and calldata construction belong to vault-solver's
+Merkle extension. External signed terms come from RFQ/backend integrations and
+are validated by contracts. The daemon does not size connector swaps or verify
+their signatures. SDK hosts retain generic permission/runtime
+validation, full execution simulation and canonical receipt checks.
+
+CoW authorization and settlement
 are separate phases: submit the ERC-1271 order only after its authorization transaction
 confirms, persist its deterministic UID and reconcile it before retrying submission.
 Merkl reward proofs are protocol data, separate from account permission proofs. Claims

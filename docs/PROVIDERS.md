@@ -5,7 +5,7 @@ used as lowercase state, log and metric identifiers. Duplicate normalized addres
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
 The recovery fingerprint includes runtime policy version `1`, executor, account,
-caller, chain ID, curator configuration and transaction-manager fee policy. The daemon installs automatic CoW, Merkl, Liquid Lane RFQ and connector discount providers plus
+caller, chain ID, curator configuration and transaction-manager fee policy. The daemon installs automatic CoW, Merkl and Liquid Lane RFQ providers plus
 `keeper.NewRecipeInputs()` in a fixed order. Typed provider settings are internal
 recipe and recovery data.
 Token pairs, amounts, minimum proceeds, action/input mappings, deployment targets
@@ -57,9 +57,8 @@ provider. A curator artifact's masked preimage does not select an amount. Fully
 pinned static Manage actions remain usable. Input indexes are bounded to 0..4095.
 
 These numerical anchoring rules apply to the native input resolver and
-read-budgeted order providers. Connector-signed terms and Merkl proof witnesses
-follow their owning provider policies below: their signed or proven economics
-are valid execution-time inputs, with the original contract checks preserved.
+read-budgeted order providers. Merkl proof witnesses follow their owning provider
+policy below, with the original contract checks preserved.
 
 ## Native on-chain recipes
 
@@ -225,19 +224,14 @@ lookup/POST preserves the UID through ambiguity and restart; recovery uses only
 persisted config/order and canonical execution evidence. Partial fills stay owned,
 and terminal completion requires on-chain settlement evidence as well as API state.
 
-## Liquid Lane connector discounts
+## Liquid Lane connector host boundary
 
-`liquidlane-discount` acquires the documented pair-selected signed witness and
-verifies the exact `LiquidLaneConnector` domain at precision 100000000. It supports
-one canonical frontend `ll-executing` signed swap, including native funding and
-its exact cash/recipient/RWA deltas and approval reset. Execution-time amount and
-payment selection is bounded by the pinned connector and unchanged recipe.
-The inspected backend still signs `LiquidLaneAdapter` at precision 1000000, so
-hosted connector acquisition remains blocked and fails closed.
-[Discount source pins and limitations](../api/schemas/LIQUID_LANE_DISCOUNT.md)
-record the precise wire, funding shape, signature framing and read bounds.
-[Recipe compatibility](RECIPE-COMPATIBILITY.md) distinguishes authoring, runtime
-and service prerequisites.
+Connector acquisition and calldata construction belong to vault-solver's Merkle
+extension. External signed terms come from RFQ/backend integrations and are
+validated by contracts. The daemon has no connector provider and does not size
+connector swaps or verify their signatures. SDK hosts retain generic permission and
+runtime validation, complete execution simulation and canonical receipt checks.
+[Recipe compatibility](RECIPE-COMPATIBILITY.md) describes the authoring boundary.
 
 ## Recovery and provider interfaces
 

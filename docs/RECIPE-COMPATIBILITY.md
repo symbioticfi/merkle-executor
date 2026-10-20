@@ -15,7 +15,7 @@ simulation remains mandatory before signing.
 | Claims | Full settled owner entitlement. Complementary live getters bind exact output floors where available. Native numbered selectors bind one identity to both readiness and claim; ID zero is valid. |
 | Health claim | Same full claims, with ID-specific ledger debit checks, then debt repayment and health checks. |
 | Health recovery / health repay | Recipe reads select available liquidity, balances, debt and repayment; exact effect and health checks remain authoritative. |
-| LL executing | Signed connector terms and execution-time sizing are valid. The provider verifies the recognized signed witness and immutable recipe payment, recipient, RWA delta and approval-reset checks. |
+| LL executing | Connector acquisition and calldata construction belong to vault-solver's Merkle extension. The RFQ backend supplies awarded trade amounts through `/orders` and signed terms for contract validation. The committed recipe enforces payment, recipient, RWA delta and approval-reset checks; the SDK validates permissions and simulates the complete execution. |
 | 3F executing | The native selector reads a whole current authorization and checks its funding asset, actual collateral underlying, remaining policy budget and yield. The guarded mint rechecks authorization and policy. The library also supports externally selected terms, but the normal daemon requires an owning witness provider or native reads. |
 | Signing | Existing CoW/RFQ providers acquire external quotes for recognized, pinned authorization shapes. Browser authoring requires verified matching read descriptors. A generic arbitrary signature buffer does not create a provider. |
 | Custom | Every mutable word needs an explicit committed binding or a recognized witness owner. Financial Inputs without exact authorized sources fail. |
@@ -48,19 +48,14 @@ through the claim; later valid roots do not require permission refresh when thei
 proof layout still fits. New tokens, changed proof depths or changed recipient guards
 require a refreshed permission artifact; the keeper cannot expand the tree from unused permissions.
 
-## Signed LL service prerequisite
+## Liquid Lane connector host boundary
 
-The connector signs in the `LiquidLaneConnector`, version `1` EIP-712 domain and
-uses discount precision `100000000`. The inspected RFQ backend signs discounts
-for `LiquidLaneAdapter` and advertises precision `1000000`. Those signatures
-cannot execute against this connector. The provider rejects the mismatch; hosted
-connector acquisition requires matching service support. No precision conversion
-or domain substitution can repair an already signed witness.
-
-The LL provider admits one canonical raw `ll-executing` swap. Earlier managed
-funding must use the committed `MIN(shortfall, capacity)` shape, with direct input
-ceilings available before effects. Multiple LL swaps or unrelated earlier managed
-actions require a separately reviewed composition and are rejected.
+Connector acquisition and calldata construction belong to vault-solver's Merkle
+extension. External signed terms come from RFQ/backend integrations and are
+validated by contracts. The daemon has no connector provider, sizing logic or
+connector signature verifier. External swap data remains subject to the committed
+permission layout and contract guards, generic SDK runtime validation, full
+execution simulation and canonical receipt checks.
 
 The generic bounded-signing library does not itself acquire a quote. Its
 range-only financial Inputs cannot execute through the native input resolver.

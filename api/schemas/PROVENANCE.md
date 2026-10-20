@@ -1,19 +1,16 @@
 # Protocol schema and ABI provenance
 
 These are **manually selected consumer subsets**, not complete upstream OpenAPI
-specifications. Unknown response fields are tolerated except for the strict connector
-discount witness subset; providers validate every
+specifications. Unknown response fields are tolerated; providers validate every
 field used for authorization, pricing, identity, proof verification and settlement.
 No schema or endpoint is fetched automatically during a normal build.
 
 - `protocols.json`: JSON Schema wire subsets for Liquid Lane public consumer RFQ,
-  connector discount witnesses,
   Merkl V4 reward responses and CoW quote/order requests and status responses.
   `hack/generate-protocol-types.py` generates `api/protocoltypes/types.gen.go`.
 - Liquid Lane public consumer wire and contract sources are pinned in
-  [LIQUID_LANE_RFQ.md](LIQUID_LANE_RFQ.md). Connector discount subset, ABI, source
-  pins and current hosted backend incompatibility are recorded in
-  [LIQUID_LANE_DISCOUNT.md](LIQUID_LANE_DISCOUNT.md).
+  [LIQUID_LANE_RFQ.md](LIQUID_LANE_RFQ.md). Liquid Lane connector acquisition belongs
+  to vault-solver's Merkle extension and has no daemon wire subset or provider.
 - Merkl response subset: sibling `curator-frontend` Merkl V4 parser and
   <https://api.merkl.xyz/docs>, inspected 2026-09-27. Distributor ABI subset was
   transcribed from <https://github.com/AngleProtocol/merkl-contracts/blob/main/contracts/Distributor.sol>:

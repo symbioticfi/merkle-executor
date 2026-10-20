@@ -1,9 +1,8 @@
 # Liquid Lane RFQ consumer subset
 
 The `liquidlane-rfq` daemon provider creates consumer requests. It does not acquire
-or produce signed connector discounts; the separate strict `liquidlane-discount`
-provider acquires those witnesses, as described in
-[connector discount provenance](LIQUID_LANE_DISCOUNT.md). Builds
+or produce signed connector discounts; connector acquisition belongs to
+vault-solver's Merkle extension. Builds
 use the checked-in ABI and wire schema, never a downloaded current schema.
 
 ## Sources
