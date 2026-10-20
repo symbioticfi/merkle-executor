@@ -113,11 +113,14 @@ the number of configured strategies and are cleared on restart.
 
 ## Permissions and runtime inputs
 
-For every new preparation, the daemon fetches `/merkle-trees/{acceptedRoot}?chainId=...`
-from the configured curator backend. The root comes from the authenticated on-chain
-snapshot. The response must identify the configured chain and exact active root;
-every leaf hash and sorted-pair proof is verified, including unused leaves. Backend
-`adapter`, actions and display metadata do not authorize execution. Strategies contain only executor addresses. The SDK retains its optional local
+For every new preparation, the daemon reads `account.adapter()` at the authenticated
+snapshot block and fetches `/merkle/{adapter}/{acceptedRoot}` from the configured
+curator backend. The bundle and call metadata must match that chain, adapter,
+account and root. The complete sorted bundle leaves must reproduce the root;
+every call hash and proof is checked, including unused calls. Extra API policy
+leaves may belong to the bundle. The certificate and display metadata do not
+authorize execution. Acquisition costs one pinned EVM read and one HTTP request;
+durable recovery does not fetch a tree. Strategies contain only executor addresses. The SDK retains its optional local
 permission-file interface for other hosts.
 
 Derived accounts and callers, chain identity, curator settings, the runtime policy

@@ -53,8 +53,12 @@ Amounts must bind directly to a read-dependent recipe Result, or use an Input wi
 an exact preceding equality to a read-dependent result. Use explicit arithmetic
 such as `min(balance, cap)` to select a capped amount. Upper/lower bounds validate
 the selected value; bounds alone cannot determine it.
-Centrifuge claims keep that exact share budget and wait if the available allowance
-is smaller. Pareto and Noon complete-request claims have no amount field. Their
+Centrifuge request/claim and Midas request calls bound directly to a read-dependent Result use native
+recipe execution. They can follow mint or claim effects and use fresh in-transaction
+reads, make no issuer preparation reads, and acquire no receipt-provider ownership.
+Zero amounts follow the recipe's manage gate and full execution simulation. An
+Input-backed Centrifuge or Midas route keeps its exact budget, readiness checks and
+exclusive receipt ownership. Pareto and Noon complete-request claims have no amount field. Their
 epoch or request ID must be a committed literal or exact deterministic Result.
 An Input needs a preceding exact equality; a range-bound arbitrary index is invalid.
 

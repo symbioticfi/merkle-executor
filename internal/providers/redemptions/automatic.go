@@ -298,6 +298,13 @@ func (p *automatic) selectRoutes(s provider.Snapshot, r recipes.Recipe, t *recip
 			continue
 		}
 		route := matches[0]
+		// Direct READ-derived Centrifuge and Midas amounts execute inside the committed
+		// program, including reads after earlier mint/claim effects. They need no
+		// provider data or transaction-wide receipt attribution. Input-backed
+		// routes still require exclusive receipt ownership and reconciliation.
+		if (route.Config.Family == "centrifuge" || route.Config.Family == "midas") && route.AmountField.Source == recipes.Result {
+			continue
+		}
 		for _, owned := range route.Actions {
 			if used[owned.Key] || targets[owned.Leaf.Target] {
 				return nil, errors.New("issuer receipt target or action is repeated")

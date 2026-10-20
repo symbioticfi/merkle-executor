@@ -156,6 +156,9 @@ func TestAutomaticIssuerZeroBudget(t *testing.T) {
 			if cfg.Amount == "" {
 				continue // Request IDs and epochs are identities, not budgets.
 			}
+			if asset.Family == "centrifuge" || asset.Family == "midas" {
+				continue // Direct result amounts are evaluated by native recipe simulation.
+			}
 			for _, fault := range []string{"zero", "missing", "nil", "negative", "overflow", "lower bound", "intermediate zero"} {
 				if fault == "intermediate zero" && cfg.Family != "figure" {
 					continue
@@ -258,7 +261,7 @@ func TestAutomaticIssuerZeroBudget(t *testing.T) {
 }
 
 func TestAutomaticIssuerZeroBudgetDiscardsOtherRouteOutput(t *testing.T) {
-	for _, empty := range []uint{0, 2} {
+	for _, empty := range []uint{0, 3} {
 		t.Run(new(big.Int).SetUint64(uint64(empty)).String(), func(t *testing.T) {
 			initial := &issuerReader{t: t, block: big.NewInt(42), results: map[string][]byte{}}
 			raw, err := NewAutomatic(registry.Deps{Chain: initial})
@@ -274,10 +277,12 @@ func TestAutomaticIssuerZeroBudgetDiscardsOtherRouteOutput(t *testing.T) {
 			other, otherTree := automaticRecipe(t, second, s, reader)
 			r.Queries = append(r.Queries, other.Queries[0])
 			manage := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("bytes32[]")}, {Type: argumentType("uint256[][]")}}
-			r.Steps = append(r.Steps, packedStep(t, recipes.Read, readArguments, big.NewInt(1)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{otherTree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(36, recipes.Result, 2)}}))
+			binary := abi.Arguments{{Type: argumentType("uint256")}, {Type: argumentType("uint256")}}
+			r.Steps = [][]byte{r.Steps[0], packedStep(t, recipes.Equal, binary, packedValue(recipes.Input, 7), packedValue(recipes.Result, 0)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(36, recipes.Input, 7)}})}
+			r.Steps = append(r.Steps, packedStep(t, recipes.Read, readArguments, big.NewInt(1)), packedStep(t, recipes.Equal, binary, packedValue(recipes.Input, 8), packedValue(recipes.Result, 3)), packedStep(t, recipes.Manage, manage, big.NewInt(1), [][32]byte{otherTree.Leaves[0].Hash}, [][]*big.Int{{packedBinding(36, recipes.Input, 8)}}))
 			tree.Leaves = append(tree.Leaves, otherTree.Leaves[0])
 			sealAutomaticTree(t, &r, tree)
-			results := map[uint]*big.Int{0: big.NewInt(100), 2: big.NewInt(100)}
+			results := map[uint]*big.Int{0: big.NewInt(100), 3: big.NewInt(100)}
 			results[empty] = new(big.Int)
 			out, err := p.PrepareRecipe(t.Context(), s, r, tree, results)
 			if !errors.Is(err, provider.ErrNotReady) || len(out.Actions)+len(out.Inputs)+len(out.SkipSteps)+len(out.Data) != 0 {
@@ -351,6 +356,12 @@ func TestAutomaticAllEmbeddedIssuerRoutes(t *testing.T) {
 				if !maps.Equal(req.ExclusiveTargets, claims) {
 					t.Fatalf("pure and durable exclusive targets differ: %+v %+v", req.ExclusiveTargets, claims)
 				}
+				if cfg.Family == "centrifuge" || cfg.Family == "midas" {
+					if len(req.Values)+len(req.Actions)+len(claims) != 0 || reader.reads != 0 {
+						t.Fatal("native issuer result route acquired provider data or ownership")
+					}
+					return
+				}
 				var calls []protocolio.ManagedCall
 				keys := []string{cfg.Action}
 				if cfg.SecondAction != "" {
@@ -408,7 +419,8 @@ func TestAutomaticIssuerRejectsInvalidEconomicsAndIdentityBeforeReads(t *testing
 			case "unknown target":
 				tree.Leaves[0].Target = issuerAddress(987)
 			case "duplicate target":
-				recipe.Steps = append(recipe.Steps, bytes.Clone(recipe.Steps[1]))
+				recipe, tree = inputMidasRecipe(t, cfg, s, reader)
+				recipe.Steps = append(recipe.Steps, bytes.Clone(recipe.Steps[2]))
 			}
 			sealAutomaticTree(t, &recipe, tree)
 			_, err := p.RecipeRequirements(s, recipe, tree)
@@ -426,9 +438,10 @@ func TestAutomaticIssuerRejectsDurablePolicyAndPayloadChanges(t *testing.T) {
 	}
 	p := raw.(*automatic)
 	cfg := automaticConfig(p.assets[0], "request")
+	cfg.Action = "2:0"
 	s, reader := issuerFixture(t, cfg)
 	p.deps.Chain = reader
-	recipe, tree := automaticRecipe(t, cfg, s, reader)
+	recipe, tree := inputMidasRecipe(t, cfg, s, reader)
 	out, err := p.PrepareRecipe(context.Background(), s, recipe, tree, map[uint]*big.Int{0: big.NewInt(100)})
 	if err != nil {
 		t.Fatal(err)
@@ -677,7 +690,7 @@ func TestAutomaticIssuerExclusiveCompositionRejectsBeforeReads(t *testing.T) {
 			p := raw.(*automatic)
 			cfg := automaticConfig(p.assets[0], "request")
 			s, _ := issuerFixture(t, cfg)
-			r, tree := automaticRecipe(t, cfg, s, reader)
+			r, tree := inputMidasRecipe(t, cfg, s, reader)
 			if fault == "unowned manage" {
 				leaf := recipes.Leaf{Target: tree.Leaves[0].Target, Value: new(big.Int), Data: []byte{0xde, 0xad, 0xbe, 0xef}, DataMask: make([]byte, 4)}
 				leaf.Hash, err = recipes.HashLeaf(leaf)
