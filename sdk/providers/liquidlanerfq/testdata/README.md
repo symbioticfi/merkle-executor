@@ -23,8 +23,3 @@ HTTP permissions and RFQ responses, and a randomly generated key funded only on 
 ephemeral Anvil. It proves local authorization, token movement and recovery behavior,
 not production API availability or live protocol acceptance. See
 [wire and contract provenance](../../../schemas/LIQUID_LANE_RFQ.md).
-
-`frontend-grouped.json` is a frozen frontend-compiled, thirteen-asset consumer
-recipe and its permission witnesses. It tests grouped derivation, shared input
-ownership and inactive authorization gates without HTTP or chain mutation. Its
-canonical account and Reactor pins do not establish access to their live signers.

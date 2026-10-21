@@ -169,13 +169,10 @@ ownership or missing candidate information is rejected; no deployment is guessed
 The quote supplies only authorized amount/deadline/nonce/output words. Expiry bounds
 are 60..1800 seconds. Signed discount production remains in vault-solver.
 
-One recipe may contain up to 64 authorizations. Its committed arithmetic must
-activate exactly one input amount, and each authorization's Manage gate must equal
-that amount. The provider combines their authenticated dependencies and ownership,
-then rejects multiple active routes or a missing output floor before HTTP. It does
-not choose an asset or divide an allocation. One strategy serializes outstanding
-RFQs across its assets; an unfilled order must settle or expire before another
-route can publish.
+Each Liquid Lane asset uses its own recipe and executor. The automatic provider
+accepts one RFQ authorization and rejects multiple authorizations before HTTP,
+even when an extra authorization is inactive. Connector acquisition and issuer
+redemption remain in vault-solver, bound to the configured asset recipe.
 
 Confirmed account authorization precedes idempotent consumer submission. Durable
 request/quote identity, signatures, usage/settlement progress and cursors survive
