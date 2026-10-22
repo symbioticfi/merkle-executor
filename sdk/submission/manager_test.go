@@ -229,3 +229,44 @@ func TestAcknowledgementRejectsChangedTerminalStatus(t *testing.T) {
 		t.Fatalf("prior business evidence overwritten: %+v %v", saved, err)
 	}
 }
+
+func TestInvalidReceiptLogsRetainJournal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		log  *types.Log
+	}{
+		{name: "nil"},
+		{name: "missing identity", log: &types.Log{Data: []byte{1}}},
+		{name: "transaction index", log: &types.Log{TxIndex: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport, store := fixture(t)
+			m := manager(t, transport, store)
+			req := Request{ID: "invalid-logs", To: common.HexToAddress("0x1234"), Data: []byte{1}}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Millisecond)
+			pending, _ := m.Send(ctx, req)
+			cancel()
+			if len(pending.Attempts) == 0 {
+				t.Fatal("fixture missing signed attempts")
+			}
+			transport.receipt = &types.Receipt{TxHash: pending.Attempts[0], BlockNumber: big.NewInt(10),
+				BlockHash: transport.header.Hash(), Status: types.ReceiptStatusSuccessful, Logs: []*types.Log{tc.log}}
+			got, err := m.Send(t.Context(), req)
+			if err == nil || !got.Pending || got.Confirmed || transport.owner != req.ID {
+				t.Fatalf("invalid logs released ownership: %+v, %v", got, err)
+			}
+			var saved record
+			found, err := store.Load(journalKey, &saved)
+			if err != nil || !found || saved.Terminal != "" || saved.Execution != nil {
+				t.Fatalf("invalid logs persisted as terminal evidence: %+v, %v", saved, err)
+			}
+			if err := m.Acknowledge(t.Context(), req.ID); err == nil {
+				t.Fatal("invalid logs allowed journal acknowledgement")
+			}
+			transport.receipt.Logs = nil
+			if got, err := m.Send(t.Context(), req); err != nil || !got.Confirmed || transport.sends != 2 {
+				t.Fatalf("corrected evidence did not settle existing attempts: %+v, %v", got, err)
+			}
+		})
+	}
+}

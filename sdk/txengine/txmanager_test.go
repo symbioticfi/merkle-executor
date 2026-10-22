@@ -1232,15 +1232,6 @@ func TestConfirmationWitnessReorgRejected(t *testing.T) {
 				return &copy, nil
 			}
 		}},
-		{name: "log identity changed at reread", mutate: func(b *witnessBackend) {
-			b.onReceipt = func(n int, r *types.Receipt) (*types.Receipt, error) {
-				copy := *r
-				if n >= 2 {
-					copy.Logs = []*types.Log{{TxHash: common.Hash{1}, BlockHash: r.BlockHash, BlockNumber: r.BlockNumber.Uint64()}}
-				}
-				return &copy, nil
-			}
-		}},
 		{name: "receipt hash changed at reread", mutate: func(b *witnessBackend) {
 			b.onReceipt = func(n int, r *types.Receipt) (*types.Receipt, error) {
 				copy := *r

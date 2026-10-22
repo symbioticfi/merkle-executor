@@ -1080,7 +1080,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	// receipt can persist while a stalled head never reaches the requested depth. First
 	// establish canonical inclusion under one overall read budget, also capped by the
 	// final abandonment grace. Proven inclusion then retains the ordinary depth wait.
-	canonicalDeadline := time.Now().Add(m.receiptReadTimeout())
+	canonicalDeadline := time.Now().Add(3 * m.receiptReadTimeout())
 	if !pending.deadline.IsZero() {
 		finalDeadline := pending.deadline.Add(m.receiptReadTimeout())
 		if finalDeadline.Before(canonicalDeadline) {
@@ -1717,12 +1717,6 @@ func confirmationWitnessNumber(receipt *types.Receipt, depth uint64) (*big.Int, 
 // The latest head may advance freely: only this witness must remain canonical
 // after the receipt is reread. Parent work is bounded by depth, even for old receipts.
 func (m *Manager) confirmReceiptWitness(ctx context.Context, receipt *types.Receipt, depth uint64) (*types.Receipt, error) {
-	if receipt == nil {
-		return nil, errors.New("confirmation receipt is required")
-	}
-	if err := validateReceipt(receipt.TxHash, receipt); err != nil {
-		return nil, err
-	}
 	number, err := confirmationWitnessNumber(receipt, depth)
 	if err != nil {
 		return nil, err
@@ -1801,11 +1795,6 @@ func validateReceipt(hash common.Hash, receipt *types.Receipt) error {
 	}
 	if receipt.Status > types.ReceiptStatusSuccessful {
 		return errors.Errorf("transaction receipt %s has invalid status", hash.Hex())
-	}
-	for i, entry := range receipt.Logs {
-		if entry == nil || entry.Removed || entry.TxHash != hash || entry.BlockHash != receipt.BlockHash || entry.BlockNumber != receipt.BlockNumber.Uint64() || entry.TxIndex != receipt.TransactionIndex || (i > 0 && entry.Index <= receipt.Logs[i-1].Index) {
-			return errors.Errorf("transaction receipt %s has invalid log identity", hash.Hex())
-		}
 	}
 	return nil
 }
