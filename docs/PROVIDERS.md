@@ -169,6 +169,11 @@ ownership or missing candidate information is rejected; no deployment is guessed
 The quote supplies only authorized amount/deadline/nonce/output words. Expiry bounds
 are 60..1800 seconds. Signed discount production remains in vault-solver.
 
+Each Liquid Lane asset uses its own recipe and executor. The automatic provider
+accepts one RFQ authorization and rejects multiple authorizations before HTTP,
+even when an extra authorization is inactive. Connector acquisition and issuer
+redemption remain in vault-solver, bound to the configured asset recipe.
+
 Confirmed account authorization precedes idempotent consumer submission. Durable
 request/quote identity, signatures, usage/settlement progress and cursors survive
 restart. Completion requires canonical matching input/output transfers and Reactor
