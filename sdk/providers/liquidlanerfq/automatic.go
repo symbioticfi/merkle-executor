@@ -22,7 +22,9 @@ import (
 const ConsumerAPI = "https://swap.symbiotic.fi/api/v1"
 const automaticPolicy = "liquid-lane-consumer/recipe-v1"
 const minValidity = uint64(60)
-const maxValidity = uint64(1800)
+
+// The API's 30-minute wall-clock expiry must fit an older pinned-block timestamp.
+const maxValidity = uint64(3600)
 
 type Automatic struct{ deps provider.Deps }
 type recipeRequest struct {
