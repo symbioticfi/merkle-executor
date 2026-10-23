@@ -38,6 +38,10 @@ The configured base includes `/api/v1`. `POST /quote` requests `EXACT_INPUT`, fi
 to that account. `routingPreference` is `BEST_PRICE`; optional `solverIds` are sent
 unchanged. The response is `quotes: [{solver, quote, signatureData}]`. Backend rank
 is retained among allowed options satisfying explicit minimum proceeds and validity.
+Automatic quote validity is 60..3600 seconds from the pinned block timestamp. This
+admits the backend's 30-minute wall-clock expiry with bounded block lag; the
+committed recipe's own on-chain deadline checks remain authoritative. Recovery
+requires the same automatic validity constants used during preparation.
 The quote must have one matching aggregated output and `orderInfo` output. Amounts
 and nonce are decimal uint256 strings; leading zeroes compare numerically. Chain IDs
 and JSON deadlines must fit the API's JavaScript safe integer contract.

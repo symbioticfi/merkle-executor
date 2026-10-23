@@ -1,18 +1,58 @@
 package liquidlanerfq
 
 import (
+	"encoding/json"
 	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	reactor "github.com/symbioticfi/merkle-executor/sdk/bindings/liquidlanereactor"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
+
+func TestAutomaticQuoteValidityWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		seconds uint64
+		ready   bool
+	}{
+		{name: "below minimum", seconds: 59},
+		{name: "minimum", seconds: 60, ready: true},
+		{name: "thirty minute quote with twelve second block lag", seconds: 1812, ready: true},
+		{name: "maximum", seconds: 3600, ready: true},
+		{name: "above maximum", seconds: 3601},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.p.cfg.MinValiditySeconds = minValidity
+			h.p.cfg.MaxValiditySeconds = maxValidity
+			deadline := h.s.Timestamp + tc.seconds
+			h.option["quote"].(map[string]any)["orderInfo"].(map[string]any)["deadline"] = int64(deadline)
+			h.option["signatureData"].(map[string]any)["value"].(map[string]any)["deadline"] = strconv.FormatUint(deadline, 10)
+			out, err := h.p.Prepare(t.Context(), h.s)
+			if !tc.ready {
+				if !errors.Is(err, provider.ErrNotReady) {
+					t.Fatalf("out-of-window quote must remain idle: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var saved prepared
+			if err = json.Unmarshal(out.Data, &saved); err != nil || saved.Request.Deadline == nil || saved.Request.Deadline.Uint64() != deadline {
+				t.Fatalf("selected quote deadline was not preserved: %v", err)
+			}
+		})
+	}
+}
 
 func TestAutomaticRequiresOneAssetAuthorizationBeforeHTTP(t *testing.T) {
 	snapshot := provider.Snapshot{ChainID: big.NewInt(1), Account: addr(0x22)}
