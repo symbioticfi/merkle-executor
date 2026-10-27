@@ -64,7 +64,7 @@ func TestSourceReadsCurrentBackendCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("current backend certificate is not executable: %v", err)
 	}
-	if tree.Root != common.HexToHash(bundle.Root) || tree.Account == nil || *tree.Account != common.HexToAddress(bundle.Account) || tree.ChainID.Cmp(big.NewInt(31337)) != 0 || len(tree.Leaves) != 77 {
+	if tree.Root != common.HexToHash(bundle.Root) || tree.Account == nil || *tree.Account != common.HexToAddress(bundle.Account) || tree.ChainID.Cmp(big.NewInt(31337)) != 0 || len(tree.Leaves) != 76 {
 		t.Fatal("current backend certificate scope/calls changed")
 	}
 	if reads != 1 {
@@ -121,7 +121,7 @@ func TestSourceRejectsCertificateScopeAndLeafChanges(t *testing.T) {
 		{"unused corrupt call", "permission metadata tree: leaf 0 hash mismatch", func(_, m map[string]any) {
 			m["calls"].([]any)[0].(map[string]any)["target"] = common.HexToAddress("0x1").Hex()
 		}},
-		{"duplicate corrupt call", "permission metadata tree: leaf 77 hash mismatch", func(_, m map[string]any) {
+		{"duplicate corrupt call", "permission metadata tree: leaf 76 hash mismatch", func(_, m map[string]any) {
 			calls := m["calls"].([]any)
 			duplicate := make(map[string]any)
 			for key, value := range calls[0].(map[string]any) {
