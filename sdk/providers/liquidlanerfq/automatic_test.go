@@ -17,29 +17,30 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-func TestAutomaticQuoteValidityWindow(t *testing.T) {
+func TestQuoteDeadlineAndExpiry(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		seconds uint64
+		seconds int64
 		ready   bool
 	}{
-		{name: "below minimum", seconds: 59},
-		{name: "minimum", seconds: 60, ready: true},
+		{name: "expired", seconds: -1},
+		{name: "current block", seconds: 0, ready: true},
+		{name: "one second", seconds: 1, ready: true},
+		{name: "fifty-nine seconds", seconds: 59, ready: true},
 		{name: "thirty minute quote with twelve second block lag", seconds: 1812, ready: true},
-		{name: "maximum", seconds: 3600, ready: true},
-		{name: "above maximum", seconds: 3601},
+		{name: "one hour", seconds: 3600, ready: true},
+		{name: "above one hour", seconds: 3601, ready: true},
+		{name: "one day", seconds: 86400, ready: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
-			h.p.cfg.MinValiditySeconds = minValidity
-			h.p.cfg.MaxValiditySeconds = maxValidity
-			deadline := h.s.Timestamp + tc.seconds
+			deadline := uint64(int64(h.s.Timestamp) + tc.seconds)
 			h.option["quote"].(map[string]any)["orderInfo"].(map[string]any)["deadline"] = int64(deadline)
 			h.option["signatureData"].(map[string]any)["value"].(map[string]any)["deadline"] = strconv.FormatUint(deadline, 10)
 			out, err := h.p.Prepare(t.Context(), h.s)
 			if !tc.ready {
 				if !errors.Is(err, provider.ErrNotReady) {
-					t.Fatalf("out-of-window quote must remain idle: %v", err)
+					t.Fatalf("expired quote must remain idle: %v", err)
 				}
 				return
 			}

@@ -24,23 +24,21 @@ import (
 )
 
 type Config struct {
-	HTTP               protocolio.HTTPConfig `yaml:"http"`
-	Reactor            string                `yaml:"reactor"`
-	Protocol           string                `yaml:"protocol"`
-	TokenIn            string                `yaml:"tokenIn"`
-	TokenOut           string                `yaml:"tokenOut"`
-	AmountIn           string                `yaml:"amountIn"`
-	MinAmountOut       string                `yaml:"minAmountOut"`
-	MinValiditySeconds uint64                `yaml:"minValiditySeconds"`
-	MaxValiditySeconds uint64                `yaml:"maxValiditySeconds"`
-	Action             string                `yaml:"action"`
-	AmountInInput      *uint                 `yaml:"amountInInput"`
-	AmountOutInput     *uint                 `yaml:"amountOutInput"`
-	DeadlineInput      *uint                 `yaml:"deadlineInput"`
-	NonceInput         *uint                 `yaml:"nonceInput"`
-	SolverIDs          []string              `yaml:"solverIds"`
-	MaxLookupPages     int                   `yaml:"maxLookupPages"`
-	EventRangeBlocks   uint64                `yaml:"eventRangeBlocks"`
+	HTTP             protocolio.HTTPConfig `yaml:"http"`
+	Reactor          string                `yaml:"reactor"`
+	Protocol         string                `yaml:"protocol"`
+	TokenIn          string                `yaml:"tokenIn"`
+	TokenOut         string                `yaml:"tokenOut"`
+	AmountIn         string                `yaml:"amountIn"`
+	MinAmountOut     string                `yaml:"minAmountOut"`
+	Action           string                `yaml:"action"`
+	AmountInInput    *uint                 `yaml:"amountInInput"`
+	AmountOutInput   *uint                 `yaml:"amountOutInput"`
+	DeadlineInput    *uint                 `yaml:"deadlineInput"`
+	NonceInput       *uint                 `yaml:"nonceInput"`
+	SolverIDs        []string              `yaml:"solverIds"`
+	MaxLookupPages   int                   `yaml:"maxLookupPages"`
+	EventRangeBlocks uint64                `yaml:"eventRangeBlocks"`
 }
 type chainReader interface {
 	provider.Reader
@@ -104,9 +102,6 @@ func New(c Config, deps provider.Deps) (*Provider, error) {
 	}
 	if p.minimum, err = parse.Uint256(c.MinAmountOut); err != nil || p.minimum.Sign() == 0 {
 		return nil, errors.New("RFQ positive minAmountOut required")
-	}
-	if c.MinValiditySeconds == 0 || c.MaxValiditySeconds < c.MinValiditySeconds || c.MaxValiditySeconds > maxSafeInteger {
-		return nil, errors.New("RFQ invalid validity bounds")
 	}
 	if c.MaxLookupPages < 1 || c.MaxLookupPages > 100 || c.EventRangeBlocks < 1 || c.EventRangeBlocks > 100000 {
 		return nil, errors.New("RFQ lookup pages must be 1..100 and event range 1..100000")
@@ -179,7 +174,7 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 	if err := protocolio.Snapshot(s); err != nil {
 		return provider.Output{}, err
 	}
-	if !s.BlockNumber.IsUint64() || !s.ChainID.IsUint64() || s.ChainID.Uint64() > maxSafeInteger || s.Timestamp > maxSafeInteger-p.cfg.MaxValiditySeconds {
+	if !s.BlockNumber.IsUint64() || !s.ChainID.IsUint64() || s.ChainID.Uint64() > maxSafeInteger || s.Timestamp > maxSafeInteger {
 		return provider.Output{}, errors.New("RFQ chain or expiry exceeds API integer bound")
 	}
 	domain, err := p.domain(s, domainResult)
@@ -219,7 +214,7 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 			return provider.Output{}, err
 		}
 		deadline := request.Deadline.Uint64()
-		if deadline < s.Timestamp+p.cfg.MinValiditySeconds || deadline > s.Timestamp+p.cfg.MaxValiditySeconds || request.Outputs[0].Amount.Cmp(p.minimum) < 0 {
+		if deadline < s.Timestamp || request.Outputs[0].Amount.Cmp(p.minimum) < 0 {
 			continue
 		}
 		reads, err := protocolio.ReadGroup(ctx, p.chain, protocolio.ContractRead(p.reactor, reactor.NewLiquidLaneReactor().PackIsUsedNonce(s.Account, request.Nonce), s.BlockNumber, true))
