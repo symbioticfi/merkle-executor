@@ -166,12 +166,11 @@ type, input/output tokens, protocol and account recipient. The Reactor is the un
 committed approval/invalidation candidate whose EIP-712 domain matches
 `Reactor`, version `1`, the authenticated chain and target. Ambiguous domain
 ownership or missing candidate information is rejected; no deployment is guessed.
-The quote supplies only authorized amount/deadline/nonce/output words. Expiry bounds
-are 60..3600 seconds from the pinned block timestamp. The backend's 30-minute
-wall-clock expiry can therefore fit when the pinned block is older. The committed
-recipe still enforces its own on-chain deadline cap. Signed discount production
-remains in vault-solver. Automatic recovery requires the same validity constants
-as preparation; deploy changes to these constants with no active RFQ jobs.
+The quote supplies only authorized amount/deadline/nonce/output words. The provider
+excludes expired quotes; duration constraints belong to the committed recipe and
+are enforced by the original full execution simulation before signing. The SDK has
+no minimum duration buffer or maximum lifetime setting. Signed discount production
+remains in vault-solver.
 
 Each Liquid Lane asset uses its own recipe and executor. The automatic provider
 accepts one RFQ authorization and rejects multiple authorizations before HTTP,

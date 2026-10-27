@@ -88,7 +88,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := head.Time + 600
+	deadline := head.Time + 7200
 	request := reactor.IReactorRequest{TokenIn: tokenIn, AmountIn: big.NewInt(1000), Outputs: []reactor.IReactorOutput{{Token: tokenOut, Amount: big.NewInt(900), Recipient: account}}, Deadline: new(big.Int).SetUint64(deadline), Nonce: big.NewInt(7), Protocol: owner}
 	// Leaf-fixed buffer independently mirrors the reviewed Request hash program.
 	words := []common.Hash{crypto.Keccak256Hash([]byte("Request(address tokenIn,uint256 amountIn,Output[] outputs,uint256 deadline,uint256 nonce,address protocol)Output(address token,uint256 amount,address recipient)")), common.BytesToHash(tokenIn.Bytes()), common.BigToHash(request.AmountIn), {}, common.BigToHash(request.Deadline), common.BigToHash(request.Nonce), common.BytesToHash(owner.Bytes()), crypto.Keccak256Hash([]byte("Output(address token,uint256 amount,address recipient)")), common.BytesToHash(tokenOut.Bytes()), common.BigToHash(big.NewInt(900)), common.BytesToHash(account.Bytes())}
@@ -143,6 +143,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 		issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, resultOperand(1), inputOperand(0)),
 		issuerStep(t, recipes.Approve, []string{"uint256", "address", "address", "bytes32"}, resultOperand(0), tokenIn, reactorAddress, leaves[0].Hash),
 		issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{leaves[1].Hash}, [][]*big.Int{{fieldBinding(2, resultOperand(0)), fieldBinding(4, inputOperand(1)), fieldBinding(5, inputOperand(2)), fieldBinding(9, inputOperand(0))}}),
+		issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, inputOperand(1), new(big.Int).SetUint64(deadline)),
 	}}
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
 	var curatorCalls, quotes, gets, posts atomic.Int32
@@ -231,6 +232,17 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
 		t.Fatal("plan signed", nonce, e)
 	}
+	deadlineGuard := recipe.Steps[len(recipe.Steps)-1]
+	recipe.Steps[len(recipe.Steps)-1] = issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, inputOperand(1), new(big.Int).SetUint64(deadline-1))
+	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
+	if e := runBotWithHTTP(ctx, path, true, true, new(bytes.Buffer), apiHTTP); e == nil || !strings.Contains(e.Error(), "full recipe simulation failed") {
+		t.Fatal("recipe deadline cap was not enforced", e)
+	}
+	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 || posts.Load() != 0 || quotes.Load() != 2 {
+		t.Fatal("invalid deadline signed or published", nonce, e)
+	}
+	recipe.Steps[len(recipe.Steps)-1] = deadlineGuard
+	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
 	run := func() {
@@ -247,14 +259,14 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	}
 	run()
 	job := load()
-	if job.Phase != "authorized" || len(job.Progress) != 5 || job.Progress[2].Outcome != "publication-uncertain" || job.Result.Execution == nil || posts.Load() != 1 || quotes.Load() != 2 {
+	if job.Phase != "authorized" || len(job.Progress) != 5 || job.Progress[2].Outcome != "publication-uncertain" || job.Result.Execution == nil || posts.Load() != 1 || quotes.Load() != 3 {
 		t.Fatalf("ambiguous publication lost ownership: phase=%s progress=%+v posts=%d quotes=%d", job.Phase, job.Progress, posts.Load(), quotes.Load())
 	}
 	originalData := bytes.Clone(job.Plan.Outputs[2].Data)
 	treeCalls := curatorCalls.Load()
 	run()
 	job = load()
-	if job.Phase != "authorized" || job.Progress[2].Done || job.Progress[2].Reference != orderID || posts.Load() != 1 || quotes.Load() != 2 || curatorCalls.Load() != treeCalls || !bytes.Equal(originalData, job.Plan.Outputs[2].Data) {
+	if job.Phase != "authorized" || job.Progress[2].Done || job.Progress[2].Reference != orderID || posts.Load() != 1 || quotes.Load() != 3 || curatorCalls.Load() != treeCalls || !bytes.Equal(originalData, job.Plan.Outputs[2].Data) {
 		t.Fatal("API-only fill released work or restart changed identity")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 {
@@ -290,7 +302,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	}
 	lookupCalls := gets.Load()
 	run()
-	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 || posts.Load() != 1 || quotes.Load() != 2 || gets.Load() != lookupCalls || curatorCalls.Load() != treeCalls {
+	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 || posts.Load() != 1 || quotes.Load() != 3 || gets.Load() != lookupCalls || curatorCalls.Load() != treeCalls {
 		t.Fatal("settled restart repeated network mutation", nonce, e)
 	}
 	if found, e := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); e != nil || found {
