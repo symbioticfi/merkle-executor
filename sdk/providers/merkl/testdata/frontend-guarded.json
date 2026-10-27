@@ -172,8 +172,8 @@
   ],
   "provenance": {
     "generator": "frontend-merkl-fixture.mjs",
-    "frontendRevision": "6ff2948cda3117f3fa8531da1b6d3ceeec33af3b",
-    "merklSourceSha256": "bde50ca5735a3ce8862598f5d66366d945c3b7acc638e16ac672345bb8fc1e00",
+    "frontendRevision": "9c7ba22ac95e70e967d05f31175f3e3ce89783ac",
+    "merklSourceSha256": "b2002586a1e5d0514f068b657e701948a6e9f34f101b972f6583717a3be14c1d",
     "facts": "modeled topology, no chain reads"
   },
   "account": "0x0000000000000000000000000000000000000104",
@@ -197,7 +197,7 @@
       ]
     }
   ],
-  "root": "0x09731b4b2f957e1b76c28fc3935c9ab8d214781ac9bf9f684644d5a1c732b85b",
+  "root": "0xe22e3d89c5c4f86a595b8d77ca010bde4435b0d1526823e292101de49a328e4a",
   "calls": [
     {
       "hash": "0x1b199403edc3eb1d77c6bd8e59d9e97289709b358b67074d31974c1d811d473b",
@@ -246,7 +246,7 @@
       ],
       "proof": [
         "0xa592039966a8045fb8ac913dfaa7d748a6b7944d74331070152290aa0674d312",
-        "0xd1213d119fd4375c77f58be78db627f5cdba5d8c8282437229b9d0cb8a83a201"
+        "0xf3d6824d6618fa7b00e2a6d9e73f93de82310c4c8564048a1f7a8984252c24ed"
       ]
     },
     {
@@ -275,36 +275,7 @@
       ],
       "proof": [
         "0x1b199403edc3eb1d77c6bd8e59d9e97289709b358b67074d31974c1d811d473b",
-        "0xd1213d119fd4375c77f58be78db627f5cdba5d8c8282437229b9d0cb8a83a201"
-      ]
-    },
-    {
-      "hash": "0xb85c626c3ee0e9d379a1d19f074e018106a1d9b98408561edc13b175ac06902c",
-      "target": "0x0000000000000000000000000000000000000103",
-      "targetLabel": "Merkle adapter",
-      "value": "zero",
-      "fn": "push(uint256)",
-      "data": "0x959ac4840000000000000000000000000000000000000000000000000000000000000000",
-      "dataMask": "0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "summary": "Move REWARD from the adapter to the strategy account",
-      "slots": [
-        {
-          "name": "amount",
-          "offset": 4,
-          "length": 32,
-          "kind": "uint",
-          "bits": 256
-        }
-      ],
-      "refs": [
-        {
-          "permission": "0xe0dfc72c06c34bd785ede1d62491a99002ba8bb42973ced149bfd7d795c2a2aa",
-          "name": "push"
-        }
-      ],
-      "proof": [
-        "0xf3d6824d6618fa7b00e2a6d9e73f93de82310c4c8564048a1f7a8984252c24ed",
-        "0x2a7307bc83f33d844a0a16d46e108c7d67ed498a546b6ced143946537de238a4"
+        "0xf3d6824d6618fa7b00e2a6d9e73f93de82310c4c8564048a1f7a8984252c24ed"
       ]
     },
     {
@@ -353,7 +324,6 @@
         }
       ],
       "proof": [
-        "0xb85c626c3ee0e9d379a1d19f074e018106a1d9b98408561edc13b175ac06902c",
         "0x2a7307bc83f33d844a0a16d46e108c7d67ed498a546b6ced143946537de238a4"
       ]
     }
