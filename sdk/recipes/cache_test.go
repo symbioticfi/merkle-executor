@@ -242,7 +242,7 @@ func TestRecipeCacheBoundedEvictionIsolationAndConcurrentReplacement(t *testing.
 	replacement := cloneEvidence(base)
 	replacement.key.executor = common.HexToAddress("0x99")
 	byteLimited.put(replacement)
-	if byteLimited.load(base.key) != nil || byteLimited.load(replacement.key) == nil || byteLimited.count != 1 {
+	if byteLimited.load(base.key) != nil || byteLimited.load(replacement.key) == nil || byteLimited.entries.Len() != 1 {
 		t.Fatal("total byte budget failed to evict")
 	}
 	large := cloneEvidence(base)
@@ -266,6 +266,9 @@ func TestRecipeCacheBoundedEvictionIsolationAndConcurrentReplacement(t *testing.
 	if c.load(base.key) == nil || c.load(other.key) == nil {
 		t.Fatal("full chain ID was truncated")
 	}
+	if c.load(base.key) == nil { // Reading the oldest entry must not refresh FIFO order.
+		t.Fatal("oldest cache entry disappeared before eviction")
+	}
 	third := cloneEvidence(base)
 	third.key.executor = common.HexToAddress("0x02")
 	c.put(third)
@@ -287,7 +290,7 @@ func TestRecipeCacheBoundedEvictionIsolationAndConcurrentReplacement(t *testing.
 		})
 	}
 	wg.Wait()
-	if c.count > 2 || c.used > c.budget {
+	if c.entries.Len() > 2 || c.used > c.budget {
 		t.Fatal("concurrent insertion exceeded bounds")
 	}
 }
@@ -312,6 +315,19 @@ func TestRecipeCacheSamePinHintUsesInitialHeaderWithoutExtraRead(t *testing.T) {
 			initialCalls = r.allReads
 		} else if r.allReads != initialCalls-1 || r.logReads != 1 {
 			t.Fatalf("same-pin hint added a read: reads%d cold%d logs%d", r.allReads, initialCalls, r.logReads)
+		}
+	}
+}
+
+func TestRecipeCacheDisabledBounds(t *testing.T) {
+	for _, bounds := range []struct {
+		capacity int
+		budget   int64
+	}{
+		{-1, 1 << 20}, {0, 1 << 20}, {1, -1}, {1, 0}, {1, recipeCacheOverhead},
+	} {
+		if cache := NewRecipeCache(bounds.capacity, bounds.budget); cache != nil {
+			t.Fatalf("cache enabled for capacity=%d budget=%d", bounds.capacity, bounds.budget)
 		}
 	}
 }

@@ -37,18 +37,8 @@ func validateComposition(calldata []byte, providers []provider.Provider, outputs
 		} else if exclusive, ok := p.(provider.ExclusiveTargetProvider); ok {
 			targets = exclusive.ExclusiveTargets()
 		}
-		for key, target := range targets {
-			if target == (common.Address{}) {
-				return errors.New("exclusive managed target is zero")
-			}
-			if owner, ok := owners[target]; ok && owner != i {
-				return errors.New("multiple providers require exclusive managed target")
-			}
-			if _, ok := claims[key]; ok {
-				return errors.New("duplicate exclusive managed action")
-			}
-			owners[target] = i
-			claims[key] = target
+		if err := addTargetClaims(targets, i, owners, claims); err != nil {
+			return err
 		}
 	}
 	if len(claims) == 0 {
@@ -67,18 +57,8 @@ func ValidateRecipeComposition(recipe recipes.Recipe, tree *recipes.Tree, requir
 	owners := map[common.Address]int{}
 	claims := map[string]common.Address{}
 	for i, requirement := range requirements {
-		for key, target := range requirement.ExclusiveTargets {
-			if target == (common.Address{}) {
-				return errors.New("exclusive managed target is zero")
-			}
-			if owner, ok := owners[target]; ok && owner != i {
-				return errors.New("multiple providers require exclusive managed target")
-			}
-			if _, ok := claims[key]; ok {
-				return errors.New("duplicate exclusive managed action")
-			}
-			owners[target] = i
-			claims[key] = target
+		if err := addTargetClaims(requirement.ExclusiveTargets, i, owners, claims); err != nil {
+			return err
 		}
 	}
 	if len(claims) == 0 {
@@ -110,6 +90,23 @@ func validateTargetClaims(targets map[string]common.Address, owners map[common.A
 		if _, ok := owners[target]; ok && claims[key] != target {
 			return errors.New("unowned managed call to an exclusive target")
 		}
+	}
+	return nil
+}
+
+func addTargetClaims(targets map[string]common.Address, owner int, owners map[common.Address]int, claims map[string]common.Address) error {
+	for key, target := range targets {
+		if target == (common.Address{}) {
+			return errors.New("exclusive managed target is zero")
+		}
+		if existing, ok := owners[target]; ok && existing != owner {
+			return errors.New("multiple providers require exclusive managed target")
+		}
+		if _, ok := claims[key]; ok {
+			return errors.New("duplicate exclusive managed action")
+		}
+		owners[target] = owner
+		claims[key] = target
 	}
 	return nil
 }

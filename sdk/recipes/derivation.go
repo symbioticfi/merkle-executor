@@ -18,7 +18,6 @@ type ManagedAction struct {
 	Bindings []Binding
 }
 
-func CloneRecipe(r Recipe) Recipe { return cloneRecipe(r) }
 func CloneTree(t *Tree) *Tree {
 	if t == nil {
 		return nil

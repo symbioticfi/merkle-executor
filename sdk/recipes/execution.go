@@ -50,7 +50,7 @@ func PrepareExecutionWithOptions(ctx context.Context, reader Reader, executor, a
 	}
 	buildRecipe := recipe
 	if pending != nil {
-		buildRecipe = cloneRecipe(recipe)
+		buildRecipe = CloneRecipe(recipe)
 	}
 	calldata, leaves, err := build(snapshot, buildRecipe, staged)
 	if err != nil {

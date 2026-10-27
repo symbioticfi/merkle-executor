@@ -2,6 +2,7 @@ package recipes
 
 import (
 	"bytes"
+	"container/list"
 	"strings"
 	"sync"
 
@@ -13,14 +14,13 @@ type evidenceKey struct {
 	executor common.Address
 }
 type recipeEvidence struct {
-	key        evidenceKey
-	recipe     Recipe
-	hash       common.Hash
-	block      uint64
-	eventHash  common.Hash
-	version    uint64
-	cost       int64
-	prev, next *recipeEvidence
+	key       evidenceKey
+	recipe    Recipe
+	hash      common.Hash
+	block     uint64
+	eventHash common.Hash
+	version   uint64
+	cost      int64
 }
 
 const recipeCacheOverhead int64 = 256
@@ -35,9 +35,8 @@ type RecipeCache struct {
 	mu           sync.Mutex
 	capacity     int
 	budget, used int64
-	count        int
 	version      uint64
-	first, last  *recipeEvidence
+	entries      list.List
 }
 
 // NewRecipeCache returns nil when either bound disables caching. Host callers
@@ -48,7 +47,7 @@ func NewRecipeCache(capacity int, bytes int64) *RecipeCache {
 	}
 	return &RecipeCache{capacity: capacity, budget: bytes, used: recipeCacheOverhead}
 }
-func cloneRecipe(r Recipe) Recipe {
+func CloneRecipe(r Recipe) Recipe {
 	clone := func(src [][]byte) [][]byte {
 		if src == nil {
 			return nil
@@ -67,8 +66,7 @@ func cloneEvidence(e *recipeEvidence) *recipeEvidence {
 	}
 	c := *e
 	c.key.chainID = strings.Clone(e.key.chainID)
-	c.recipe = cloneRecipe(e.recipe)
-	c.prev, c.next = nil, nil
+	c.recipe = CloneRecipe(e.recipe)
 	return &c
 }
 func (c *RecipeCache) load(key evidenceKey) *recipeEvidence {
@@ -77,7 +75,8 @@ func (c *RecipeCache) load(key evidenceKey) *recipeEvidence {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for e := c.first; e != nil; e = e.next {
+	for entry := c.entries.Front(); entry != nil; entry = entry.Next() {
+		e := entry.Value.(*recipeEvidence)
 		if e.key == key {
 			return cloneEvidence(e)
 		}
@@ -92,27 +91,19 @@ func (c *RecipeCache) discard(hint *recipeEvidence) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for e := c.first; e != nil; e = e.next {
+	for entry := c.entries.Front(); entry != nil; entry = entry.Next() {
+		e := entry.Value.(*recipeEvidence)
 		if e.key == hint.key && e.version == hint.version {
-			c.remove(e)
+			c.remove(entry)
 			return
 		}
 	}
 }
-func (c *RecipeCache) remove(e *recipeEvidence) {
-	if e.prev == nil {
-		c.first = e.next
-	} else {
-		e.prev.next = e.next
-	}
-	if e.next == nil {
-		c.last = e.prev
-	} else {
-		e.next.prev = e.prev
-	}
-	c.count--
-	c.used -= e.cost
+func (c *RecipeCache) remove(entry *list.Element) {
+	c.used -= entry.Value.(*recipeEvidence).cost
+	c.entries.Remove(entry)
 }
+
 func evidenceCost(e *recipeEvidence) int64 {
 	// Charge twice each allocation's payload plus 64 bytes of allocation slack.
 	// This covers Go size-class/page rounding, including slice backing arrays;
@@ -148,24 +139,17 @@ func (c *RecipeCache) put(evidence *recipeEvidence) {
 	e.cost = cost
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for old := c.first; old != nil; old = old.next {
-		if old.key == e.key {
-			c.remove(old)
+	for entry := c.entries.Front(); entry != nil; entry = entry.Next() {
+		if entry.Value.(*recipeEvidence).key == e.key {
+			c.remove(entry)
 			break
 		}
 	}
-	for c.count >= c.capacity || cost > c.budget-c.used {
-		c.remove(c.first)
+	for c.entries.Len() >= c.capacity || cost > c.budget-c.used {
+		c.remove(c.entries.Front())
 	}
 	c.version++
 	e.version = c.version
-	e.prev = c.last
-	if c.last == nil {
-		c.first = e
-	} else {
-		c.last.next = e
-	}
-	c.last = e
-	c.count++
+	c.entries.PushBack(e)
 	c.used += cost
 }
