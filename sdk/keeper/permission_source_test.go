@@ -29,8 +29,12 @@ type permissionReader struct {
 	log types.Log
 }
 
-func (r *permissionReader) FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
-	return []types.Log{r.log}, nil
+func (r *permissionReader) RecipePublication(context.Context, common.Address, common.Hash, uint64) (recipes.Publication, error) {
+	e, err := executor.NewRecipeExecutor().UnpackSetRecipeEvent(&r.log)
+	if err != nil {
+		return recipes.Publication{}, err
+	}
+	return recipes.Publication{Executor: r.log.Address, RecipeHash: r.log.Topics[1], BlockNumber: r.log.BlockNumber, BlockHash: r.log.BlockHash, TransactionHash: common.HexToHash("0x1234"), Recipe: recipes.Recipe{Queries: e.Queries, Steps: e.Steps}}, nil
 }
 func (r *permissionReader) CallContract(ctx context.Context, m ethereum.CallMsg, b *big.Int) ([]byte, error) {
 	if bytes.Equal(m.Data, r.payload) {

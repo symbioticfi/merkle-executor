@@ -155,6 +155,7 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 
 	directory := t.TempDir()
 	cfg := testCLIConfig(directory)
+	cfg.IndexerURL = fixtureIndexer(t, client)
 	cfg.Mode, cfg.Chain.RPCURL, cfg.Signer.Address = "send", endpoint, caller.Hex()
 	permissionLeaves := make([]any, len(leaves))
 	for i, leaf := range leaves {

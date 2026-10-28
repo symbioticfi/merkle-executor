@@ -209,6 +209,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	defer api.Close()
 	directory := t.TempDir()
 	cfg := testCLIConfig(directory)
+	cfg.IndexerURL = fixtureIndexer(t, client)
 	cfg.Mode = "send"
 	cfg.Chain.RPCURL = endpoint
 	cfg.Signer.Address = caller.Hex()

@@ -181,3 +181,13 @@ and proof words without reconstructing a canonical root/recipient/balance-check
 program. Generic assembly preserves permission masks and pinned bytes; the complete
 original contract simulation remains authoritative. `recipes.ValidateMutableActions`
 and `recipes.ReadDependent` have been removed. An unchanged masked template no longer needs a provider owner, and deterministic values need no READ ancestry.
+
+
+Hosts supply indexed recipe publications through `recipes.PublicationSource` on
+their chain reader. `indexer.New(baseURL, httpClient)` implements that source;
+assign it to `chain.Client.RecipePublications` when using the SDK chain client.
+The base URL names the RFQ indexer service without `/api/v1`. Liquid Lane hosts
+also set `provider.Deps.IndexerURL` to the same service. Both use bounded HTTP
+and fail on indexing lag or errors without scanning blockchain logs. Bodies
+retain their original recipe format; live commitments, publication headers,
+coverage headers and terminal receipts remain independently verified.

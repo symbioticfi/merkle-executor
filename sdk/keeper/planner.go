@@ -21,7 +21,6 @@ type Backend interface {
 	CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 	HeaderByHash(context.Context, common.Hash) (*types.Header, error)
-	FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error)
 }
 
 type Strategy struct {

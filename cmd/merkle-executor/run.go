@@ -15,6 +15,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	"github.com/symbioticfi/merkle-executor/internal/observability"
 	"github.com/symbioticfi/merkle-executor/sdk/chain"
+	"github.com/symbioticfi/merkle-executor/sdk/indexer"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -62,6 +63,10 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	if err != nil {
 		return err
 	}
+	client.RecipePublications, err = indexer.New(cfg.IndexerURL, httpClient)
+	if err != nil {
+		return err
+	}
 	targets := make([]common.Address, len(cfg.Strategies))
 	for i, sc := range cfg.Strategies {
 		targets[i] = common.HexToAddress(sc)
@@ -92,7 +97,7 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 			name string
 			new  func(provider.Deps) (provider.Provider, error)
 		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}} {
-			p, err := registration.new(provider.Deps{Chain: client, HTTP: httpClient, LookupSecret: os.Getenv})
+			p, err := registration.new(provider.Deps{IndexerURL: cfg.IndexerURL, Chain: client, HTTP: httpClient, LookupSecret: os.Getenv})
 			if err != nil {
 				return errors.Errorf("configure provider %s: %w", registration.name, err)
 			}

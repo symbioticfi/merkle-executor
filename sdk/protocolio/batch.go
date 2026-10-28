@@ -13,6 +13,9 @@ import (
 // MaxReadBatch bounds one backend request. ReadGroup chunks larger independent groups.
 const MaxReadBatch = 256
 
+// ErrLogScan rejects runtime event scans; event discovery belongs to indexers.
+var ErrLogScan = errors.New("RPC log scans are disabled; use indexed event sources")
+
 type ReadKind uint8
 
 const (
@@ -64,6 +67,9 @@ type ReadResults struct {
 func ReadGroup(ctx context.Context, reader any, requests ...ReadRequest) (*ReadResults, error) {
 	group := &ReadResults{ctx: ctx, reader: reader, requests: requests, results: make([]ReadResult, len(requests)), loaded: make([]bool, len(requests))}
 	for _, request := range requests {
+		if request.Kind == ReadLogs {
+			return nil, ErrLogScan
+		}
 		if request.Kind < ReadCall || request.Kind > ReadReceipt {
 			return nil, errors.New("invalid read request kind")
 		}
@@ -121,14 +127,7 @@ func readSingle(ctx context.Context, reader any, request ReadRequest) (out ReadR
 		}
 		out.Header, out.Err = backend.HeaderByNumber(ctx, request.Block)
 	case ReadLogs:
-		backend, ok := reader.(interface {
-			FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error)
-		})
-		if !ok {
-			out.Err = errors.New("log reader required")
-			return
-		}
-		out.Logs, out.Err = backend.FilterLogs(ctx, request.Filter)
+		out.Err = ErrLogScan
 	case ReadReceipt:
 		backend, ok := reader.(interface {
 			TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)

@@ -16,8 +16,10 @@ import (
 
 // Deps supplies caller-owned transports for runtime data acquisition.
 type Deps struct {
-	Chain Reader
-	HTTP  *http.Client
+	// IndexerURL is the RFQ indexer service base URL for indexed event evidence.
+	IndexerURL string
+	Chain      Reader
+	HTTP       *http.Client
 	// LookupSecret resolves configured credential references without environment access in the SDK.
 	LookupSecret func(string) string
 }
@@ -33,12 +35,6 @@ type Reader interface {
 // evaluating the queries through Multicall is not equivalent.
 type CodeOverrideReader interface {
 	CallContractWithCode(context.Context, ethereum.CallMsg, *big.Int, []byte) ([]byte, error)
-}
-
-// LogReader discovers issuer-owned requests at the pinned snapshot. Providers
-// that need event discovery require this interface in addition to Reader.
-type LogReader interface {
-	FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error)
 }
 
 // Execution identifies the confirmed recipe transaction. It is persisted before

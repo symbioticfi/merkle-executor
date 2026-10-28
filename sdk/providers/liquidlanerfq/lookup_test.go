@@ -51,7 +51,7 @@ func TestLookupBeyondThousandOrdersSurvivesRestart(t *testing.T) {
 			}
 			checkpoint := append(json.RawMessage(nil), progress.State...)
 			// Only serialized provider progress is carried into a newly constructed runtime.
-			h.p, err = New(h.p.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
+			h.p, err = New(h.p.cfg, provider.Deps{IndexerURL: h.server.URL, Chain: h.c, HTTP: h.server.Client()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -78,7 +78,7 @@ func TestLookupBeyondThousandOrdersSurvivesRestart(t *testing.T) {
 					// The appended remote order must be found from the previous checkpoint.
 					h.pages[10].Orders[0] = wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: "open", QuoteID: quoteID, Swapper: s.Account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: addr(0x33).Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: addr(0x44).Hex(), Amount: "900", Recipient: s.Account.Hex()}}}
 					h.gets = 10
-					h.p, err = New(h.p.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
+					h.p, err = New(h.p.cfg, provider.Deps{IndexerURL: h.server.URL, Chain: h.c, HTTP: h.server.Client()})
 					if err != nil {
 						t.Fatal(err)
 					}

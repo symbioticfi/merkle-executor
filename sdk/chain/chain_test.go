@@ -114,8 +114,8 @@ func TestRPCRoutesReadsAndWritesToTheirVerifiedEndpoints(t *testing.T) {
 	if _, err := client.HeaderByHash(ctx, common.HexToHash("0x12")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.FilterLogs(ctx, ethereum.FilterQuery{}); err != nil {
-		t.Fatal(err)
+	if _, err := client.FilterLogs(ctx, ethereum.FilterQuery{}); err == nil {
+		t.Fatal("RPC log scan accepted")
 	}
 	if gas, err := client.EstimateGas(ctx, ethereum.CallMsg{To: &a}); err != nil || gas != 21000 {
 		t.Fatalf("estimate: %d %v", gas, err)
@@ -136,7 +136,7 @@ func TestRPCRoutesReadsAndWritesToTheirVerifiedEndpoints(t *testing.T) {
 	defer read.mu.Unlock()
 	write.mu.Lock()
 	defer write.mu.Unlock()
-	if len(read.requests) != 7 || len(write.requests) != 4 {
+	if len(read.requests) != 6 || len(write.requests) != 4 {
 		t.Fatalf("unexpected RPC routing: read=%d write=%d", len(read.requests), len(write.requests))
 	}
 	for _, r := range read.requests {

@@ -6,7 +6,6 @@ import (
 	"math/big"
 	"sort"
 
-	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
@@ -45,27 +44,16 @@ func (p *Provider) scan(ctx context.Context, s provider.Snapshot, d prepared, st
 	cancelTopic := abi.Events["InvalidateNonce"].ID
 	// Only a successfully read dense range is subdivided. Transport/member failures
 	// remain failures: retrying those could hide an incomplete event history.
-	var opening protocolio.ReadResult
+	var opening *types.Header
 	var logs []types.Log
 	for {
-		reads, err := protocolio.ReadGroup(ctx, p.chain,
-			protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(end)},
-			protocolio.ReadRequest{Kind: protocolio.ReadLogs, Filter: ethereum.FilterQuery{FromBlock: new(big.Int).SetUint64(st.NextBlock), ToBlock: new(big.Int).SetUint64(end), Addresses: []common.Address{p.reactor}, Topics: [][]common.Hash{{fillTopic}}}},
-			protocolio.ReadRequest{Kind: protocolio.ReadLogs, Filter: ethereum.FilterQuery{FromBlock: new(big.Int).SetUint64(st.NextBlock), ToBlock: new(big.Int).SetUint64(end), Addresses: []common.Address{p.reactor}, Topics: [][]common.Hash{{cancelTopic}, {common.BytesToHash(d.Account.Bytes())}}}},
-		)
+		var truncated bool
+		var err error
+		logs, opening, truncated, err = p.indexedEvents(ctx, st.NextBlock, end, d.Account)
 		if err != nil {
 			return "", false, err
 		}
-		opening = reads.At(0)
-		if opening.Err != nil || !validHeader(opening.Header, end) {
-			return "", false, errors.New("RFQ scan header unavailable")
-		}
-		fills, cancellations := reads.At(1), reads.At(2)
-		if fills.Err != nil || cancellations.Err != nil {
-			return "", false, errors.New("RFQ event range failed")
-		}
-		if len(fills.Logs) <= maxRangeLogs && len(cancellations.Logs) <= maxRangeLogs-len(fills.Logs) {
-			logs = append(append([]types.Log(nil), fills.Logs...), cancellations.Logs...)
+		if !truncated {
 			break
 		}
 		if end == st.NextBlock {
@@ -145,7 +133,7 @@ func (p *Provider) scan(ctx context.Context, s provider.Snapshot, d prepared, st
 		}
 	}
 	closing, err := p.chain.HeaderByNumber(ctx, new(big.Int).SetUint64(end))
-	if err != nil || !validHeader(closing, end) || closing.Hash() != opening.Header.Hash() {
+	if err != nil || !validHeader(closing, end) || closing.Hash() != opening.Hash() {
 		return "", false, errors.New("RFQ event range reorganized")
 	}
 	if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
