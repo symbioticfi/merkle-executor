@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -40,7 +41,7 @@ func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int, aggr
 		return nil, errors.New("positive expected chain ID required")
 	}
 
-	httpClient := &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	httpClient := &http.Client{Transport: protocolio.GuardLogScansTransport(http.DefaultTransport.(*http.Transport).Clone()), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	connected := false
 	defer func() {
 		if !connected {
@@ -83,6 +84,10 @@ func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int, aggr
 	return &Client{Client: read, write: write, http: httpClient, readURL: readURL, multicall: multicall}, nil
 }
 func dialHTTP(ctx context.Context, endpoint string, client *http.Client) (*ethclient.Client, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, errors.New("RPC endpoint must use guarded HTTP(S) transport")
+	}
 	connection, err := rpc.DialOptions(ctx, endpoint, rpc.WithHTTPClient(client))
 	if err != nil {
 		return nil, err

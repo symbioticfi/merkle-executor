@@ -191,3 +191,5 @@ also set `provider.Deps.IndexerURL` to the same service. Both use bounded HTTP
 and fail on indexing lag or errors without scanning blockchain logs. Bodies
 retain their original recipe format; live commitments, publication headers,
 coverage headers and terminal receipts remain independently verified.
+
+`chain.Dial` accepts HTTP(S) only and rejects raw event-discovery methods before transport.

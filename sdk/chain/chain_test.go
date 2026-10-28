@@ -15,7 +15,10 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
 type rpcFixture struct {
@@ -297,5 +300,44 @@ func TestRPCNeverFollowsReadOrSubmissionRedirects(t *testing.T) {
 				t.Fatalf("redirect target received %d requests", len(target.requests))
 			}
 		})
+	}
+}
+
+func TestEmbeddedRawClientsCannotBypassIndexedEventPolicy(t *testing.T) {
+	read, write := newRPCFixture(t, "0x1"), newRPCFixture(t, "0x1")
+	client, err := Dial(t.Context(), read.server.URL, write.server.URL, big.NewInt(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	for _, backend := range []*ethclient.Client{client.Client, client.write} {
+		for _, method := range []string{"eth_getLogs", "eth_newFilter", "eth_getFilterLogs", "eth_getFilterChanges"} {
+			var result json.RawMessage
+			if err := backend.Client().CallContext(t.Context(), &result, method); !errors.Is(err, protocolio.ErrLogScan) {
+				t.Fatalf("embedded %s escaped policy: %v", method, err)
+			}
+			batch := []rpc.BatchElem{{Method: "unknown", Result: &result}, {Method: method, Result: &result}}
+			if err := backend.Client().BatchCallContext(t.Context(), batch); !errors.Is(err, protocolio.ErrLogScan) {
+				t.Fatalf("mixed raw %s escaped policy: %v", method, err)
+			}
+		}
+		if _, err := backend.FilterLogs(t.Context(), ethereum.FilterQuery{}); !errors.Is(err, protocolio.ErrLogScan) {
+			t.Fatalf("embedded FilterLogs escaped policy: %v", err)
+		}
+	}
+	read.mu.Lock()
+	defer read.mu.Unlock()
+	write.mu.Lock()
+	defer write.mu.Unlock()
+	if len(read.requests) != 1 || len(write.requests) != 1 {
+		t.Fatalf("scan reached backend after identity handshake: read%d write%d", len(read.requests), len(write.requests))
+	}
+}
+
+func TestSDKCannotSelectAnUnguardedRPCTransport(t *testing.T) {
+	for _, endpoint := range []string{"ws://127.0.0.1:1", "wss://127.0.0.1:1", "/tmp/client.ipc"} {
+		if _, err := Dial(t.Context(), endpoint, "", big.NewInt(1)); err == nil {
+			t.Fatal("unguarded RPC transport accepted")
+		}
 	}
 }

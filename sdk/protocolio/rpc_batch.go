@@ -55,7 +55,7 @@ func CallHTTPBatch(ctx context.Context, client *http.Client, endpoint string, ba
 	}
 	messages := make([]batchMessage, len(batch))
 	for i, element := range batch {
-		if element.Method == "eth_getLogs" {
+		if logScanMethod(element.Method) {
 			return ErrLogScan
 		}
 		messages[i] = batchMessage{JSONRPC: "2.0", ID: uint64(i + 1), Method: element.Method, Params: element.Args}

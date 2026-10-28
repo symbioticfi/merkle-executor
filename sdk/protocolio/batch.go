@@ -14,7 +14,7 @@ import (
 const MaxReadBatch = 256
 
 // ErrLogScan rejects runtime event scans; event discovery belongs to indexers.
-var ErrLogScan = errors.New("RPC log scans are disabled; use indexed event sources")
+var ErrLogScan = errors.New("RPC log scans belong to indexers")
 
 type ReadKind uint8
 
