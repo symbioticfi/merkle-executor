@@ -25,7 +25,10 @@ permission package, simulates the exact transaction and manages its lifecycle.
 Provider output may fill numerical inputs or masked calldata fields only. It cannot
 replace targets, masks, proofs, recipe instructions or caller identity. External data
 does not grant authority. The final full execute simulation validates on-chain bindings
-and postconditions; the keeper does not duplicate the Solidity arithmetic interpreter.
+and postconditions; the keeper does not duplicate the Solidity arithmetic interpreter
+or require a canonical protocol guard. Fixed amounts are valid recipe selections.
+Unchanged masked preimages come from the trusted curator artifact and need no
+provider ownership; only replacements must fit the original permission.
 
 Liquid Lane RFQ consumers use the SDK provider `liquidlane-rfq` to
 acquire exact-input quotes, populate an approved account Sign action and reconcile

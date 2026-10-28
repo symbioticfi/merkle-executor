@@ -30,12 +30,12 @@ func TestProbePrefixBoundsAndCancellation(t *testing.T) {
 		t.Fatal("self-query accepted", err)
 	}
 }
-func TestProbeRejectsUnpreparedMutablePrefixAction(t *testing.T) {
+func TestProbeUsesAuthorizedTemplateBytes(t *testing.T) {
 	leaf := Leaf{Target: testTarget, Value: new(big.Int), Data: []byte{1, 2, 3, 4, 0}, DataMask: []byte{0, 0, 0, 0, 255}}
 	leaf.Hash, _ = HashLeaf(leaf)
 	tree := &Tree{Root: leaf.Hash, Leaves: []Leaf{leaf}}
 	recipe := Recipe{Steps: [][]byte{manageStep(t, leaf.Hash, literal(1), nil)}}
-	if err := ValidateProbePrefix(recipe, 1, PrefixRuntime{Tree: tree}); err == nil || !strings.Contains(err.Error(), "mutable bytes") {
-		t.Fatal("unprepared provider action accepted", err)
+	if err := ValidateProbePrefix(recipe, 1, PrefixRuntime{Tree: tree}); err != nil {
+		t.Fatal(err)
 	}
 }

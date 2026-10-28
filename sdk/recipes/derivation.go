@@ -112,15 +112,12 @@ type EconomicValue struct {
 	Exact bool
 }
 
-// Budget requires the recipe to select an exact read-derived amount. Bounds
+// Budget requires the recipe to select an exact amount. Bounds
 // validate that amount; they never choose it. Use MIN/MAX arithmetic in the
 // recipe to express a capped amount, bound directly or through an input equality.
 func Budget(recipe Recipe, value Value, before uint) (EconomicValue, error) {
 	economic, err := ExactValue(recipe, value, before)
 	if err != nil {
-		return EconomicValue{}, err
-	}
-	if err = ReadDependent(recipe, economic.Expression); err != nil {
 		return EconomicValue{}, err
 	}
 	if value.Source == Input {
@@ -149,35 +146,33 @@ func Budget(recipe Recipe, value Value, before uint) (EconomicValue, error) {
 			*bounds = append(*bounds, a)
 		}
 	}
-	if _, _, err = dependencies(recipe, EconomicExpressions(economic)); err != nil {
+	if _, err = dependencies(recipe, EconomicExpressions(economic)); err != nil {
 		return EconomicValue{}, err
 	}
 	return economic, nil
 }
 
 // EconomicExpressions includes every bound whose value must be proved before
-// requesting external data. Nonfinancial deterministic results need no READ.
+// requesting external data.
 func EconomicExpressions(value EconomicValue) []Value {
 	values := []Value{value.Expression}
 	values = append(values, value.Upper...)
 	return append(values, value.Lower...)
 }
 
-// Floor combines all preceding lower bounds, including literal caps, provided
-// at least one lower bound depends on a recipe read. Equality remains exact.
+// Floor combines the recipe's preceding lower bounds. Equality remains exact.
 func Floor(recipe Recipe, value Value, before uint) ([]EconomicValue, error) {
-	if value.Source == Result {
-		if err := ReadDependent(recipe, value); err != nil {
+	if value.Source == Literal || value.Source == Result {
+		if _, err := dependencies(recipe, []Value{value}); err != nil {
 			return nil, err
 		}
 		return []EconomicValue{{Expression: value, Exact: true}}, nil
 	}
 	if value.Source != Input || value.Value == nil || !value.Value.IsUint64() {
-		return nil, errors.New("minimum proceeds must depend on recipe results")
+		return nil, errors.New("minimum proceeds must be a recipe value")
 	}
 	index := uint(value.Value.Uint64())
 	var floors []EconomicValue
-	read := false
 	for i := uint(0); i < before && i < uint(len(recipe.Steps)); i++ {
 		step := recipe.Steps[i]
 		if step[0] != LessOrEqual && step[0] != Equal {
@@ -199,15 +194,14 @@ func Floor(recipe Recipe, value Value, before uint) ([]EconomicValue, error) {
 		if err != nil {
 			return nil, err
 		}
-		_, hasRead, err := dependencies(recipe, []Value{a})
+		_, err = dependencies(recipe, []Value{a})
 		if err != nil {
 			return nil, err
 		}
-		read = read || hasRead
 		floors = append(floors, EconomicValue{Expression: a, Input: &index, Exact: exact})
 	}
-	if len(floors) == 0 || !read {
-		return nil, errors.New("minimum proceeds input lacks a recipe read-dependent lower bound")
+	if len(floors) == 0 {
+		return nil, errors.New("minimum proceeds input lacks a recipe lower bound")
 	}
 	return floors, nil
 }
@@ -247,7 +241,7 @@ func equalityAnchor(recipe Recipe, input Value, before uint) (Value, error) {
 	return result, nil
 }
 
-// ExactValue resolves deterministic nonfinancial values, including literal
+// ExactValue resolves deterministic recipe values, including literal
 // and constant-arithmetic results. Inputs require an exact preceding equality;
 // a ceiling never selects a request ID, epoch or other identity index.
 func ExactValue(recipe Recipe, value Value, before uint) (EconomicValue, error) {
@@ -255,7 +249,7 @@ func ExactValue(recipe Recipe, value Value, before uint) (EconomicValue, error) 
 	if err != nil {
 		return EconomicValue{}, err
 	}
-	if _, _, err = dependencies(recipe, []Value{economic.Expression}); err != nil {
+	if _, err = dependencies(recipe, []Value{economic.Expression}); err != nil {
 		return EconomicValue{}, err
 	}
 	return economic, nil
@@ -276,7 +270,7 @@ func exactSource(recipe Recipe, value Value, before uint) (EconomicValue, error)
 		}
 	}
 	if expression.Source != Result && expression.Source != Literal {
-		return EconomicValue{}, errors.New("nonfinancial value is not deterministic")
+		return EconomicValue{}, errors.New("recipe value is not deterministic")
 	}
 	if expression.Source == Result && (expression.Value == nil || !expression.Value.IsUint64() || expression.Value.Uint64() >= uint64(before)) {
 		return EconomicValue{}, errors.New("exact result must precede use")
@@ -288,75 +282,60 @@ func sameValue(a, b Value) bool {
 	return a.Source == b.Source && a.Value != nil && b.Value != nil && a.Value.Cmp(b.Value) == 0
 }
 
-// ReadDependent also rejects unknown inputs in the expression's read bindings.
-func ReadDependent(recipe Recipe, value Value) error {
-	_, read, err := dependencies(recipe, []Value{value})
-	if err != nil {
-		return err
-	}
-	if !read {
-		return errors.New("economic expression has no recipe read dependency")
-	}
-	return nil
-}
-
-func dependencies(recipe Recipe, values []Value) (map[uint]bool, bool, error) {
+func dependencies(recipe Recipe, values []Value) (map[uint]bool, error) {
 	needed := map[uint]bool{}
-	memo := map[uint]bool{}
 	inputMemo := map[[2]uint]bool{}
-	var visit func(Value, uint) (bool, error)
-	visit = func(v Value, before uint) (bool, error) {
+	var visit func(Value, uint) error
+	visit = func(v Value, before uint) error {
 		if v.Value == nil {
-			return false, errors.New("missing recipe operand")
+			return errors.New("missing recipe operand")
 		}
 		if v.Source == Literal {
-			return false, nil
+			return nil
 		}
 		if v.Source == Input {
 			if !v.Value.IsUint64() {
-				return false, errors.New("invalid recipe input index")
+				return errors.New("invalid recipe input index")
 			}
 			key := [2]uint{uint(v.Value.Uint64()), before}
-			if read, ok := inputMemo[key]; ok {
-				return read, nil
+			if inputMemo[key] {
+				return nil
 			}
 			economic, err := exactSource(recipe, v, before)
 			if err != nil {
-				return false, errors.New("recipe expression depends on an input without a preceding deterministic result source")
+				return errors.New("recipe expression depends on an input without a preceding deterministic result source")
 			}
-			read, err := visit(economic.Expression, before)
-			if err != nil {
-				return false, err
+			if err := visit(economic.Expression, before); err != nil {
+				return err
 			}
-			inputMemo[key] = read
-			return read, nil
+			inputMemo[key] = true
+			return nil
 		}
 		if v.Source != Result || !v.Value.IsUint64() || v.Value.Uint64() >= uint64(len(recipe.Steps)) || v.Value.Uint64() >= uint64(before) {
-			return false, errors.New("recipe result is not an earlier numerical step")
+			return errors.New("recipe result is not an earlier numerical step")
 		}
 		index := uint(v.Value.Uint64())
-		if read, ok := memo[index]; ok {
-			return read, nil
+		if needed[index] {
+			return nil
 		}
 		step := recipe.Steps[index]
 		if len(step) == 0 || step[0] > MulDiv {
-			return false, errors.New("recipe result is not numeric")
+			return errors.New("recipe result is not numeric")
 		}
 		needed[index] = true
 		var operands []Value
-		read := step[0] == Read
-		if read {
+		if step[0] == Read {
 			args, err := readArgs.Unpack(step[1:])
 			if err != nil {
-				return false, err
+				return err
 			}
 			query := args[0].(*big.Int)
 			if !query.IsUint64() || query.Uint64() >= uint64(len(recipe.Queries)) {
-				return false, errors.New("query index exceeds program")
+				return errors.New("query index exceeds program")
 			}
 			args, err = queryArgs.Unpack(recipe.Queries[query.Uint64()])
 			if err != nil {
-				return false, err
+				return err
 			}
 			for _, binding := range decodeBindings(args[2].([]*big.Int)) {
 				operands = append(operands, binding.Value)
@@ -368,31 +347,25 @@ func dependencies(recipe Recipe, values []Value) (map[uint]bool, bool, error) {
 			}
 			decoded, err := args.Unpack(step[1:])
 			if err != nil {
-				return false, err
+				return err
 			}
 			for _, raw := range decoded {
 				operands = append(operands, decodeValue(raw.(*big.Int)))
 			}
 		}
 		for _, operand := range operands {
-			hasRead, err := visit(operand, index)
-			if err != nil {
-				return false, err
+			if err := visit(operand, index); err != nil {
+				return err
 			}
-			read = read || hasRead
 		}
-		memo[index] = read
-		return read, nil
+		return nil
 	}
-	read := false
 	for _, value := range values {
-		hasRead, err := visit(value, uint(len(recipe.Steps)))
-		if err != nil {
-			return nil, false, err
+		if err := visit(value, uint(len(recipe.Steps))); err != nil {
+			return nil, err
 		}
-		read = read || hasRead
 	}
-	return needed, read, nil
+	return needed, nil
 }
 
 func EconomicResult(v EconomicValue, results map[uint]*big.Int) (*big.Int, error) {
@@ -435,35 +408,4 @@ func EconomicResult(v EconomicValue, results map[uint]*big.Int) (*big.Int, error
 		}
 	}
 	return x, nil
-}
-
-// ValidateMutableActions rejects artifact preimages that are not committed by
-// masks or explicit numerical bindings. Protocol providers validate their owned
-// action's mutable wire fields in RecipeRequirements before external I/O.
-func ValidateMutableActions(recipe Recipe, tree *Tree, owned map[string]bool) error {
-	actions, err := ManagedActions(recipe, tree)
-	if err != nil {
-		return err
-	}
-	for _, action := range actions {
-		if owned[action.Key] {
-			continue
-		}
-		for at, mask := range action.Leaf.DataMask {
-			if mask == 0 {
-				continue
-			}
-			covered := false
-			for _, binding := range action.Bindings {
-				if at >= int(binding.Offset) && at < int(binding.Offset)+32 {
-					covered = true
-					break
-				}
-			}
-			if !covered {
-				return errors.New("unowned managed action has mutable bytes without committed bindings")
-			}
-		}
-	}
-	return nil
 }

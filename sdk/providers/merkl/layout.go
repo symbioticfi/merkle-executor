@@ -38,8 +38,7 @@ type wordReference struct {
 }
 
 // claimLayoutOf follows the capability's committed CALL bindings through nested
-// execute inputs. Only cumulative/proof words may be exposed; every instruction,
-// query, recipient, root-stability check and ABI framing byte remains pinned by derive.
+// execute inputs so only the selected claim amount and proof words are filled.
 func claimLayoutOf(action recipes.ManagedAction, account common.Address) (*claimLayout, error) {
 	refs := map[int]wordReference{}
 	resolve := func(at int) (int, error) {
@@ -56,8 +55,8 @@ func claimLayoutOf(action recipes.ManagedAction, account common.Address) (*claim
 		return 0, errors.New("cyclic Merkl nested binding")
 	}
 	var result *claimLayout
-	var walk func(common.Address, []byte, int, int, *capabilityFrame) error
-	walk = func(target common.Address, data []byte, base, depth int, frame *capabilityFrame) error {
+	var walk func(common.Address, []byte, int, int) error
+	walk = func(target common.Address, data []byte, base, depth int) error {
 		if len(data) < 4 {
 			return nil
 		}
@@ -116,7 +115,7 @@ func claimLayoutOf(action recipes.ManagedAction, account common.Address) (*claim
 				}
 				result.proofs = append(result.proofs, offsets)
 			}
-			return validateClaimGuard(action, frame, result, account, resolve)
+			return nil
 		}
 		if target != account || !bytes.Equal(data[:4], guardedSelector) {
 			return nil
@@ -168,13 +167,13 @@ func claimLayoutOf(action recipes.ManagedAction, account common.Address) (*claim
 				}
 				refs[childBase+int(offset)] = ref
 			}
-			if err = walk(call[0].(common.Address), child, childBase, depth+1, &capabilityFrame{queries: args[0].([][]byte), steps: steps, inputs: inputs, inputBase: inputsArray, callIndex: i}); err != nil {
+			if err = walk(call[0].(common.Address), child, childBase, depth+1); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := walk(action.Leaf.Target, action.Leaf.Data, 0, 0, nil); err != nil {
+	if err := walk(action.Leaf.Target, action.Leaf.Data, 0, 0); err != nil {
 		return nil, err
 	}
 	return result, nil

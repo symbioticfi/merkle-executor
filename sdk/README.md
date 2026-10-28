@@ -28,7 +28,7 @@ Components require explicit construction. HTTP components accept a host credenti
 lookup function; `HTTPConfig.APIKeyEnv` is only a reference passed to that function. The host acquires credentials, chooses
 providers, installs telemetry and controls sender startup/shutdown, scheduling and
 store lifetime. Importing the SDK reads no environment and starts no service.
-Generic derivation of inputs without a host provider requires an exact read-dependent recipe result,
+Generic derivation of inputs without a host provider requires an exact deterministic recipe value, including a literal,
 bound directly or through an input equality. For example, `amount = min(balance,
 cap)` selects one amount; `amount <= balance` and `amount <= cap` do not. Bounds
 remain checks, and bounds-only inputs are rejected rather than filled by an
@@ -39,7 +39,7 @@ requires a provider. No on-chain recipe ABI or permission change is required.
 `recipes.ProbePrefix` replays an authenticated prefix at the original executor with
 host-owned eth_call-only code, then probes the resulting state. The shared prefix
 interpreter retains original caller/account identities and permission checks.
-Unresolved inputs and unprepared mutable actions fail closed. Its numerical
+Unresolved inputs fail before probing. Unchanged masked preimages come from the trusted curator artifact. Its numerical
 witnesses belong in `provider.Output.Results`; the planner merges them after all
 providers prepare and verifies them against full original execution, including on
 recovery. Protocol-specific probe code and admission policy live in isolated providers;
@@ -175,3 +175,9 @@ submission recovery, presend validation and provider advancement do not fetch a 
 tree. Hosts without a source load the local `keeper.Config.Tree`.
 Hosts must include source configuration and derived identities in their revision
 fingerprint. Recovery must preserve the identity of active jobs.
+
+Recipe guards belong to the curator. Merkl preparation locates cumulative amounts
+and proof words without reconstructing a canonical root/recipient/balance-check
+program. Generic assembly preserves permission masks and pinned bytes; the complete
+original contract simulation remains authoritative. `recipes.ValidateMutableActions`
+and `recipes.ReadDependent` have been removed. An unchanged masked template no longer needs a provider owner, and deterministic values need no READ ancestry.

@@ -49,19 +49,19 @@ func TestBudgetRequiresRecipeSelectedAmount(t *testing.T) {
 	}
 }
 
-func TestReadDependencyAnchoredInput(t *testing.T) {
+func TestReadBindingsRequireDeterminateInputs(t *testing.T) {
 	baseQuery := pack(t, queryArgs, testTarget, []byte{1, 2, 3, 4}, []*big.Int{}, big.NewInt(0))
 	boundQuery := pack(t, queryArgs, testTarget, make([]byte, 36), []*big.Int{binding(4, input(0))}, big.NewInt(0))
 	recipe := Recipe{Queries: [][]byte{baseQuery, boundQuery}, Steps: [][]byte{step(Read, pack(t, readArgs, big.NewInt(0))), step(Equal, pack(t, binaryArgs, input(0), result(0))), step(Read, pack(t, readArgs, big.NewInt(1)))}}
-	if err := ReadDependent(recipe, Value{Source: Result, Value: big.NewInt(2)}); err != nil {
+	if _, err := ExactValue(recipe, Value{Source: Result, Value: big.NewInt(2)}, 3); err != nil {
 		t.Fatal(err)
 	}
 	recipe.Steps[1] = step(LessOrEqual, pack(t, binaryArgs, input(0), result(0)))
-	if err := ReadDependent(recipe, Value{Source: Result, Value: big.NewInt(2)}); err == nil {
+	if _, err := ExactValue(recipe, Value{Source: Result, Value: big.NewInt(2)}, 3); err == nil {
 		t.Fatal("query accepted input with only an upper bound")
 	}
 	recipe.Steps[1] = step(LessOrEqual, pack(t, binaryArgs, result(0), input(0)))
-	if err := ReadDependent(recipe, Value{Source: Result, Value: big.NewInt(2)}); err == nil {
+	if _, err := ExactValue(recipe, Value{Source: Result, Value: big.NewInt(2)}, 3); err == nil {
 		t.Fatal("query accepted input without preceding exact equality")
 	}
 }
@@ -94,9 +94,9 @@ func TestDependencyDAGMemoizedAcrossInputAnchors(t *testing.T) {
 		r.Steps = append(r.Steps, step(Add, pack(t, binaryArgs, input(i), input(i))))
 		previous = int64(len(r.Steps) - 1)
 	}
-	needed, read, err := dependencies(r, []Value{{Source: Result, Value: big.NewInt(previous)}})
-	if err != nil || !read || len(needed) != 129 {
-		t.Fatalf("DAG dependencies=%d read=%v error=%v", len(needed), read, err)
+	needed, err := dependencies(r, []Value{{Source: Result, Value: big.NewInt(previous)}})
+	if err != nil || len(needed) != 129 {
+		t.Fatalf("DAG dependencies=%d error=%v", len(needed), err)
 	}
 }
 
@@ -110,26 +110,29 @@ func TestExactNonfinancialValues(t *testing.T) {
 	if err != nil || v.Int64() != 9 {
 		t.Fatalf("index=%v error=%v", v, err)
 	}
-	if _, err = Budget(r, Value{Source: Input, Value: big.NewInt(0)}, 2); err == nil {
-		t.Fatal("constant financial policy accepted")
+	if _, err = Budget(r, Value{Source: Input, Value: big.NewInt(0)}, 2); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestMutableUnknownActionRequiresBindings(t *testing.T) {
-	data := make([]byte, 68)
-	mask := make([]byte, 68)
-	for i := 36; i < len(mask); i++ {
-		mask[i] = 0xff
-	}
-	leaf := Leaf{Target: testTarget, Value: new(big.Int), Data: data, DataMask: mask}
-	leaf.Hash, _ = HashLeaf(leaf)
-	tree := &Tree{Root: leaf.Hash, Leaves: []Leaf{leaf}}
-	r := Recipe{Steps: [][]byte{manageStep(t, leaf.Hash, literal(1), nil)}}
-	if err := ValidateMutableActions(r, tree, nil); err == nil {
-		t.Fatal("artifact masked amount supplied policy")
-	}
-	r.Steps[0] = manageStep(t, leaf.Hash, literal(1), []*big.Int{binding(36, literal(17))})
-	if err := ValidateMutableActions(r, tree, nil); err != nil {
-		t.Fatal(err)
+func TestFixedRecipeAmounts(t *testing.T) {
+	for _, source := range []Value{{Source: Literal, Value: big.NewInt(17)}, {Source: Input, Value: big.NewInt(0)}} {
+		r := Recipe{Steps: [][]byte{step(Equal, pack(t, binaryArgs, input(0), literal(17)))}}
+		budget, err := Budget(r, source, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		amount, err := EconomicResult(budget, nil)
+		if err != nil || amount.Int64() != 17 {
+			t.Fatalf("fixed budget = %v, %v", amount, err)
+		}
+		floors, err := Floor(r, source, 1)
+		if err != nil || len(floors) != 1 {
+			t.Fatalf("fixed floor = %v, %v", floors, err)
+		}
+		amount, err = EconomicResult(floors[0], nil)
+		if err != nil || amount.Int64() != 17 {
+			t.Fatalf("fixed proceeds = %v, %v", amount, err)
+		}
 	}
 }

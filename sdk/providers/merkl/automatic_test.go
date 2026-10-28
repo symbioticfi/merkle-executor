@@ -58,10 +58,9 @@ func TestAutomaticOwnsAllFrontendGuardedClaims(t *testing.T) {
 	}
 }
 
-func TestAutomaticRejectsMutableFrontendGuard(t *testing.T) {
+func TestAutomaticPreservesCuratorMask(t *testing.T) {
 	s, r, tree := frontendClaims(t)
-	// Recommit the weakened mask so authentication succeeds and the provider's
-	// own identity/framing check is what rejects this permission.
+	// A broader permission mask does not change the bytes supplied by the provider.
 	leaf := tree.Leaves[0]
 	for _, candidate := range tree.Leaves {
 		if candidate.Target == s.Account {
@@ -88,8 +87,8 @@ func TestAutomaticRejectsMutableFrontendGuard(t *testing.T) {
 	r.Steps = [][]byte{bytes.Replace(managed, old[:], leaf.Hash[:], 1)}
 	p := &Automatic{deps: provider.Deps{Chain: reader(nil)}}
 	_, err = p.RecipeRequirements(s, r, tree)
-	if err == nil || !strings.Contains(err.Error(), "identity, guards and proof layout must be pinned") {
-		t.Fatalf("mutable guard accepted: %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -227,11 +226,10 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestAutomaticRejectsChangedCanonicalClaimGuard(t *testing.T) {
+func TestAutomaticUsesCuratorClaimGuard(t *testing.T) {
 	s, r, tree := frontendClaims(t)
-	// Even fully pinned alternative instructions cannot impersonate the supported
-	// root/recipient/ledger/cash guard wire format.
-	raw, _ := pairArguments.Pack(new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(18)), new(big.Int).Lsh(big.NewInt(2), 216))
+	// The curator can choose another comparison without changing claim fields.
+	raw, _ := layoutArgs("uint256", "uint256").Pack(new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(18)), new(big.Int).Lsh(big.NewInt(2), 216))
 	needle := append([]byte{recipes.Equal}, raw...)
 	actions, err := recipes.ManagedActions(r, tree)
 	if err != nil {
@@ -244,8 +242,8 @@ func TestAutomaticRejectsChangedCanonicalClaimGuard(t *testing.T) {
 	}
 	action.Leaf.Data[at] = recipes.LessOrEqual
 	_, err = claimLayoutOf(action, s.Account)
-	if err == nil || !strings.Contains(err.Error(), "atomic claim guard instructions") {
-		t.Fatalf("changed guard accepted: %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

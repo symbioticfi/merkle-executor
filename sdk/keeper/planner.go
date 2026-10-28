@@ -134,9 +134,6 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 			if err = ValidateRecipeComposition(recipe, tree, requirements); err != nil {
 				return nil, nil, err
 			}
-			if err = recipes.ValidateMutableActions(recipe, tree, actionOwners); err != nil {
-				return nil, nil, err
-			}
 			anchors, err = recipes.AnchoredInputs(recipe, owned)
 			if err != nil {
 				return nil, nil, err

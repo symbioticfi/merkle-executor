@@ -26,9 +26,9 @@ one serialized transaction sender. [Design and comparison](docs/DESIGN.md).
 The transaction engine supports the current Solidity interpreter's operations;
 automatic preparation rejects recipes whose runtime data cannot be determined from
 authenticated instructions, permission fields and numeric results. Off-chain trade
-providers require pinned token pairs and read-derived amounts and minimum proceeds.
+providers decode token pairs, amounts and minimum proceeds from the authorized recipe.
 The recipe must select each amount explicitly: bind a result such as
-`min(balance, cap)` directly, or require an input to equal that result before use.
+`min(balance, cap)` or a literal directly, or require an input to equal that value before use.
 Upper/lower bounds validate a selected amount; automatic preparation never chooses
 the largest permitted value. External quotes may improve on a recipe's minimum
 proceeds while remaining subject to its checks.

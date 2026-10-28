@@ -27,9 +27,6 @@ func ProbePrefix(ctx context.Context, reader provider.Reader, snapshot Snapshot,
 	if err != nil {
 		return nil, nil, err
 	}
-	if err = validateProbeActions(prefix, runtime); err != nil {
-		return nil, nil, err
-	}
 	override, ok := reader.(provider.CodeOverrideReader)
 	if !ok {
 		return nil, nil, errors.New("recipe probe requires RPC code-override support")
@@ -94,10 +91,7 @@ func ValidateProbePrefix(recipe Recipe, before uint, runtime PrefixRuntime) erro
 	if err != nil {
 		return err
 	}
-	if err = ValidatePrefix(prefix, expressions, runtime); err != nil {
-		return err
-	}
-	return validateProbeActions(prefix, runtime)
+	return ValidatePrefix(prefix, expressions, runtime)
 }
 func probePrefix(recipe Recipe, before uint) (Recipe, []Value, error) {
 	if before > uint(len(recipe.Steps)) {
@@ -115,15 +109,4 @@ func probePrefix(recipe Recipe, before uint) (Recipe, []Value, error) {
 		}
 	}
 	return prefix, expressions, nil
-}
-
-func validateProbeActions(prefix Recipe, runtime PrefixRuntime) error {
-	if runtime.Tree == nil {
-		return nil
-	}
-	owned := map[string]bool{}
-	for key := range runtime.Actions {
-		owned[key] = true
-	}
-	return ValidateMutableActions(prefix, runtime.Tree, owned)
 }
