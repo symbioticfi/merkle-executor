@@ -37,7 +37,7 @@ func ValidatePrefix(recipe Recipe, expressions []Value, runtime PrefixRuntime) e
 
 func buildPrefix(recipe Recipe, expressions []Value, runtime PrefixRuntime) (prefixProgram, error) {
 	p := prefixProgram{anchors: map[uint]Value{}}
-	needed, _, err := dependencies(recipe, expressions)
+	needed, err := dependencies(recipe, expressions)
 	if err != nil {
 		return p, err
 	}
@@ -75,7 +75,7 @@ func buildPrefix(recipe Recipe, expressions []Value, runtime PrefixRuntime) (pre
 				if expression.Source == Result && expression.Value.Uint64() >= uint64(before) {
 					return errors.New("unsupported prefix: input source is a future result")
 				}
-				dependencies, _, e := dependencies(recipe, []Value{expression})
+				dependencies, e := dependencies(recipe, []Value{expression})
 				if e != nil {
 					return e
 				}
@@ -86,7 +86,7 @@ func buildPrefix(recipe Recipe, expressions []Value, runtime PrefixRuntime) (pre
 			p.anchors[index] = economic.Expression
 			return nil
 		}
-		dependencies, _, e := dependencies(recipe, []Value{v})
+		dependencies, e := dependencies(recipe, []Value{v})
 		if e != nil {
 			return e
 		}

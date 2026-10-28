@@ -166,7 +166,7 @@ func equalBytes(a, b []byte) bool {
 }
 
 // AnchoredInputs fills deterministic non-provider inputs. A recipe comparison
-// must uniquely equate the input to a read-dependent numerical expression.
+// must uniquely equate the input to a deterministic numerical expression.
 func AnchoredInputs(recipe Recipe, owned map[uint]bool) (map[uint]EconomicValue, error) {
 	inspection, err := Inspect(recipe)
 	if err != nil {

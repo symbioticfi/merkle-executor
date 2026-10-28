@@ -12,7 +12,7 @@ Input 0 supplies borrowing **capacity**, in raw debt-asset units. The committed
 recipe chooses the actual amount with its `Min` chain and policy debt headroom.
 Input 0 must occur once as a direct operand of that chain; other Inputs still
 require generic exact recipe sources. Multiple capacity groups, effects between
-sizing and borrowing, unprepared mutable prefix actions and unresolved prefix
+sizing and borrowing, and unresolved prefix
 inputs fail before network I/O. There is no amount or deployment configuration.
 
 The provider replays the authenticated supply prefix in one same-executor

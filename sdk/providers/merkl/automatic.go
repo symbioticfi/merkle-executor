@@ -62,7 +62,6 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 			return nil, errors.New("Merkl claim value must be zero")
 		}
 		cfg := Config{HTTP: rewardHTTP(), Multicall3: protocolio.StandardMulticall3, Distributor: layout.distributor.Hex(), Action: action.Key, CalldataBytes: len(layout.data), MinClaimable: "1", DirectRecipient: layout.direct, AllowIdle: true}
-		allowed := map[int]bool{}
 		fields := map[int]bool{}
 		for i, token := range layout.tokens {
 			identity := cfg.Distributor + token.Hex()
@@ -80,16 +79,6 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 					return nil, errors.New("Merkl claim fields alias the same input word")
 				}
 				fields[at] = true
-				for n := at; n < at+32; n++ {
-					allowed[n] = true
-				}
-			}
-		}
-		for i := range action.Leaf.Data {
-			if !allowed[i] {
-				if err := action.Pinned(i, 1); err != nil {
-					return nil, errors.New("Merkl claim identity, guards and proof layout must be pinned")
-				}
 			}
 		}
 		requirements := keeper.RecipeRequirements{Actions: []string{action.Key}}
@@ -101,9 +90,6 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 			case recipes.Input:
 				requirements.Inputs = append(requirements.Inputs, uint(b.Value.Value.Uint64()))
 			case recipes.Result:
-				if err := recipes.ReadDependent(r, b.Value); err != nil {
-					return nil, err
-				}
 				requirements.Values = append(requirements.Values, b.Value)
 			case recipes.Literal:
 			default:

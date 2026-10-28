@@ -33,33 +33,19 @@ metadata does not authorize a target, token or numerical mapping. Recipes, masks
 targets, proofs, steps and bindings remain immutable. Providers only fill the
 runtime data those bytes authorize. [Permission schema](../sdk/schemas/CURATOR_PERMISSIONS.md).
 
-Protocol token pairs, recipients, domain/type identifiers and ABI framing must be
-fully pinned. A sign binding must cover an entire supported numeric word. A trade
-amount directly bound to a numeric Result must have a READ dependency. An Input
-requires a preceding exact equality to a READ-derived result. The recipe must
-express its selection with arithmetic such as `min(balance, cap)`; upper bounds
-alone leave the amount unspecified and are rejected. Literal caps and arithmetic
-multipliers are allowed inside read-dependent expressions. The exact
-selected amount must satisfy every applicable lower/upper bound before quotes.
+Providers decode the supported authorization ABI and fill its runtime fields.
+The recipe selects an exact trade amount through a literal, a deterministic Result,
+or an Input equality. Upper bounds alone leave the amount unspecified. Minimum
+proceeds may likewise be fixed or computed; a quote may improve on a lower bound,
+while an exact binding must match the signed value. These rules determine the data
+to request; they add no READ-ancestry policy to the curator's choices.
 
-Minimum proceeds require READ ancestry too. A dynamic quote Input can exceed the
-maximum of all preceding lower floors, including literal floors when another floor
-is READ-derived. A direct Result or equality-bound floor must exactly match the
-selected signed value. Providers never change bindings to make a quote fit. Pure
-constant numeric Results may supply nonfinancial fields such as expiry/hash/index;
-they still must exactly match the persisted wire bytes. Claim indexes require an
-exact deterministic source, and never select an index from a ceiling.
-
-Examples rejected before protocol HTTP include an unpinned token or recipient,
-a financial Input without an exact result equality, literal-only financial policy, ambiguous
-ownership, overlapping/partial bindings and masked bytes in an unknown managed
-action that have neither a committed full-word binding nor an owning automatic
-provider. A curator artifact's masked preimage does not select an amount. Fully
-pinned static Manage actions remain usable. Input indexes are bounded to 0..4095.
-
-These numerical anchoring rules apply to the native input resolver and
-read-budgeted order providers. Merkl proof witnesses follow their owning provider
-policy below, with the original contract checks preserved.
+Unchanged masked preimages are trusted curator data and do not require an automatic
+provider owner. Actual replacements still preserve the permission's pinned bytes,
+targets, masks and proofs. Merkl preparation locates claim amount/proof fields
+without proving one canonical guard program. Complete original execution simulation
+checks the committed contract behavior before sending. Inputs remain bounded to
+0..4095, and unknown runtime values still require a source.
 
 ## Aave V3 capacity
 
@@ -82,7 +68,7 @@ transaction before signing.
 
 Use Result bindings directly for values computed by the recipe. When a runtime
 Input is needed, give it an exact deterministic recipe constraint that generic
-`keeper.NewRecipeInputs()` can resolve. Financial Inputs must equal a READ-derived
+`keeper.NewRecipeInputs()` can resolve. Financial Inputs must equal a deterministic
 expression; an upper/lower bound does not select a value. A request ID must be a
 committed value or be derived exactly from recipe reads/results. The keeper does
 not enumerate an issuer ledger or choose a request from an allowed range.

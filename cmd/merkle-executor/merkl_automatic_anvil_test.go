@@ -166,6 +166,24 @@ func TestAnvilAutomaticMerklClaimFeedsRecipeBalance(t *testing.T) {
 	if err != nil || new(big.Int).SetBytes(balance).Sign() != 0 {
 		t.Fatal("lens changed local chain state")
 	}
+	// An unbound masked amount can be a fixed curator-supplied preimage.
+	// Permission hashing excludes this amount; the original root/proof stays valid.
+	entries[1].(map[string]any)["data"] = hexutil.Encode(tokenABI.PackTransfer(recipient, big.NewInt(17)))
+	permission, err = json.Marshal(map[string]any{"root": root.Hex(), "chainId": 31337, "account": account.Hex(), "leaves": entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	permission = servicePermissionCertificate(t, permission, account, account)
+	recipe.Steps[4] = issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{leaves[1].Hash}, [][]*big.Int{{}})
+	serviceSeedTransaction(t, ctx, client, owner, &target, eABI.PackSetRecipe(recipe.Queries, recipe.Steps))
+	output.Reset()
+	if err = runBotWithHTTP(ctx, path, true, true, &output, httpClient); err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
+		t.Fatal(err)
+	}
+	plan = plans[cfg.Strategies[0]]
 	serviceSeedTransaction(t, ctx, client, owner, &target, plan.Calldata)
 	for address, want := range map[common.Address]int64{account: 83, recipient: 17} {
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: tokenABI.PackBalanceOf(address)}, nil)
@@ -173,16 +191,4 @@ func TestAnvilAutomaticMerklClaimFeedsRecipeBalance(t *testing.T) {
 			t.Fatalf("balance differs from prepared effects: %v", e)
 		}
 	}
-	// Removing the transfer binding leaves a masked artifact preimage rather than
-	// committed amount policy. Reject before the unrelated Merkl rewards fetch.
-	recipe.Steps[4] = issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{leaves[1].Hash}, [][]*big.Int{{}})
-	serviceSeedTransaction(t, ctx, client, owner, &target, eABI.PackSetRecipe(recipe.Queries, recipe.Steps))
-	previousFetches := rewardsHTTP.Load()
-	if err = runBotWithHTTP(ctx, path, true, true, new(bytes.Buffer), httpClient); err == nil {
-		t.Fatal("normal daemon accepted uncommitted masked amount")
-	}
-	if rewardsHTTP.Load() != previousFetches {
-		t.Fatal("invalid recipe reached Merkl HTTP")
-	}
-
 }
