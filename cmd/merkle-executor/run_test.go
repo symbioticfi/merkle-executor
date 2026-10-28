@@ -193,6 +193,7 @@ func serviceSeedTransaction(t *testing.T, ctx context.Context, client *ethclient
 			if receipt.Status != types.ReceiptStatusSuccessful {
 				t.Fatal("local fixture setup reverted")
 			}
+			rememberSeededEvents(client, receipt)
 			return receipt
 		}
 		if !errors.Is(err, ethereum.NotFound) {
@@ -270,6 +271,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 
 	directory := t.TempDir()
 	cfg := testCLIConfig(directory)
+	cfg.IndexerURL = fixtureIndexer(t, client)
 	cfg.Mode, cfg.Chain.RPCURL, cfg.Signer.Address = "send", endpoint, caller.Hex()
 	cfg.Strategies[0] = strings.ToLower(executorAddress.Hex())
 	permission, err := json.Marshal(map[string]any{"root": leaf.Hash.Hex(), "chainId": 31337, "adapter": recipient.Hex(), "vault": owner.Hex(), "actions": []any{}, "leaves": []any{map[string]any{"hash": leaf.Hash.Hex(), "target": tokenAddress.Hex(), "value": "zero", "data": hexutil.Encode(transfer), "dataMask": hexutil.Encode(mask), "proof": []string{}}}})

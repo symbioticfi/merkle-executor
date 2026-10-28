@@ -26,6 +26,7 @@ import (
 func testCLIConfig(directory string) config.Config {
 	return config.Config{
 		Mode:       "simulate",
+		IndexerURL: "http://127.0.0.1:1",
 		Curator:    config.Curator{URL: "http://127.0.0.1:1/api/v1"},
 		Chain:      config.Chain{ChainID: 31337, RPCURL: "http://127.0.0.1:1"},
 		Signer:     config.Signer{Address: common.HexToAddress("0xabcd").Hex(), KeyEnv: "MERKLE_CLI_TEST_KEY"},

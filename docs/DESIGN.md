@@ -7,7 +7,7 @@ permission package, simulates the exact transaction and manages its lifecycle.
 
 ## Boundaries
 
-- SDK `recipes`: ABI codec, SetRecipe discovery, tree/role validation and runtime assembly.
+- SDK `recipes`: ABI codec, indexed SetRecipe discovery, tree/role validation and runtime assembly.
 - SDK `provider`: integration-neutral snapshots, runtime outputs and asynchronous progress.
   Hosts supply explicit chain/HTTP dependencies and select providers at startup.
 - SDK `providers`: CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs, selected
@@ -185,3 +185,12 @@ Global recovery/state failures emit one sanitized keeper error and an iteration
 metric with `strategy="_global"`, `outcome="error"`. Strategy errors retain their
 own observations without a duplicate global event. Recovery failures remain
 retryable and never trigger submission on the failing iteration.
+
+
+Runtime discovery never scans blockchain logs. The RFQ indexer owns SetRecipe,
+Reactor Fill and InvalidateNonce event ingestion and canonical rollback. Hosts
+must provide its service URL and an indexed publication source. SDK discovery
+binds original indexed recipe bytes to live executor hash/block getters and
+canonical headers. Liquid Lane reconciles bounded indexed event ranges with
+explicit canonical coverage, then verifies successful receipt evidence before
+settlement; incomplete index coverage leaves the durable cursor unchanged.

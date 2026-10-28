@@ -231,6 +231,7 @@ func runFrontendGuardedMerkl(t *testing.T, native bool) {
 	rewrite, _ := url.Parse(rewardServer.URL)
 	httpClient := &http.Client{Transport: serviceRewriteTransport{host: "api.merkl.xyz", target: rewrite}}
 	cfg := testCLIConfig(t.TempDir())
+	cfg.IndexerURL = fixtureIndexer(t, client)
 	cfg.Mode = "simulate"
 	cfg.Chain.RPCURL = endpoint
 	cfg.Curator.URL = curator.URL

@@ -251,6 +251,7 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	}))
 	defer curator.Close()
 	cfg := testCLIConfig(t.TempDir())
+	cfg.IndexerURL = fixtureIndexer(t, client)
 	cfg.Mode, cfg.Chain.ChainID, cfg.Chain.RPCURL = "send", 1, endpoint
 	cfg.Signer.Address = caller.Hex()
 	cfg.Curator.URL = curator.URL + "/api/v1"
