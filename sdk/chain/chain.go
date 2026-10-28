@@ -15,9 +15,12 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
 type Client struct {
+	RecipePublications recipes.PublicationSource
 	*ethclient.Client
 	write     *ethclient.Client
 	http      *http.Client
@@ -122,9 +125,12 @@ func (c *Client) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Hea
 	return value, rpcFailure("read header by hash", err)
 }
 
-func (c *Client) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
-	value, err := c.Client.FilterLogs(ctx, query)
-	return value, rpcFailure("read event logs", err)
+// FilterLogs rejects runtime event scans before contacting RPC.
+func (c *Client) FilterLogs(ctx context.Context, _ ethereum.FilterQuery) ([]types.Log, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, protocolio.ErrLogScan
 }
 
 func (c *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64, error) {
@@ -201,4 +207,12 @@ func (c *Client) BalanceAt(ctx context.Context, account common.Address, block *b
 }
 func (c *Client) ReadBalanceAt(ctx context.Context, account common.Address) (*big.Int, error) {
 	return c.BalanceAt(ctx, account, nil)
+}
+
+// RecipePublication delegates to an indexed source and never scans RPC logs.
+func (c *Client) RecipePublication(ctx context.Context, executor common.Address, hash common.Hash, block uint64) (recipes.Publication, error) {
+	if c.RecipePublications == nil {
+		return recipes.Publication{}, errors.New("indexed recipe publication source required")
+	}
+	return c.RecipePublications.RecipePublication(ctx, executor, hash, block)
 }

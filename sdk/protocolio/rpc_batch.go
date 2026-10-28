@@ -55,6 +55,9 @@ func CallHTTPBatch(ctx context.Context, client *http.Client, endpoint string, ba
 	}
 	messages := make([]batchMessage, len(batch))
 	for i, element := range batch {
+		if element.Method == "eth_getLogs" {
+			return ErrLogScan
+		}
 		messages[i] = batchMessage{JSONRPC: "2.0", ID: uint64(i + 1), Method: element.Method, Params: element.Args}
 	}
 	body, err := json.Marshal(messages)
@@ -118,6 +121,11 @@ func CallHTTPBatch(ctx context.Context, client *http.Client, endpoint string, ba
 }
 
 func (r RPCBatchReader) BatchRead(ctx context.Context, requests []ReadRequest) ([]ReadResult, error) {
+	for _, request := range requests {
+		if request.Kind == ReadLogs {
+			return nil, ErrLogScan
+		}
+	}
 	if r.Call == nil {
 		return nil, errors.New("RPC batch transport required")
 	}
@@ -186,11 +194,7 @@ func (r RPCBatchReader) readChunk(ctx context.Context, requests []ReadRequest) (
 		case ReadHeader:
 			call = rpc.BatchElem{Method: "eth_getBlockByNumber", Args: []any{BlockArgument(request.Block), false}, Result: &results[i].Header}
 		case ReadLogs:
-			filter, err := filterArgument(request.Filter)
-			if err != nil {
-				return nil, err
-			}
-			call = rpc.BatchElem{Method: "eth_getLogs", Args: []any{filter}, Result: &results[i].Logs}
+			return nil, ErrLogScan
 		case ReadReceipt:
 			call = rpc.BatchElem{Method: "eth_getTransactionReceipt", Args: []any{request.Hash}, Result: &results[i].Receipt}
 		default:
@@ -278,28 +282,6 @@ func CallArgument(msg ethereum.CallMsg) map[string]any {
 		arg["authorizationList"] = msg.AuthorizationList
 	}
 	return arg
-}
-func filterArgument(query ethereum.FilterQuery) (map[string]any, error) {
-	arg := map[string]any{}
-	if len(query.Addresses) > 0 {
-		arg["address"] = query.Addresses
-	}
-	if query.Topics != nil {
-		arg["topics"] = query.Topics
-	}
-	if query.BlockHash != nil {
-		if query.FromBlock != nil || query.ToBlock != nil {
-			return nil, errors.New("log filter mixes hash and block range")
-		}
-		arg["blockHash"] = query.BlockHash
-	} else {
-		arg["fromBlock"] = "0x0"
-		if query.FromBlock != nil {
-			arg["fromBlock"] = BlockArgument(query.FromBlock)
-		}
-		arg["toBlock"] = BlockArgument(query.ToBlock)
-	}
-	return arg, nil
 }
 
 // RPCBatchCall sends one bounded array and reports each member in its own Result.

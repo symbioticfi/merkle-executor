@@ -103,3 +103,11 @@ func TestReadGroupBoundsRequestsAndNeverRetriesFailedBatch(t *testing.T) {
 		})
 	}
 }
+
+func TestSingleReadGroupRejectsLogsBeforeAnyCalls(t *testing.T) {
+	reader := &singleBatchFixture{}
+	requests := append(batchRequests(2), ReadRequest{Kind: ReadLogs})
+	if result, err := ReadGroup(t.Context(), reader, requests...); !errors.Is(err, ErrLogScan) || result != nil || reader.calls != 0 {
+		t.Fatalf("single-read log scan escaped: %d %v", reader.calls, err)
+	}
+}

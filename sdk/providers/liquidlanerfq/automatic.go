@@ -33,7 +33,7 @@ type recipeRequest struct {
 
 func NewAutomatic(deps provider.Deps) (provider.Provider, error) {
 	if _, ok := deps.Chain.(chainReader); !ok {
-		return nil, errors.New("automatic RFQ requires contract, log, receipt and header reads")
+		return nil, errors.New("automatic RFQ requires contract, receipt and header reads")
 	}
 	return &Automatic{deps: deps}, nil
 }

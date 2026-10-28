@@ -42,7 +42,6 @@ type Config struct {
 }
 type chainReader interface {
 	provider.Reader
-	provider.LogReader
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 	TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)
 }
@@ -50,6 +49,7 @@ type Provider struct {
 	cfg                                  Config
 	chain                                chainReader
 	http                                 *protocolio.Client
+	indexer                              *protocolio.Client
 	reactor, protocol, tokenIn, tokenOut common.Address
 	amount, minimum                      *big.Int
 }
@@ -133,9 +133,13 @@ func New(c Config, deps provider.Deps) (*Provider, error) {
 	}
 	var ok bool
 	if p.chain, ok = deps.Chain.(chainReader); !ok {
-		return nil, errors.New("RFQ requires contract, log, receipt and canonical header reads")
+		return nil, errors.New("RFQ requires contract, receipt and canonical header reads")
 	}
 	p.http, err = protocolio.NewHTTP(c.HTTP, deps.HTTP, deps.LookupSecret)
+	if err != nil {
+		return nil, err
+	}
+	p.indexer, err = protocolio.NewHTTP(protocolio.HTTPConfig{URL: deps.IndexerURL}, deps.HTTP, nil)
 	return p, err
 }
 func (p *Provider) PlanPreparation(pin protocolio.PreparationPin) (protocolio.PreparationPlan, error) {

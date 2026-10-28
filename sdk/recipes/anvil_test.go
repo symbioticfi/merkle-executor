@@ -210,10 +210,10 @@ func TestAnvilFullExecute(t *testing.T) {
 		step(Read, pack(t, readArgs, big.NewInt(0))),
 		step(Equal, pack(t, binaryArgs, result(7), result(2))),
 	}}
-	localTransaction(t, ctx, client, sender, &executorAddress, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
+	publication := localTransaction(t, ctx, client, sender, &executorAddress, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
 	transferred := int64(0)
 	for _, amount := range []int64{17, 23} {
-		snapshot, recovered, err := Discover(ctx, client, executorAddress, nil)
+		snapshot, recovered, err := Discover(ctx, indexedAnvilReader{client, publication}, executorAddress, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -286,8 +286,8 @@ func TestAnvilFullExecute(t *testing.T) {
 		tree := &Tree{Root: leaf.Hash, Leaves: []Leaf{leaf}}
 		localTransaction(t, ctx, client, sender, &accountAddress, fixtureCalldata(t, accountContract, "configure", tree.Root, [][32]byte{leaf.Hash}, executorAddress))
 		recipe := Recipe{Steps: [][]byte{step(Approve, pack(t, approveArgs, input(0), tokenAddress, spender, leaf.Hash))}}
-		localTransaction(t, ctx, client, sender, &executorAddress, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
-		snapshot, recovered, err := Discover(ctx, client, executorAddress, nil)
+		publication := localTransaction(t, ctx, client, sender, &executorAddress, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
+		snapshot, recovered, err := Discover(ctx, indexedAnvilReader{client, publication}, executorAddress, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -382,4 +382,23 @@ func TestAnvilPackedValues(t *testing.T) {
 	if marker := fixtureRead(t, ctx, client, tokenContract, token, "marker")[0].(*big.Int); marker.Cmp(maximum) != 0 {
 		t.Fatal("binding truncated full uint256 result")
 	}
+}
+
+type indexedAnvilReader struct {
+	*ethclient.Client
+	receipt *types.Receipt
+}
+
+func (r indexedAnvilReader) RecipePublication(_ context.Context, a common.Address, h common.Hash, b uint64) (Publication, error) {
+	for _, l := range r.receipt.Logs {
+		if l == nil || l.Address != a || l.BlockNumber != b || len(l.Topics) != 2 || l.Topics[0] != executorABI.GetABI().Events["SetRecipe"].ID || l.Topics[1] != h {
+			continue
+		}
+		e, err := executorABI.UnpackSetRecipeEvent(l)
+		if err != nil {
+			return Publication{}, err
+		}
+		return Publication{Executor: a, RecipeHash: h, BlockNumber: b, BlockHash: l.BlockHash, TransactionHash: l.TxHash, LogIndex: l.Index, Recipe: Recipe{Queries: e.Queries, Steps: e.Steps}}, nil
+	}
+	return Publication{}, errors.New("publication not indexed")
 }
