@@ -26,7 +26,6 @@ import (
 	multicall "github.com/symbioticfi/merkle-executor/sdk/bindings/multicall3"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/chain"
-	"github.com/symbioticfi/merkle-executor/sdk/indexer"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -162,10 +161,6 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 		t.Fatal(err)
 	}
 	defer batched.Close()
-	batched.RecipePublications, err = indexer.New(fixtureIndexer(t, client), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	reset := func() {
 		mu.Lock()
 		defer mu.Unlock()
@@ -191,14 +186,15 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 			if !bytes.Equal(current.Calldata, plan.Calldata) || !reflect.DeepEqual(current.Leaves, plan.Leaves) {
 				t.Fatal("warm cache/head advance changed authorized bytes or leaves")
 			}
-			wantRequests, wantArrays, wantMethods := 6, 5, 8
+			wantRequests, wantArrays, wantMethods := 6, 5, 9
 			wantAggregates := []int{5, 7}
 			if advanced {
-				wantMethods, wantAggregates = 10, []int{5, 5, 2}
+				wantMethods, wantAggregates = 11, []int{5, 5, 2}
 			}
 			if warm {
 				wantRequests--
 				wantArrays--
+				wantMethods--
 			}
 			mu.Lock()
 			if requests != wantRequests || arrays != wantArrays || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, wantAggregates) {

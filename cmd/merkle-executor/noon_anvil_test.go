@@ -190,7 +190,6 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	}))
 	defer rpc.Close()
 	cfg := testCLIConfig(t.TempDir())
-	cfg.IndexerURL = fixtureIndexer(t, client)
 	cfg.Mode = "send"
 	cfg.Chain.ChainID = 1
 	cfg.Chain.RPCURL = rpc.URL

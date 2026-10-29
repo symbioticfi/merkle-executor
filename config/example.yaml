@@ -1,4 +1,3 @@
-indexerUrl: https://rfq-indexer.example
 # Replace the endpoint, chain identity and executor with your deployment.
 # This example validates without RPC access or reading a private key.
 mode: simulate

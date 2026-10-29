@@ -148,6 +148,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
 	var curatorCalls, quotes, gets, posts atomic.Int32
 	var accepted atomic.Bool
+	var fillHash atomic.Pointer[string]
 	permission := []any{}
 	for _, leaf := range leaves {
 		permission = append(permission, map[string]any{"hash": leaf.Hash.Hex(), "target": leaf.Target.Hex(), "value": "zero", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": []string{leaf.Proof[0].Hex()}})
@@ -190,7 +191,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 			}
 			orders := []wire.RfqOrder{}
 			if accepted.Load() {
-				orders = append(orders, wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: "filled", QuoteID: quoteID, Swapper: account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: tokenIn.Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: tokenOut.Hex(), Amount: "950", Recipient: account.Hex()}}})
+				orders = append(orders, wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: "filled", TxHash: fillHash.Load(), QuoteID: quoteID, Swapper: account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: tokenIn.Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: tokenOut.Hex(), Amount: "950", Recipient: account.Hex()}}})
 			}
 			_ = json.NewEncoder(w).Encode(wire.RfqOrdersResponse{Orders: orders, Cursor: json.RawMessage("null")})
 		case "/api/v1/order":
@@ -209,7 +210,6 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	defer api.Close()
 	directory := t.TempDir()
 	cfg := testCLIConfig(directory)
-	cfg.IndexerURL = fixtureIndexer(t, client)
 	cfg.Mode = "send"
 	cfg.Chain.RPCURL = endpoint
 	cfg.Signer.Address = caller.Hex()
@@ -284,7 +284,9 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 		t.Fatal("recipe did not authorize exact Reactor allowance", e)
 	}
 	order := reactor.IReactorOrder{Request: request, Swapper: account, SwapperSignature: []byte{0}, Filler: owner, Outputs: []reactor.IReactorOutput{{Token: tokenOut, Amount: big.NewInt(950), Recipient: account}}}
-	serviceSeedTransaction(t, ctx, client, owner, &reactorAddress, servicePack(t, reactorArtifact, "fill", order))
+	fill := serviceSeedTransaction(t, ctx, client, owner, &reactorAddress, servicePack(t, reactorArtifact, "fill", order))
+	hash := fill.TxHash.Hex()
+	fillHash.Store(&hash)
 	for range 3 {
 		if err = client.Client().CallContext(ctx, nil, "evm_mine"); err != nil {
 			t.Fatal(err)

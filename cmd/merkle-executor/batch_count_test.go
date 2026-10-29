@@ -21,7 +21,6 @@ import (
 	multicall "github.com/symbioticfi/merkle-executor/sdk/bindings/multicall3"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/chain"
-	"github.com/symbioticfi/merkle-executor/sdk/indexer"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
@@ -47,6 +46,12 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 	}
 	headers := map[uint64]*types.Header{11: {Number: big.NewInt(11), Difficulty: new(big.Int), Time: 1000}, 12: {Number: big.NewInt(12), Difficulty: new(big.Int), Time: 1001}, 13: {Number: big.NewInt(13), Difficulty: new(big.Int), Time: 1002}}
 	eABI := executor.NewRecipeExecutor().GetABI()
+	event := eABI.Events["SetRecipe"]
+	eventData, err := event.Inputs.NonIndexed().Pack(recipe.Queries, recipe.Steps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := types.Log{Address: target, Topics: []common.Hash{event.ID, recipeHash}, Data: eventData, BlockNumber: 11, BlockHash: headers[11].Hash()}
 	var contract func(common.Address, []byte) []byte
 	contract = func(to common.Address, data []byte) []byte {
 		if to == aggregate {
@@ -161,7 +166,7 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 				}
 				value = headers[n]
 			case "eth_getLogs":
-				t.Fatal("request-time log scan")
+				value = []types.Log{log}
 
 			case "eth_call":
 				var call struct {
@@ -197,18 +202,6 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer backend.Close()
-	indexed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/recipes/"+target.Hex() || r.URL.Query().Get("hash") != recipeHash.Hex() || r.URL.Query().Get("block") != "11" {
-			t.Error("unbound recipe query")
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"executor": target, "recipeHash": recipeHash, "blockNumber": "11", "blockHash": headers[11].Hash(), "transactionHash": common.HexToHash("0x1234"), "logIndex": 0, "queries": []hexutil.Bytes{}, "steps": []hexutil.Bytes{recipe.Steps[0]}})
-	}))
-	defer indexed.Close()
-	backend.RecipePublications, err = indexer.New(indexed.URL, indexed.Client())
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	cfg := merkl.Config{HTTP: protocolio.HTTPConfig{URL: rewards.URL}, Distributor: dist.Hex(), Multicall3: aggregate.Hex(), Tokens: []string{token.Hex()}, ProofLengths: []int{0}, Action: "0:0", CalldataBytes: len(claim), MinClaimable: "1"}
 	p, err := merkl.New(cfg, provider.Deps{Chain: backend, HTTP: rewards.Client()})
 	if err != nil {
@@ -233,13 +226,13 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 					simulationBlock = `"0xc"`
 					requests, arrays, methods = 0, 0, 0
 					plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []provider.Provider{p}})
-					wantMethods := 9
+					wantMethods := 10
 					if advanced {
-						wantMethods = 11
+						wantMethods = 12
 					}
 					wantRequests, wantArrays := 6, 5
 					if warm {
-						wantRequests, wantArrays = 5, 4
+						wantRequests, wantArrays, wantMethods = 5, 4, wantMethods-1
 					}
 					if err != nil || requests != wantRequests || arrays != wantArrays || methods != wantMethods || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0].Actions["0:0"], claim) {
 						t.Fatalf("Merkl Prepare requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)

@@ -1,7 +1,7 @@
 # Merkle executor
 
 A Go keeper for curator-committed `RecipeExecutor` strategies. It discovers the
-current indexed `SetRecipe`, assembles runtime calldata from the active permission tree,
+current `SetRecipe`, assembles runtime calldata from the active permission tree,
 resolves authorized runtime inputs and off-chain protocol data, simulates the
 complete call and optionally sends it.
 
@@ -260,15 +260,3 @@ The curator route is verified against source and local fixtures; its availabilit
 on a particular deployment must be checked before rollout. [Wire contract](sdk/schemas/CURATOR_PERMISSIONS.md).
 
 The shared execution implementation is an independently versioned [Go SDK](sdk/README.md). See [host integration and ownership](docs/MERKLE-SDK.md).
-
-
-Recipe bodies and Liquid Lane settlement history are read from the RFQ indexer
-configured by required `indexerUrl` (service base URL without `/api/v1`). The
-indexer must track each executor through its factory or explicit deployment
-manifest. Recipe discovery requests `/api/v1/recipes/:executor?hash=...&block=...`
-and verifies the unchanged queries/steps against live `recipeHash`, `recipeBlock`
-and the canonical publication header. Settlement reconciliation requests
-`/api/v1/reactor-events/:reactor?fromBlock=...&toBlock=...&swapper=...`, verifies
-indexed coverage against canonical headers, and validates terminal evidence in
-successful chain receipts. Indexing lag or transport failures stop preparation
-or reconciliation; no request-time RPC log scan fallback exists.

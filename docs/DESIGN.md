@@ -7,7 +7,7 @@ permission package, simulates the exact transaction and manages its lifecycle.
 
 ## Boundaries
 
-- SDK `recipes`: ABI codec, indexed SetRecipe discovery, tree/role validation and runtime assembly.
+- SDK `recipes`: ABI codec, SetRecipe discovery, tree/role validation and runtime assembly.
 - SDK `provider`: integration-neutral snapshots, runtime outputs and asynchronous progress.
   Hosts supply explicit chain/HTTP dependencies and select providers at startup.
 - SDK `providers`: CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs, selected
@@ -34,8 +34,11 @@ Liquid Lane RFQ consumers use the SDK provider `liquidlane-rfq` to
 acquire exact-input quotes, populate an approved account Sign action and reconcile
 canonical Reactor events. It persists the quote, Request digest and fixed `0x00`
 signature before publication, preserving identity through ambiguous HTTP responses.
-Only complete all-status lookup permits an idempotent retry. Bounded canonical event
-scan cursors survive restart; API statuses and used nonce bits are not settlement.
+Only complete all-status `/orders` lookup permits an idempotent retry. Its transaction
+hash locates a receipt whose exact Fill, successful status and canonical block must
+match the saved Request and current used nonce. Lookup cursors survive restart;
+API statuses and used nonce bits alone are not settlement. No Reactor history scan
+or consumer-specific nonce invalidation handling is required.
 
 Liquid Lane connector acquisition and calldata construction belong to vault-solver's
 Merkle extension. External signed terms come from RFQ/backend integrations and
@@ -185,12 +188,3 @@ Global recovery/state failures emit one sanitized keeper error and an iteration
 metric with `strategy="_global"`, `outcome="error"`. Strategy errors retain their
 own observations without a duplicate global event. Recovery failures remain
 retryable and never trigger submission on the failing iteration.
-
-
-Runtime discovery never scans blockchain logs. The RFQ indexer owns SetRecipe,
-Reactor Fill and InvalidateNonce event ingestion and canonical rollback. Hosts
-must provide its service URL and an indexed publication source. SDK discovery
-binds original indexed recipe bytes to live executor hash/block getters and
-canonical headers. Liquid Lane reconciles bounded indexed event ranges with
-explicit canonical coverage, then verifies successful receipt evidence before
-settlement; incomplete index coverage leaves the durable cursor unchanged.

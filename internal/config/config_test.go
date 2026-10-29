@@ -13,8 +13,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 )
 
-const validConfig = `indexerUrl: http://127.0.0.1:1
-curator:
+const validConfig = `curator:
   url: http://127.0.0.1:1/api/v1
 chain:
   chainId: 1
@@ -314,7 +313,6 @@ func TestAddressIdentityIgnoresCaseAndOrder(t *testing.T) {
 		"account":       func(_ *Config, a, _ *common.Address) { *a = common.HexToAddress("0x04") },
 		"caller":        func(_ *Config, _, c *common.Address) { *c = common.HexToAddress("0x05") },
 		"chain":         func(c *Config, _, _ *common.Address) { c.Chain.ChainID++ },
-		"indexer":       func(c *Config, _, _ *common.Address) { c.IndexerURL = "http://other-indexer.invalid" },
 		"source":        func(c *Config, _, _ *common.Address) { c.Curator.URL = "http://other.invalid/api/v1" },
 		"credential":    func(c *Config, _, _ *common.Address) { c.Curator.APIKeyEnv = "OTHER_CURATOR_KEY" },
 		"sender policy": func(c *Config, _, _ *common.Address) { c.TxManager.MaxFeeGwei++ },

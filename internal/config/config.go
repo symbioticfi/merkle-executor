@@ -22,7 +22,6 @@ import (
 )
 
 type Config struct {
-	IndexerURL    string        `yaml:"indexerUrl"`
 	Curator       Curator       `yaml:"curator"`
 	Mode          string        `yaml:"mode"`
 	Chain         Chain         `yaml:"chain"`
@@ -115,9 +114,6 @@ func (c *Config) Validate() error {
 	if err := permissions.ValidateConfig(c.Curator.HTTPConfig()); err != nil {
 		return err
 	}
-	if _, err := protocolio.NewHTTP(protocolio.HTTPConfig{URL: c.IndexerURL}, nil, nil); err != nil {
-		return errors.New("indexerUrl must be a credential-free HTTP(S) base URL")
-	}
 	if c.Mode != "simulate" && c.Mode != "send" {
 		return errors.New("mode must be simulate or send")
 	}
@@ -172,14 +168,13 @@ func (c *Config) Validate() error {
 // and effective runtime policy to durable work.
 func (c *Config) StrategyFingerprint(executor string, account, caller common.Address) string {
 	raw, _ := json.Marshal(struct {
-		Policy     string
-		Executor   common.Address
-		Account    common.Address
-		Caller     common.Address
-		ChainID    uint64
-		Curator    Curator
-		TxManager  TxManager
-		IndexerURL string
-	}{RuntimePolicyVersion, common.HexToAddress(executor), account, caller, c.Chain.ChainID, c.Curator, c.TxManager, c.IndexerURL})
+		Policy    string
+		Executor  common.Address
+		Account   common.Address
+		Caller    common.Address
+		ChainID   uint64
+		Curator   Curator
+		TxManager TxManager
+	}{RuntimePolicyVersion, common.HexToAddress(executor), account, caller, c.Chain.ChainID, c.Curator, c.TxManager})
 	return crypto.Keccak256Hash(raw).Hex()
 }
