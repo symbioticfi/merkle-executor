@@ -3,6 +3,7 @@ package recipes
 import (
 	"context"
 	"math/big"
+	"sort"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -14,26 +15,12 @@ import (
 type Reader interface {
 	CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
+	FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error)
 }
 
-// Publication is an original recipe body with indexed canonical provenance.
-type Publication struct {
-	Executor        common.Address
-	RecipeHash      common.Hash
-	BlockNumber     uint64
-	BlockHash       common.Hash
-	TransactionHash common.Hash
-	LogIndex        uint
-	Recipe          Recipe
-}
-
-// PublicationSource reads indexed bodies; request-time RPC log discovery is forbidden.
-type PublicationSource interface {
-	RecipePublication(context.Context, common.Address, common.Hash, uint64) (Publication, error)
-}
-
-// Discover pins all reads and verifies an indexed recipe against current contract
-// state and the canonical publication block. The reader must supply PublicationSource.
+// Discover pins all reads, finds the last SetRecipe event at recipeBlock, and
+// verifies both its indexed commitment and reconstructed ABI hash. Reorgs fail
+// closed. No event-supplied body is used without checking current contract state.
 func Discover(ctx context.Context, reader Reader, executor common.Address, block *big.Int) (Snapshot, Recipe, error) {
 	return discover(ctx, reader, executor, common.Address{}, block)
 }
@@ -79,20 +66,19 @@ func discoverRecipe(ctx context.Context, reader Reader, snapshot Snapshot, heade
 		return Recipe{}, common.Hash{}, err
 	}
 	eventBlock := new(big.Int).SetUint64(snapshot.RecipeBlock)
-	source, ok := reader.(PublicationSource)
-	if !ok {
-		return Recipe{}, common.Hash{}, errors.New("indexed recipe publication source required")
+	eventID := executorABI.GetABI().Events["SetRecipe"].ID
+	query := ethereum.FilterQuery{FromBlock: eventBlock, ToBlock: eventBlock, Addresses: []common.Address{snapshot.Executor}, Topics: [][]common.Hash{{eventID}}}
+	requests := []protocolio.ReadRequest{}
+	if snapshot.RecipeBlock != snapshot.BlockNumber {
+		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: eventBlock})
 	}
-	publication, err := source.RecipePublication(ctx, snapshot.Executor, snapshot.RecipeHash, snapshot.RecipeBlock)
+	requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadLogs, Filter: query})
+	evidence, err := protocolio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
-		return Recipe{}, common.Hash{}, errors.Errorf("read indexed recipe publication: %w", err)
+		return Recipe{}, common.Hash{}, errors.Errorf("read recipe evidence: %w", err)
 	}
 	eventHeader := header
 	if snapshot.RecipeBlock != snapshot.BlockNumber {
-		evidence, e := protocolio.ReadGroup(ctx, reader, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: eventBlock})
-		if e != nil {
-			return Recipe{}, common.Hash{}, e
-		}
 		result := evidence.At(0)
 		if result.Err != nil {
 			return Recipe{}, common.Hash{}, errors.Errorf("recipe block header: %w", result.Err)
@@ -102,10 +88,32 @@ func discoverRecipe(ctx context.Context, reader Reader, snapshot Snapshot, heade
 			return Recipe{}, common.Hash{}, err
 		}
 	}
-	if publication.Executor != snapshot.Executor || publication.RecipeHash != snapshot.RecipeHash || publication.BlockNumber != snapshot.RecipeBlock || publication.BlockHash != eventHeader.Hash() || publication.TransactionHash == (common.Hash{}) {
-		return Recipe{}, common.Hash{}, errors.New("invalid or noncanonical indexed recipe publication")
+	result := evidence.At(len(requests) - 1)
+	if result.Err != nil {
+		return Recipe{}, common.Hash{}, errors.Errorf("read SetRecipe logs: %w", result.Err)
 	}
-	recipe := publication.Recipe
+	logs := result.Logs
+	if len(logs) == 0 {
+		return Recipe{}, common.Hash{}, errors.New("SetRecipe event missing")
+	}
+	sort.Slice(logs, func(i, j int) bool { return logs[i].Index < logs[j].Index })
+	for i, log := range logs {
+		if log.Removed || log.Address != snapshot.Executor || log.BlockNumber != snapshot.RecipeBlock || log.BlockHash != eventHeader.Hash() || len(log.Topics) != 2 || log.Topics[0] != eventID {
+			return Recipe{}, common.Hash{}, errors.New("invalid or noncanonical SetRecipe log")
+		}
+		if i > 0 && logs[i-1].Index == log.Index {
+			return Recipe{}, common.Hash{}, errors.New("duplicate SetRecipe log index")
+		}
+	}
+	latest := &logs[len(logs)-1]
+	if latest.Topics[1] != snapshot.RecipeHash {
+		return Recipe{}, common.Hash{}, errors.New("latest SetRecipe event differs from current commitment")
+	}
+	event, err := executorABI.UnpackSetRecipeEvent(latest)
+	if err != nil {
+		return Recipe{}, common.Hash{}, errors.Errorf("decode SetRecipe: %w", err)
+	}
+	recipe := Recipe{Queries: event.Queries, Steps: event.Steps}
 	hash, err := HashRecipe(recipe)
 	if err != nil {
 		return Recipe{}, common.Hash{}, err

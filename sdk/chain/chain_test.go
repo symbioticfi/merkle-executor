@@ -15,10 +15,8 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
 type rpcFixture struct {
@@ -117,8 +115,8 @@ func TestRPCRoutesReadsAndWritesToTheirVerifiedEndpoints(t *testing.T) {
 	if _, err := client.HeaderByHash(ctx, common.HexToHash("0x12")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.FilterLogs(ctx, ethereum.FilterQuery{}); err == nil {
-		t.Fatal("RPC log scan accepted")
+	if _, err := client.FilterLogs(ctx, ethereum.FilterQuery{}); err != nil {
+		t.Fatal(err)
 	}
 	if gas, err := client.EstimateGas(ctx, ethereum.CallMsg{To: &a}); err != nil || gas != 21000 {
 		t.Fatalf("estimate: %d %v", gas, err)
@@ -139,7 +137,7 @@ func TestRPCRoutesReadsAndWritesToTheirVerifiedEndpoints(t *testing.T) {
 	defer read.mu.Unlock()
 	write.mu.Lock()
 	defer write.mu.Unlock()
-	if len(read.requests) != 6 || len(write.requests) != 4 {
+	if len(read.requests) != 7 || len(write.requests) != 4 {
 		t.Fatalf("unexpected RPC routing: read=%d write=%d", len(read.requests), len(write.requests))
 	}
 	for _, r := range read.requests {
@@ -303,41 +301,20 @@ func TestRPCNeverFollowsReadOrSubmissionRedirects(t *testing.T) {
 	}
 }
 
-func TestEmbeddedRawClientsCannotBypassIndexedEventPolicy(t *testing.T) {
-	read, write := newRPCFixture(t, "0x1"), newRPCFixture(t, "0x1")
-	client, err := Dial(t.Context(), read.server.URL, write.server.URL, big.NewInt(1))
+type websocketChainIdentity struct{}
+
+func (websocketChainIdentity) ChainId() string { return "0x1" }
+
+func TestRPCSupportsWebSocketTransport(t *testing.T) {
+	backend := rpc.NewServer()
+	if err := backend.RegisterName("eth", websocketChainIdentity{}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(backend.WebsocketHandler([]string{"*"}))
+	defer server.Close()
+	client, err := Dial(t.Context(), "ws"+strings.TrimPrefix(server.URL, "http"), "", big.NewInt(1))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
-	for _, backend := range []*ethclient.Client{client.Client, client.write} {
-		for _, method := range []string{"eth_getLogs", "eth_newFilter", "eth_getFilterLogs", "eth_getFilterChanges"} {
-			var result json.RawMessage
-			if err := backend.Client().CallContext(t.Context(), &result, method); !errors.Is(err, protocolio.ErrLogScan) {
-				t.Fatalf("embedded %s escaped policy: %v", method, err)
-			}
-			batch := []rpc.BatchElem{{Method: "unknown", Result: &result}, {Method: method, Result: &result}}
-			if err := backend.Client().BatchCallContext(t.Context(), batch); !errors.Is(err, protocolio.ErrLogScan) {
-				t.Fatalf("mixed raw %s escaped policy: %v", method, err)
-			}
-		}
-		if _, err := backend.FilterLogs(t.Context(), ethereum.FilterQuery{}); !errors.Is(err, protocolio.ErrLogScan) {
-			t.Fatalf("embedded FilterLogs escaped policy: %v", err)
-		}
-	}
-	read.mu.Lock()
-	defer read.mu.Unlock()
-	write.mu.Lock()
-	defer write.mu.Unlock()
-	if len(read.requests) != 1 || len(write.requests) != 1 {
-		t.Fatalf("scan reached backend after identity handshake: read%d write%d", len(read.requests), len(write.requests))
-	}
-}
-
-func TestSDKCannotSelectAnUnguardedRPCTransport(t *testing.T) {
-	for _, endpoint := range []string{"ws://127.0.0.1:1", "wss://127.0.0.1:1", "/tmp/client.ipc"} {
-		if _, err := Dial(t.Context(), endpoint, "", big.NewInt(1)); err == nil {
-			t.Fatal("unguarded RPC transport accepted")
-		}
-	}
+	client.Close()
 }

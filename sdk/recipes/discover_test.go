@@ -3,9 +3,7 @@ package recipes
 import (
 	"bytes"
 	"context"
-	"github.com/go-errors/errors"
 	"math/big"
-	"sort"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -22,8 +20,6 @@ type fakeReader struct {
 	headers                   map[uint64]*types.Header
 	head                      uint64
 	logs                      []types.Log
-	publicationError          error
-	publicationOverride       *Publication
 	allowed                   bool
 	roleCalls                 int
 	roleBlock                 uint64
@@ -51,7 +47,7 @@ func (reader *fakeReader) recipeLog(t *testing.T, recipe Recipe, index uint) typ
 		t.Fatal(err)
 	}
 	data := pack(t, event.Inputs.NonIndexed(), recipe.Queries, recipe.Steps)
-	return types.Log{Address: reader.executor, Topics: []common.Hash{event.ID, hash}, Data: data, BlockNumber: reader.recipeBlock, BlockHash: reader.headers[reader.recipeBlock].Hash(), TxHash: common.HexToHash("0x5678"), Index: index}
+	return types.Log{Address: reader.executor, Topics: []common.Hash{event.ID, hash}, Data: data, BlockNumber: reader.recipeBlock, BlockHash: reader.headers[reader.recipeBlock].Hash(), Index: index}
 }
 
 func (reader *fakeReader) HeaderByNumber(_ context.Context, number *big.Int) (*types.Header, error) {
@@ -62,31 +58,15 @@ func (reader *fakeReader) HeaderByNumber(_ context.Context, number *big.Int) (*t
 	return reader.headers[index], nil
 }
 
-func (reader *fakeReader) FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
-	reader.t.Fatal("request-time RPC log scan")
-	return nil, nil
-}
-func (reader *fakeReader) RecipePublication(_ context.Context, executor common.Address, hash common.Hash, block uint64) (Publication, error) {
-	if reader.publicationError != nil {
-		return Publication{}, reader.publicationError
+func (reader *fakeReader) FilterLogs(_ context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
+	reader.t.Helper()
+	if query.FromBlock.Uint64() != reader.recipeBlock || query.ToBlock.Uint64() != reader.recipeBlock || len(query.Addresses) != 1 || query.Addresses[0] != reader.executor {
+		reader.t.Fatal("log query is not narrowly pinned")
 	}
-	if reader.publicationOverride != nil {
-		return *reader.publicationOverride, nil
+	if len(query.Topics) != 1 || len(query.Topics[0]) != 1 || query.Topics[0][0] != executorABI.GetABI().Events["SetRecipe"].ID {
+		reader.t.Fatal("query must inspect every SetRecipe at recipeBlock")
 	}
-	if executor != reader.executor || hash != reader.recipeHash || block != reader.recipeBlock {
-		reader.t.Fatal("unbound indexed recipe request")
-	}
-	if len(reader.logs) == 0 {
-		return Publication{}, errors.New("not indexed")
-	}
-	logs := append([]types.Log(nil), reader.logs...)
-	sort.Slice(logs, func(i, j int) bool { return logs[i].Index < logs[j].Index })
-	l := logs[len(logs)-1]
-	e, err := executorABI.UnpackSetRecipeEvent(&l)
-	if err != nil {
-		return Publication{}, err
-	}
-	return Publication{Executor: l.Address, RecipeHash: l.Topics[1], BlockNumber: l.BlockNumber, BlockHash: l.BlockHash, TransactionHash: l.TxHash, LogIndex: l.Index, Recipe: Recipe{Queries: e.Queries, Steps: e.Steps}}, nil
+	return append([]types.Log(nil), reader.logs...), nil
 }
 
 func (reader *fakeReader) CallContract(_ context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
@@ -149,7 +129,7 @@ func (reader *fakeReader) CallContract(_ context.Context, msg ethereum.CallMsg, 
 func TestDiscoverPinsAndChoosesLatestEvent(t *testing.T) {
 	current := Recipe{Steps: [][]byte{step(Call, pack(t, callArgs, common.HexToAddress("0x9999"), []byte{1, 2, 3, 4}, []*big.Int{}))}}
 	reader := fakeChain(t, current)
-	// The indexed fixture returns the latest publication by global log index.
+	// RPC delivery order is deliberately reversed; ordering is by global log index.
 	reader.logs = append(reader.logs, reader.recipeLog(t, Recipe{}, 2))
 	snapshot, recipe, err := Discover(context.Background(), reader, reader.executor, nil)
 	if err != nil {
@@ -172,13 +152,10 @@ func TestDiscoverPinsAndChoosesLatestEvent(t *testing.T) {
 
 func TestDiscoverRejectsWrongEventEvidence(t *testing.T) {
 	cases := map[string]func(*fakeReader){
-		"missing":     func(r *fakeReader) { r.logs = nil },
-		"transport":   func(r *fakeReader) { r.publicationError = errors.New("indexer offline") },
-		"executor":    func(r *fakeReader) { r.logs[0].Address = common.Address{} },
-		"transaction": func(r *fakeReader) { r.logs[0].TxHash = common.Hash{} },
-		"height":      func(r *fakeReader) { r.logs[0].BlockNumber++ },
-		"block hash":  func(r *fakeReader) { r.logs[0].BlockHash = common.Hash{} },
-
+		"missing":    func(r *fakeReader) { r.logs = nil },
+		"removed":    func(r *fakeReader) { r.logs[0].Removed = true },
+		"block hash": func(r *fakeReader) { r.logs[0].BlockHash = common.Hash{} },
+		"duplicate":  func(r *fakeReader) { r.logs = append(r.logs, r.logs[0]) },
 		"later distinct commitment": func(r *fakeReader) {
 			log := r.logs[0]
 			log.Index++

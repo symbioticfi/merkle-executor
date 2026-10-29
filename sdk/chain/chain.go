@@ -6,7 +6,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"math/big"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -16,12 +15,9 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
-	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
 type Client struct {
-	RecipePublications recipes.PublicationSource
 	*ethclient.Client
 	write     *ethclient.Client
 	http      *http.Client
@@ -41,7 +37,7 @@ func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int, aggr
 		return nil, errors.New("positive expected chain ID required")
 	}
 
-	httpClient := &http.Client{Transport: protocolio.GuardLogScansTransport(http.DefaultTransport.(*http.Transport).Clone()), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	httpClient := &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	connected := false
 	defer func() {
 		if !connected {
@@ -84,10 +80,6 @@ func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int, aggr
 	return &Client{Client: read, write: write, http: httpClient, readURL: readURL, multicall: multicall}, nil
 }
 func dialHTTP(ctx context.Context, endpoint string, client *http.Client) (*ethclient.Client, error) {
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return nil, errors.New("RPC endpoint must use guarded HTTP(S) transport")
-	}
 	connection, err := rpc.DialOptions(ctx, endpoint, rpc.WithHTTPClient(client))
 	if err != nil {
 		return nil, err
@@ -130,12 +122,9 @@ func (c *Client) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Hea
 	return value, rpcFailure("read header by hash", err)
 }
 
-// FilterLogs rejects runtime event scans before contacting RPC.
-func (c *Client) FilterLogs(ctx context.Context, _ ethereum.FilterQuery) ([]types.Log, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, protocolio.ErrLogScan
+func (c *Client) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
+	value, err := c.Client.FilterLogs(ctx, query)
+	return value, rpcFailure("read event logs", err)
 }
 
 func (c *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64, error) {
@@ -212,12 +201,4 @@ func (c *Client) BalanceAt(ctx context.Context, account common.Address, block *b
 }
 func (c *Client) ReadBalanceAt(ctx context.Context, account common.Address) (*big.Int, error) {
 	return c.BalanceAt(ctx, account, nil)
-}
-
-// RecipePublication delegates to an indexed source and never scans RPC logs.
-func (c *Client) RecipePublication(ctx context.Context, executor common.Address, hash common.Hash, block uint64) (recipes.Publication, error) {
-	if c.RecipePublications == nil {
-		return recipes.Publication{}, errors.New("indexed recipe publication source required")
-	}
-	return c.RecipePublications.RecipePublication(ctx, executor, hash, block)
 }

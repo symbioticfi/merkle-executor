@@ -16,10 +16,8 @@ import (
 
 // Deps supplies caller-owned transports for runtime data acquisition.
 type Deps struct {
-	// IndexerURL is the RFQ indexer service base URL for indexed event evidence.
-	IndexerURL string
-	Chain      Reader
-	HTTP       *http.Client
+	Chain Reader
+	HTTP  *http.Client
 	// LookupSecret resolves configured credential references without environment access in the SDK.
 	LookupSecret func(string) string
 }

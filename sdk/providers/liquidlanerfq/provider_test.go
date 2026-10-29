@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -104,37 +103,10 @@ func (c *testChain) CallContract(ctx context.Context, m ethereum.CallMsg, n *big
 	c.t.Fatal("unexpected getter", method.Name)
 	return nil, nil
 }
-func (c *testChain) FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+func (c *testChain) FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
 	c.logReads++
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if c.fail == "logs" {
-		return nil, errors.New("private")
-	}
-	if len(q.Addresses) != 1 || q.Addresses[0] != addr(0x11) || q.FromBlock == nil || q.ToBlock == nil {
-		c.t.Fatal("unbounded event query")
-	}
-	var out []types.Log
-	for _, l := range c.logs {
-		if l.BlockNumber < q.FromBlock.Uint64() || l.BlockNumber > q.ToBlock.Uint64() {
-			continue
-		}
-		matches := true
-		for i, options := range q.Topics {
-			found := len(options) == 0
-			for _, topic := range options {
-				if i < len(l.Topics) && l.Topics[i] == topic {
-					found = true
-				}
-			}
-			matches = matches && found
-		}
-		if matches {
-			out = append(out, l)
-		}
-	}
-	return out, nil
+	c.t.Fatal("Liquid Lane must locate fills through /orders and receipts")
+	return nil, nil
 }
 func (c *testChain) TransactionReceipt(ctx context.Context, h common.Hash) (*types.Receipt, error) {
 	c.receiptReads++
@@ -157,7 +129,6 @@ type harness struct {
 	requests            [][]byte
 	lookups             []url.Values
 	httpMode            string
-	indexMode           string
 	pages               []wire.RfqOrdersResponse
 	server              *httptest.Server
 }
@@ -169,58 +140,6 @@ func newHarness(t *testing.T) *harness {
 	h.option = map[string]any{"solver": map[string]any{"id": "solver", "filler": addr(0x88).Hex()}, "quote": map[string]any{"quoteId": quoteID, "aggregatedOutputs": []any{map[string]any{"token": addr(0x44).Hex(), "amount": "900"}}, "orderInfo": map[string]any{"tokenIn": addr(0x33).Hex(), "amountIn": "1000", "outputs": []any{output}, "deadline": int64(2000000000), "nonce": "7"}}, "signatureData": map[string]any{"primaryType": "Request", "domain": map[string]any{"name": "Reactor", "version": "1", "chainId": 1, "verifyingContract": addr(0x11).Hex()}, "types": map[string]any{"Output": []any{map[string]any{"name": "token", "type": "address"}, map[string]any{"name": "amount", "type": "uint256"}, map[string]any{"name": "recipient", "type": "address"}}, "Request": []any{map[string]any{"name": "tokenIn", "type": "address"}, map[string]any{"name": "amountIn", "type": "uint256"}, map[string]any{"name": "outputs", "type": "Output[]"}, map[string]any{"name": "deadline", "type": "uint256"}, map[string]any{"name": "nonce", "type": "uint256"}, map[string]any{"name": "protocol", "type": "address"}}}, "value": map[string]any{"tokenIn": addr(0x33).Hex(), "amountIn": "1000", "outputs": []any{output}, "deadline": "2000000000", "nonce": "7", "protocol": addr(0x55).Hex()}}}
 	h.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/v1/reactor-events/" + addr(0x11).Hex():
-			h.c.logReads++
-			if h.c.fail == "logs" {
-				w.WriteHeader(503)
-				return
-			}
-			from, _ := strconv.ParseUint(r.URL.Query().Get("fromBlock"), 10, 64)
-			to, _ := strconv.ParseUint(r.URL.Query().Get("toBlock"), 10, 64)
-			coverage, _ := h.c.HeaderByNumber(t.Context(), new(big.Int).SetUint64(to))
-			if coverage == nil {
-				w.WriteHeader(503)
-				return
-			}
-			response := ReactorEventsResponse{}
-			response.Coverage.FromBlock = "0"
-			response.Coverage.ToBlock = strconv.FormatUint(to, 10)
-			response.Coverage.BlockHash = coverage.Hash()
-			switch h.indexMode {
-			case "missing":
-				w.WriteHeader(503)
-				return
-			case "lag":
-				response.Coverage.ToBlock = strconv.FormatUint(to-1, 10)
-			case "gap":
-				response.Coverage.FromBlock = strconv.FormatUint(from+1, 10)
-			case "orphan":
-				response.Coverage.BlockHash = common.HexToHash("0xdead")
-			case "malformed":
-				response.Coverage.ToBlock = "012"
-			}
-			for _, l := range h.c.logs {
-				if l.BlockNumber < from || l.BlockNumber > to || l.Removed {
-					continue
-				}
-				if len(l.Topics) > 0 && l.Topics[0] == reactor.NewLiquidLaneReactor().GetABI().Events["InvalidateNonce"].ID && len(l.Topics) > 1 && l.Topics[1] != common.BytesToHash(addr(0x22).Bytes()) {
-					continue
-				}
-				indexed := IndexedReactorLog{Address: l.Address, BlockNumber: strconv.FormatUint(l.BlockNumber, 10), BlockHash: l.BlockHash, TransactionHash: l.TxHash, TransactionIndex: l.TxIndex, LogIndex: l.Index, Data: l.Data, Topics: l.Topics}
-				if len(l.Topics) > 0 && l.Topics[0] == reactor.NewLiquidLaneReactor().GetABI().Events["Fill"].ID {
-					response.Fills = append(response.Fills, indexed)
-				} else {
-					response.Invalidations = append(response.Invalidations, indexed)
-				}
-			}
-			if len(response.Fills)+len(response.Invalidations) > 1024 {
-				response.Truncated = true
-				if len(response.Fills) > 1025 {
-					response.Fills = response.Fills[:1025]
-				}
-				response.Invalidations = response.Invalidations[:min(len(response.Invalidations), 1025-len(response.Fills))]
-			}
-			_ = json.NewEncoder(w).Encode(response)
 		case "/api/v1/quote":
 			h.quotes++
 			var q wire.RfqQuoteRequest
@@ -273,7 +192,7 @@ func newHarness(t *testing.T) *harness {
 	}))
 	t.Cleanup(h.server.Close)
 	h.cfg = Config{HTTP: protocolio.HTTPConfig{URL: h.server.URL + "/api/v1"}, Reactor: addr(0x11).Hex(), Protocol: addr(0x55).Hex(), TokenIn: addr(0x33).Hex(), TokenOut: addr(0x44).Hex(), AmountIn: "1000", MinAmountOut: "900", Action: "0:0", MaxLookupPages: 3, EventRangeBlocks: 2000}
-	pr, err := New(h.cfg, provider.Deps{IndexerURL: h.server.URL, Chain: h.c, HTTP: h.server.Client()})
+	pr, err := New(h.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,8 +256,18 @@ func (h *harness) addEvent(t *testing.T, d prepared, n uint64, cancel bool) {
 	} else {
 		h.c.receipts[l.TxHash] = &types.Receipt{Status: 1, TxHash: l.TxHash, BlockNumber: new(big.Int).SetUint64(n), BlockHash: l.BlockHash, Logs: []*types.Log{&copyLog}}
 	}
+	h.order(l.TxHash)
 	h.c.used = true
 }
+func (h *harness) order(hash common.Hash) {
+	o := wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: "filled", QuoteID: quoteID, Swapper: h.s.Account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: addr(0x33).Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: addr(0x44).Hex(), Amount: "950", Recipient: h.s.Account.Hex()}}}
+	if hash != (common.Hash{}) {
+		tx := hash.Hex()
+		o.TxHash = &tx
+	}
+	h.pages = []wire.RfqOrdersResponse{{Orders: []wire.RfqOrder{o}, Cursor: json.RawMessage("null")}}
+}
+
 func TestRequestMatchesIndependentCastVector(t *testing.T) {
 	h := newHarness(t)
 	out, err := h.p.Prepare(t.Context(), h.s)
@@ -491,7 +420,7 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
 			page := wire.RfqOrdersResponse{Orders: []wire.RfqOrder{}, Cursor: json.RawMessage("null")}
-			st := progressState{Version: 1, Digest: common.Hash{}, NextBlock: 10}
+			st := progressState{Version: 1, Digest: common.Hash{}}
 			var d prepared
 			_ = json.Unmarshal(out.Data, &d)
 			st.Digest = d.Digest
@@ -529,7 +458,7 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 	}
 }
 func TestCanonicalEventsControlSettlement(t *testing.T) {
-	for _, mode := range []string{"fill", "cancel", "fill then cancel", "cancel then fill", "used only", "failed receipt", "missing receipt", "wrong request", "wrong account", "revoked after fill", "signature error after fill", "balance error after fill", "allowance error after fill", "deadline equality", "expired"} {
+	for _, mode := range []string{"fill", "cancel", "fill then cancel", "used only", "failed receipt", "missing receipt", "removed", "wrong request", "wrong account", "revoked after fill", "signature error after fill", "balance error after fill", "allowance error after fill", "deadline equality", "expired"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
@@ -542,13 +471,11 @@ func TestCanonicalEventsControlSettlement(t *testing.T) {
 				if mode == "wrong account" {
 					d.Account = addr(99)
 				}
-				h.addEvent(t, d, 12, mode == "cancel" || mode == "cancel then fill")
+				h.addEvent(t, d, 12, mode == "cancel")
 			}
 			switch mode {
 			case "fill then cancel":
 				h.addEvent(t, d, 12, true)
-			case "cancel then fill":
-				h.addEvent(t, d, 12, false)
 			case "used only":
 				h.c.used = true
 			case "failed receipt":
@@ -557,6 +484,10 @@ func TestCanonicalEventsControlSettlement(t *testing.T) {
 				}
 			case "missing receipt":
 				h.c.receipts = map[common.Hash]*types.Receipt{}
+			case "removed":
+				for _, r := range h.c.receipts {
+					r.Logs[0].Removed = true
+				}
 			case "revoked after fill":
 				h.c.approved = false
 				h.c.balance = 0
@@ -578,12 +509,9 @@ func TestCanonicalEventsControlSettlement(t *testing.T) {
 				s.BlockHash = head.Hash()
 			}
 			p, err := h.p.Advance(t.Context(), s, out, nil)
-			done := mode == "fill" || mode == "cancel" || mode == "fill then cancel" || mode == "revoked after fill" || mode == "expired" || mode == "signature error after fill" || mode == "balance error after fill" || mode == "allowance error after fill"
+			done := mode == "fill" || mode == "fill then cancel" || mode == "revoked after fill" || mode == "expired" || mode == "signature error after fill" || mode == "balance error after fill" || mode == "allowance error after fill"
 			if done {
 				want := "settled"
-				if mode == "cancel" {
-					want = "cancelled"
-				}
 				if mode == "expired" {
 					want = "expired"
 				}
@@ -600,93 +528,25 @@ func TestCanonicalEventsControlSettlement(t *testing.T) {
 		})
 	}
 }
-func TestUsedNonceScanPersistsAndResumesAfterRestart(t *testing.T) {
-	for _, cancel := range []bool{false, true} {
-		t.Run(map[bool]string{false: "fill", true: "cancel"}[cancel], func(t *testing.T) {
-			h := newHarness(t)
-			out, s := h.authorized(t)
-			h.p.cfg.EventRangeBlocks = 1
-			var d prepared
-			_ = json.Unmarshal(out.Data, &d)
-			h.addEvent(t, d, 12, cancel)
-			var state json.RawMessage
-			for i := range 3 {
-				p, err := h.p.Advance(t.Context(), s, out, state)
-				if err != nil || p.Done != (i == 2) {
-					t.Fatal("cursor did not reach terminal", i, p, err)
-				}
-				want := "settled"
-				if cancel {
-					want = "cancelled"
-				}
-				if i == 2 && p.Outcome != want {
-					t.Fatal("wrong terminal outcome", p.Outcome)
-				}
-				if i < 2 {
-					var cursor progressState
-					_ = json.Unmarshal(p.State, &cursor)
-					header, _ := h.c.HeaderByNumber(t.Context(), big.NewInt(int64(10+i)))
-					if cursor.NextBlock != uint64(11+i) || cursor.Anchor != header.Hash() {
-						t.Fatal("cursor checkpoint differs", cursor)
-					}
-				}
-				state = append(json.RawMessage(nil), p.State...)
-			}
-			if h.posts != 0 || h.gets != 0 || h.c.logReads != 3 {
-				t.Fatal("scan published or skipped history")
-			}
-		})
-	}
-}
-func TestDenseRangesCheckpointBeforeLaterFill(t *testing.T) {
+func TestOrderReceiptDoesNotScanHistory(t *testing.T) {
 	h := newHarness(t)
 	out, s := h.authorized(t)
 	var d prepared
 	_ = json.Unmarshal(out.Data, &d)
-	unrelated := d
-	unrelated.Account = addr(0x1234)
-	for i := range 1025 {
-		h.addEvent(t, unrelated, uint64(10+i/512), false)
+	other := d
+	other.Account = addr(0x1234)
+	for range 1025 {
+		h.addEvent(t, other, 10, false)
 	}
-	// Put the matching consumer after the dense history; used=true must not lose checkpoints.
 	h.addEvent(t, d, 12, false)
-	p, err := h.p.Advance(t.Context(), s, out, nil)
-	if err != nil || p.Done || p.Outcome != "scanning" {
-		t.Fatal("dense history trapped cursor", p, err)
-	}
-	var cursor progressState
-	_ = json.Unmarshal(p.State, &cursor)
-	if cursor.NextBlock != 12 || cursor.Anchor == (common.Hash{}) {
-		t.Fatal("wrong dense checkpoint", cursor)
-	}
-	restarted := *h.p
-	p, err = restarted.Advance(t.Context(), s, out, bytes.Clone(p.State))
-	if err != nil || !p.Done || p.Outcome != "settled" || h.posts != 0 || h.gets != 0 {
-		t.Fatal("restart missed later consumer", p, err)
+	progress, err := h.p.Advance(t.Context(), s, out, nil)
+	if err != nil || !progress.Done || progress.Outcome != "settled" || h.c.logReads != 0 || h.c.receiptReads != 1 || h.gets != 1 || h.posts != 0 {
+		t.Fatal("order receipt depends on unrelated chain history", progress, err)
 	}
 }
 
-func TestOrphanedScanCursorRewinds(t *testing.T) {
-	h := newHarness(t)
-	out, s := h.authorized(t)
-	h.p.cfg.EventRangeBlocks = 1
-	p, err := h.p.Advance(t.Context(), s, out, nil)
-	if err != nil || p.Done {
-		t.Fatal(p, err)
-	}
-	h.c.reorg[10] = true
-	p, err = h.p.Advance(t.Context(), s, out, p.State)
-	if err != nil || p.Outcome != "scanning" || h.c.logReads != 2 {
-		t.Fatal("orphan cursor not rewound", p, err)
-	}
-	var st progressState
-	_ = json.Unmarshal(p.State, &st)
-	if st.NextBlock != 11 {
-		t.Fatal("scan skipped orphaned block")
-	}
-}
 func TestConfigRejectsUnsafePolicy(t *testing.T) {
-	for _, mode := range []string{"zero address", "equal tokens", "zero amount", "negative", "index", "duplicate index", "pages", "range", "solver", "no reader"} {
+	for _, mode := range []string{"zero address", "equal tokens", "zero amount", "negative", "index", "duplicate index", "pages", "solver", "no reader"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			c := h.cfg
@@ -708,12 +568,10 @@ func TestConfigRejectsUnsafePolicy(t *testing.T) {
 				c.AmountOutInput = &v
 			case "pages":
 				c.MaxLookupPages = 101
-			case "range":
-				c.EventRangeBlocks = 100001
 			case "solver":
 				c.SolverIDs = []string{"a", "a"}
 			}
-			deps := provider.Deps{IndexerURL: h.server.URL, Chain: h.c, HTTP: h.server.Client()}
+			deps := provider.Deps{Chain: h.c, HTTP: h.server.Client()}
 			if mode == "no reader" {
 				deps.Chain = nil
 			}
@@ -758,7 +616,7 @@ func TestPublicationAcceptanceAndCompletePagination(t *testing.T) {
 	}
 }
 func TestEventReceiptAndCursorCorruptionFailClosed(t *testing.T) {
-	for _, mode := range []string{"receipt member", "receipt block", "receipt tx index", "receipt duplicate", "receipt topic", "event orphan", "cursor version", "cursor anchor", "cursor ahead", "cursor digest"} {
+	for _, mode := range []string{"receipt member", "receipt block", "receipt tx index", "receipt duplicate", "receipt topic", "event orphan", "cursor version", "cursor digest"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
@@ -767,7 +625,7 @@ func TestEventReceiptAndCursorCorruptionFailClosed(t *testing.T) {
 			h.addEvent(t, d, 12, false)
 			r := h.c.receipts[h.c.logs[0].TxHash]
 			var saved json.RawMessage
-			st := progressState{Version: 1, Digest: d.Digest, NextBlock: 10}
+			st := progressState{Version: 1, Digest: d.Digest}
 			switch mode {
 			case "receipt member":
 				r.Logs = nil
@@ -782,14 +640,9 @@ func TestEventReceiptAndCursorCorruptionFailClosed(t *testing.T) {
 				l.Topics = []common.Hash{{}}
 				r.Logs[0] = &l
 			case "event orphan":
-				h.c.logs[0].BlockHash = common.HexToHash("0xbad")
+				r.Logs[0].BlockHash = common.HexToHash("0xbad")
 			case "cursor version":
 				st.Version = 2
-			case "cursor anchor":
-				st.NextBlock = 11
-			case "cursor ahead":
-				st.NextBlock = 14
-				st.Anchor = common.HexToHash("0xbad")
 			case "cursor digest":
 				st.Digest = common.Hash{}
 			}
@@ -797,7 +650,7 @@ func TestEventReceiptAndCursorCorruptionFailClosed(t *testing.T) {
 				saved, _ = json.Marshal(st)
 			}
 			p, err := h.p.Advance(t.Context(), s, out, saved)
-			if err == nil || p.Done || h.posts != 0 || h.gets != 0 {
+			if err == nil || p.Done || h.posts != 0 {
 				t.Fatal("corrupt evidence accepted", p, err)
 			}
 		})
@@ -824,20 +677,6 @@ func TestPrepareRejectsAPIIntegerOverflowBeforeHTTP(t *testing.T) {
 			_, err = h.p.prepare(t.Context(), s, protocolio.ReadResult{Data: raw})
 			if err == nil || h.quotes != 0 {
 				t.Fatal("overflow reached API", err)
-			}
-		})
-	}
-}
-
-func TestIndexedEventCoverageMustBeCompleteAndCanonical(t *testing.T) {
-	for _, mode := range []string{"missing", "lag", "gap", "orphan", "malformed"} {
-		t.Run(mode, func(t *testing.T) {
-			h := newHarness(t)
-			out, s := h.authorized(t)
-			h.indexMode = mode
-			progress, err := h.p.Advance(t.Context(), s, out, nil)
-			if err == nil || progress.Done || len(progress.State) != 0 || h.posts != 0 {
-				t.Fatalf("uncovered range advanced cursor: %+v %v", progress, err)
 			}
 		})
 	}

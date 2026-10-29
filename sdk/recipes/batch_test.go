@@ -63,7 +63,7 @@ func TestDiscoveryBatchesExpectedAccountMetadataAndEventEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reader.groups) != 2 || len(reader.groups[0]) != 5 || len(reader.groups[1]) != 1 || reader.singleCalls != 0 || reader.singleHeaders != 2 {
+	if len(reader.groups) != 2 || len(reader.groups[0]) != 5 || len(reader.groups[1]) != 2 || reader.singleCalls != 0 || reader.singleHeaders != 2 {
 		t.Fatalf("discovery groups=%v calls=%d headers=%d", reader.groups, reader.singleCalls, reader.singleHeaders)
 	}
 	reader.groups = nil

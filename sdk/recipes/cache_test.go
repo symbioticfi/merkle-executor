@@ -36,10 +36,10 @@ func (r *cachedReader) HeaderByNumber(ctx context.Context, b *big.Int) (*types.H
 	}
 	return r.executionReader.HeaderByNumber(ctx, b)
 }
-func (r *cachedReader) RecipePublication(ctx context.Context, a common.Address, h common.Hash, b uint64) (Publication, error) {
+func (r *cachedReader) FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
 	r.logReads++
 	r.allReads++
-	return r.fakeReader.RecipePublication(ctx, a, h, b)
+	return r.executionReader.FilterLogs(ctx, q)
 }
 func (r *cachedReader) CallContract(ctx context.Context, m ethereum.CallMsg, b *big.Int) ([]byte, error) {
 	r.allReads++

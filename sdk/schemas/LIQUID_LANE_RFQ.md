@@ -80,27 +80,30 @@ vary. The provider adds neither approvals nor permissions.
 
 Advance requires the canonical authorizing receipt's exact account Sign event.
 Before publication it checks the current domain, nonce, account approval, input
-balance and Reactor allowance. Canonical Reactor history is reconciled first so
-post-fill spending or signature revocation cannot hide settlement. An exact Fill
-requires account + full Request, successful canonical receipt/log membership, and
-same ordered output identities with final amounts at least the signed minima.
-Filler and signature byte representation may differ. A used nonce alone never
-proves settlement. Invalidation after Fill does not override Fill; another Request
-using the nonce fails closed. Cancellation needs canonical indexed evidence;
-expiry requires a complete scan, unused nonce, and confirmed timestamp strictly
-greater than deadline. Equality remains fillable.
+balance and Reactor allowance. An all-status `/orders` lookup binds the saved quote,
+account, nonce, input and minimum output. Its nullable `txHash` is a transaction
+locator, never settlement authority. The SDK validates a successful receipt at or
+before the pinned snapshot, its canonical block, and exactly one Fill for the account
+and full saved Request, with final outputs at least the signed minima. Filler and
+signature byte representation may differ. Current `isUsedNonce` must confirm the
+nonce was consumed; API status or a used nonce alone never proves settlement.
+Post-fill spending or signature revocation cannot hide an already confirmed fill.
+No Reactor event history or consumer-specific InvalidateNonce handling is used.
+An exact order with a used nonce but no transaction hash stays pending until the API
+indexes the transaction; it is never republished. A hash appearing before the pinned
+nonce update also stays pending. A consumed nonce without an exact API order fails
+closed. Expiry requires complete order lookup, an unused pinned nonce and a timestamp
+strictly greater than the deadline. Equality remains fillable.
 
-Scanning begins at the saved preparation block. The configured range defaults to
-2,000 blocks (1..100,000). Fill queries are unindexed; InvalidateNonce is filtered
-by account. Successful ranges exceeding 1,024 combined events are halved until a
-complete bounded range can checkpoint. A single block exceeding 1,024 relevant
-query results fails explicitly; events are never truncated. RPC errors do not cause
-individual retries or adaptive retries. Canonical range anchors survive restart
-and rewind on orphaning. Incomplete scans checkpoint with nil error even when the
-head nonce is used, and prevent both POST and expiry. The automatic provider scans
-at most 10 API pages per tick, with at most 100 orders per page. Cursor, seen order
-IDs/cursors and a possible quote match survive restart, preserving duplicate checks
-across tick boundaries. Only a complete scan permits publication. A completed
-lookup is discarded; an ambiguous POST response starts a fresh lookup next tick.
-The fixed automatic bounds cannot be changed through daemon YAML. Recovery
-validates the version `1` checkpoint and preserves its saved order identity.
+The nullable `txHash` subset was verified against RFQ backend revision
+`985608e50eae9428b6987096127dd69de5152fc2`,
+`src/domains/orders/orders.schemas.ts` and `orders.read.service.ts`.
+
+The automatic provider looks up at most 10 API pages per tick, with at most 100 orders
+per page. Cursor, seen order IDs/cursors and a possible quote match plus transaction
+hash survive restart, preserving duplicate checks across tick boundaries. Only a
+complete lookup permits publication or receipt reconciliation. A completed lookup
+is discarded; an ambiguous POST response starts a fresh lookup next tick. The fixed
+automatic bounds cannot be changed through daemon YAML. Legacy `nextBlock`/`anchor`
+progress and `EventRangeBlocks` configuration decode for existing jobs; they never
+trigger log reads, and new checkpoints omit the obsolete cursor fields.

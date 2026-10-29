@@ -146,7 +146,7 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 		if err != nil {
 			return nil, err
 		}
-		result = &recipeRequest{template: sign, budget: budget, floors: floors, requirements: requirements, cfg: Config{HTTP: consumerHTTP(), Reactor: address.Hex(), Protocol: protocol.Hex(), TokenIn: input.Hex(), TokenOut: output.Hex(), Action: action.Key, MaxLookupPages: 10, EventRangeBlocks: 2000, AmountInInput: budget.Input}}
+		result = &recipeRequest{template: sign, budget: budget, floors: floors, requirements: requirements, cfg: Config{HTTP: consumerHTTP(), Reactor: address.Hex(), Protocol: protocol.Hex(), TokenIn: input.Hex(), TokenOut: output.Hex(), Action: action.Key, MaxLookupPages: 10, AmountInInput: budget.Input}}
 		if minimum.Source == recipes.Input {
 			index := uint(minimum.Value.Uint64())
 			result.cfg.AmountOutInput = &index
@@ -248,7 +248,7 @@ func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provid
 	if !matched {
 		return provider.Progress{Done: true}, nil
 	}
-	if !reflect.DeepEqual(cfg.HTTP, consumerHTTP()) || cfg.MaxLookupPages != 10 || cfg.EventRangeBlocks != 2000 || len(cfg.SolverIDs) != 0 {
+	if !reflect.DeepEqual(cfg.HTTP, consumerHTTP()) || cfg.MaxLookupPages != 10 || (cfg.EventRangeBlocks != 0 && cfg.EventRangeBlocks != 2000) || len(cfg.SolverIDs) != 0 {
 		return provider.Progress{}, errors.New("persisted RFQ automatic constants differ")
 	}
 	runtime, err := New(cfg, p.deps)

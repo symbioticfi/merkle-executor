@@ -71,7 +71,9 @@ Root `make check` and `make integration` also check this module explicitly.
 Bindings regenerate from this module's ABI through its pinned abigen tool;
 never edit generated Go.
 
-Liquid Lane's consumer quote/order provider is included. Vault-specific Liquid
+Liquid Lane's consumer quote/order provider is included. It uses `/orders` to
+locate fill transactions, then verifies their canonical receipts and live nonce state;
+it does not scan Reactor history. Vault-specific Liquid
 Lane connector and 3F auction integrations belong to vault-solver: they supply
 bounded provider outputs using their own feeds, sizing and calldata construction.
 Custom integrations implement the same provider contracts.
@@ -181,15 +183,3 @@ and proof words without reconstructing a canonical root/recipient/balance-check
 program. Generic assembly preserves permission masks and pinned bytes; the complete
 original contract simulation remains authoritative. `recipes.ValidateMutableActions`
 and `recipes.ReadDependent` have been removed. An unchanged masked template no longer needs a provider owner, and deterministic values need no READ ancestry.
-
-
-Hosts supply indexed recipe publications through `recipes.PublicationSource` on
-their chain reader. `indexer.New(baseURL, httpClient)` implements that source;
-assign it to `chain.Client.RecipePublications` when using the SDK chain client.
-The base URL names the RFQ indexer service without `/api/v1`. Liquid Lane hosts
-also set `provider.Deps.IndexerURL` to the same service. Both use bounded HTTP
-and fail on indexing lag or errors without scanning blockchain logs. Bodies
-retain their original recipe format; live commitments, publication headers,
-coverage headers and terminal receipts remain independently verified.
-
-`chain.Dial` accepts HTTP(S) only and rejects raw event-discovery methods before transport.

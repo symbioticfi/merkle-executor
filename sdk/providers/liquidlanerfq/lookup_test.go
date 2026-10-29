@@ -51,7 +51,7 @@ func TestLookupBeyondThousandOrdersSurvivesRestart(t *testing.T) {
 			}
 			checkpoint := append(json.RawMessage(nil), progress.State...)
 			// Only serialized provider progress is carried into a newly constructed runtime.
-			h.p, err = New(h.p.cfg, provider.Deps{IndexerURL: h.server.URL, Chain: h.c, HTTP: h.server.Client()})
+			h.p, err = New(h.p.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -78,7 +78,7 @@ func TestLookupBeyondThousandOrdersSurvivesRestart(t *testing.T) {
 					// The appended remote order must be found from the previous checkpoint.
 					h.pages[10].Orders[0] = wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: "open", QuoteID: quoteID, Swapper: s.Account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: addr(0x33).Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: addr(0x44).Hex(), Amount: "900", Recipient: s.Account.Hex()}}}
 					h.gets = 10
-					h.p, err = New(h.p.cfg, provider.Deps{IndexerURL: h.server.URL, Chain: h.c, HTTP: h.server.Client()})
+					h.p, err = New(h.p.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -130,5 +130,76 @@ func TestMalformedLookupCheckpointNeverPublishes(t *testing.T) {
 				t.Fatalf("corrupt lookup allowed publication: %v posts=%d", err, h.posts)
 			}
 		})
+	}
+}
+
+func TestOrderTransactionHintSurvivesLookupRestart(t *testing.T) {
+	h := newHarness(t)
+	out, s := h.authorized(t)
+	var d prepared
+	_ = json.Unmarshal(out.Data, &d)
+	h.addEvent(t, d, 12, false)
+	h.p.cfg.MaxLookupPages = 1
+	h.pages[0].Cursor = json.RawMessage(`"oc_next"`)
+	h.pages = append(h.pages, wire.RfqOrdersResponse{Orders: []wire.RfqOrder{}, Cursor: json.RawMessage("null")})
+	progress, err := h.p.Advance(t.Context(), s, out, nil)
+	if err != nil || progress.Done || progress.Outcome != "lookup-scanning" || h.c.receiptReads != 0 {
+		t.Fatal("partial lookup consumed receipt hint", progress, err)
+	}
+	h.p, err = New(h.p.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress, err = h.p.Advance(t.Context(), s, out, progress.State)
+	if err != nil || !progress.Done || progress.Outcome != "settled" || progress.Reference != orderID || h.c.receiptReads != 1 || h.c.logReads != 0 || h.posts != 0 {
+		t.Fatal("restart lost matching order transaction", progress, err)
+	}
+}
+
+func TestOrderMayPrecedeTransactionHash(t *testing.T) {
+	h := newHarness(t)
+	out, s := h.authorized(t)
+	var d prepared
+	_ = json.Unmarshal(out.Data, &d)
+	h.addEvent(t, d, 12, false)
+	h.pages[0].Orders[0].TxHash = nil
+	progress, err := h.p.Advance(t.Context(), s, out, nil)
+	if err != nil || progress.Done || progress.Outcome != "awaiting-receipt" || progress.Reference != orderID || h.posts != 0 || h.c.receiptReads != 0 {
+		t.Fatal("API indexing race released or republished order", progress, err)
+	}
+	h.order(h.c.logs[0].TxHash)
+	progress, err = h.p.Advance(t.Context(), s, out, progress.State)
+	if err != nil || !progress.Done || progress.Outcome != "settled" || h.posts != 0 {
+		t.Fatal("later transaction hash did not settle", progress, err)
+	}
+}
+
+func TestLegacyScanStateIsDiscardedOnRecovery(t *testing.T) {
+	h := newHarness(t)
+	out, s := h.authorized(t)
+	var d prepared
+	_ = json.Unmarshal(out.Data, &d)
+	legacy, _ := json.Marshal(map[string]any{"version": 1, "digest": d.Digest, "nextBlock": 11, "anchor": s.BlockHash})
+	progress, err := h.p.Advance(t.Context(), s, out, legacy)
+	if err != nil || progress.Done || h.posts != 1 || h.c.logReads != 0 {
+		t.Fatal("legacy recovery requires a history scan", progress, err)
+	}
+	var saved map[string]json.RawMessage
+	_ = json.Unmarshal(progress.State, &saved)
+	if saved["nextBlock"] != nil || saved["anchor"] != nil {
+		t.Fatal("new checkpoint retained obsolete cursor", string(progress.State))
+	}
+}
+
+func TestMalformedOrderTransactionHashCannotSettleOrPublish(t *testing.T) {
+	for _, hash := range []string{"", "0x01", "0x" + string(make([]byte, 64)), "0x0000000000000000000000000000000000000000000000000000000000000000"} {
+		h := newHarness(t)
+		out, s := h.authorized(t)
+		h.order([32]byte{})
+		h.pages[0].Orders[0].TxHash = &hash
+		progress, err := h.p.Advance(t.Context(), s, out, nil)
+		if err == nil || progress.Done || h.posts != 0 || h.c.receiptReads != 0 {
+			t.Fatal("malformed transaction hash reached settlement", progress, err)
+		}
 	}
 }

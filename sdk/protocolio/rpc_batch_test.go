@@ -150,33 +150,3 @@ func TestHTTPBatchRejectsAmbiguousWireResponsesWithoutRetry(t *testing.T) {
 		})
 	}
 }
-
-func TestRPCBatchRejectsLogScansBeforeAnySiblingRequest(t *testing.T) {
-	for _, position := range []int{0, 1, MaxReadBatch} {
-		t.Run(big.NewInt(int64(position)).String(), func(t *testing.T) {
-			requests := make([]ReadRequest, MaxReadBatch+1)
-			for i := range requests {
-				requests[i] = ReadRequest{Kind: ReadHeader, Block: big.NewInt(12)}
-			}
-			requests[position].Kind = ReadLogs
-			calls := 0
-			reader := RPCBatchReader{Call: func(context.Context, []rpc.BatchElem) error { calls++; return nil }}
-			if result, err := reader.BatchRead(t.Context(), requests); !errors.Is(err, ErrLogScan) || result != nil || calls != 0 {
-				t.Fatalf("log preflight contacted RPC: %d %v", calls, err)
-			}
-			if result, err := ReadGroup(t.Context(), reader, requests...); !errors.Is(err, ErrLogScan) || result != nil || calls != 0 {
-				t.Fatalf("group log preflight contacted RPC: %d %v", calls, err)
-			}
-		})
-	}
-}
-
-func TestHTTPBatchRejectsLogScansBeforeTransport(t *testing.T) {
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
-	defer server.Close()
-	batch := []rpc.BatchElem{{Method: "eth_getBlockByNumber"}, {Method: "eth_getLogs"}}
-	if err := CallHTTPBatch(t.Context(), server.Client(), server.URL, batch); !errors.Is(err, ErrLogScan) || calls != 0 {
-		t.Fatalf("HTTP log scan escaped: %d %v", calls, err)
-	}
-}
