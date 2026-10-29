@@ -174,23 +174,6 @@ func TestOrderMayPrecedeTransactionHash(t *testing.T) {
 	}
 }
 
-func TestLegacyScanStateIsDiscardedOnRecovery(t *testing.T) {
-	h := newHarness(t)
-	out, s := h.authorized(t)
-	var d prepared
-	_ = json.Unmarshal(out.Data, &d)
-	legacy, _ := json.Marshal(map[string]any{"version": 1, "digest": d.Digest, "nextBlock": 11, "anchor": s.BlockHash})
-	progress, err := h.p.Advance(t.Context(), s, out, legacy)
-	if err != nil || progress.Done || h.posts != 1 || h.c.logReads != 0 {
-		t.Fatal("legacy recovery requires a history scan", progress, err)
-	}
-	var saved map[string]json.RawMessage
-	_ = json.Unmarshal(progress.State, &saved)
-	if saved["nextBlock"] != nil || saved["anchor"] != nil {
-		t.Fatal("new checkpoint retained obsolete cursor", string(progress.State))
-	}
-}
-
 func TestMalformedOrderTransactionHashCannotSettleOrPublish(t *testing.T) {
 	for _, hash := range []string{"", "0x01", "0x" + string(make([]byte, 64)), "0x0000000000000000000000000000000000000000000000000000000000000000"} {
 		h := newHarness(t)

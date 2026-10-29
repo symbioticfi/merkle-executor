@@ -104,6 +104,4 @@ per page. Cursor, seen order IDs/cursors and a possible quote match plus transac
 hash survive restart, preserving duplicate checks across tick boundaries. Only a
 complete lookup permits publication or receipt reconciliation. A completed lookup
 is discarded; an ambiguous POST response starts a fresh lookup next tick. The fixed
-automatic bounds cannot be changed through daemon YAML. Legacy `nextBlock`/`anchor`
-progress and `EventRangeBlocks` configuration decode for existing jobs; they never
-trigger log reads, and new checkpoints omit the obsolete cursor fields.
+automatic bounds cannot be changed through daemon YAML.

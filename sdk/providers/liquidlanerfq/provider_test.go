@@ -191,7 +191,7 @@ func newHarness(t *testing.T) *harness {
 		}
 	}))
 	t.Cleanup(h.server.Close)
-	h.cfg = Config{HTTP: protocolio.HTTPConfig{URL: h.server.URL + "/api/v1"}, Reactor: addr(0x11).Hex(), Protocol: addr(0x55).Hex(), TokenIn: addr(0x33).Hex(), TokenOut: addr(0x44).Hex(), AmountIn: "1000", MinAmountOut: "900", Action: "0:0", MaxLookupPages: 3, EventRangeBlocks: 2000}
+	h.cfg = Config{HTTP: protocolio.HTTPConfig{URL: h.server.URL + "/api/v1"}, Reactor: addr(0x11).Hex(), Protocol: addr(0x55).Hex(), TokenIn: addr(0x33).Hex(), TokenOut: addr(0x44).Hex(), AmountIn: "1000", MinAmountOut: "900", Action: "0:0", MaxLookupPages: 3}
 	pr, err := New(h.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
 	if err != nil {
 		t.Fatal(err)

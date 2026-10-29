@@ -248,7 +248,7 @@ func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provid
 	if !matched {
 		return provider.Progress{Done: true}, nil
 	}
-	if !reflect.DeepEqual(cfg.HTTP, consumerHTTP()) || cfg.MaxLookupPages != 10 || (cfg.EventRangeBlocks != 0 && cfg.EventRangeBlocks != 2000) || len(cfg.SolverIDs) != 0 {
+	if !reflect.DeepEqual(cfg.HTTP, consumerHTTP()) || cfg.MaxLookupPages != 10 || len(cfg.SolverIDs) != 0 {
 		return provider.Progress{}, errors.New("persisted RFQ automatic constants differ")
 	}
 	runtime, err := New(cfg, p.deps)

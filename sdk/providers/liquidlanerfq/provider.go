@@ -38,8 +38,6 @@ type Config struct {
 	NonceInput     *uint                 `yaml:"nonceInput"`
 	SolverIDs      []string              `yaml:"solverIds"`
 	MaxLookupPages int                   `yaml:"maxLookupPages"`
-	// Deprecated: retained only to decode existing automatic-provider jobs.
-	EventRangeBlocks uint64 `yaml:"eventRangeBlocks" json:",omitempty"`
 }
 type chainReader interface {
 	provider.Reader
@@ -71,9 +69,6 @@ type progressState struct {
 	OrderID string       `json:"orderId,omitempty"`
 	TxHash  common.Hash  `json:"txHash,omitempty"`
 	Lookup  *lookupState `json:"lookup,omitempty"`
-	// Legacy scan cursors are accepted for recovery, then discarded.
-	NextBlock *uint64      `json:"nextBlock,omitempty"`
-	Anchor    *common.Hash `json:"anchor,omitempty"`
 }
 
 var uuid = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -325,7 +320,6 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 			return provider.Progress{}, errors.New("RFQ invalid persisted order state")
 		}
 	}
-	st.NextBlock, st.Anchor = nil, nil
 	r := reactor.NewLiquidLaneReactor()
 	a := account.NewMerkleAccount()
 	token := erc20.NewERC20()
