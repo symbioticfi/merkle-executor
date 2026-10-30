@@ -61,7 +61,7 @@ No quoteId or nonce filter is assumed. A complete bounded lookup is required bef
 POST. Null/missing arrays, repeated or malformed cursors, duplicate IDs/quote matches,
 and identity mismatches fail closed. Exhausting a tick's page budget checkpoints
 lookup progress without publication; the next tick resumes the same quote scan.
-API terminal statuses do not prove settlement. Ordinary order views lack the full encoded Request and filler.
+API filled status does not prove settlement. Ordinary order views lack the full encoded Request and filler.
 
 ## Authorization and settlement
 
@@ -89,6 +89,9 @@ signature byte representation may differ. Current `isUsedNonce` must confirm the
 nonce was consumed; API status or a used nonce alone never proves settlement.
 Post-fill spending or signature revocation cannot hide an already confirmed fill.
 No Reactor event history or consumer-specific InvalidateNonce handling is used.
+The backend reconciles cancellation into `/orders`. Its `cancelled` status completes
+the job once the pinned Reactor nonce is used; an unused nonce waits for the snapshot
+to catch up. Cancellation needs no transaction receipt or event lookup in the SDK.
 An exact order with a used nonce but no transaction hash stays pending until the API
 indexes the transaction; it is never republished. A hash appearing before the pinned
 nonce update also stays pending. A consumed nonce without an exact API order fails

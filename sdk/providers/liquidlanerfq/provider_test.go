@@ -474,6 +474,8 @@ func TestCanonicalEventsControlSettlement(t *testing.T) {
 				h.addEvent(t, d, 12, mode == "cancel")
 			}
 			switch mode {
+			case "cancel":
+				h.pages[0].Orders[0].OrderStatus = "cancelled"
 			case "fill then cancel":
 				h.addEvent(t, d, 12, true)
 			case "used only":
@@ -509,11 +511,14 @@ func TestCanonicalEventsControlSettlement(t *testing.T) {
 				s.BlockHash = head.Hash()
 			}
 			p, err := h.p.Advance(t.Context(), s, out, nil)
-			done := mode == "fill" || mode == "fill then cancel" || mode == "revoked after fill" || mode == "expired" || mode == "signature error after fill" || mode == "balance error after fill" || mode == "allowance error after fill"
+			done := mode == "fill" || mode == "cancel" || mode == "fill then cancel" || mode == "revoked after fill" || mode == "expired" || mode == "signature error after fill" || mode == "balance error after fill" || mode == "allowance error after fill"
 			if done {
 				want := "settled"
 				if mode == "expired" {
 					want = "expired"
+				}
+				if mode == "cancel" {
+					want = "cancelled"
 				}
 				if err != nil || !p.Done || p.Outcome != want || h.posts != 0 {
 					t.Fatal(p, err)

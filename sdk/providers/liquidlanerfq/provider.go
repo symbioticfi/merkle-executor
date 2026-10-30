@@ -64,11 +64,12 @@ type prepared struct {
 	Signature     string                  `json:"signature"`
 }
 type progressState struct {
-	Version int          `json:"version"`
-	Digest  common.Hash  `json:"digest"`
-	OrderID string       `json:"orderId,omitempty"`
-	TxHash  common.Hash  `json:"txHash,omitempty"`
-	Lookup  *lookupState `json:"lookup,omitempty"`
+	Version   int          `json:"version"`
+	Digest    common.Hash  `json:"digest"`
+	OrderID   string       `json:"orderId,omitempty"`
+	TxHash    common.Hash  `json:"txHash,omitempty"`
+	Lookup    *lookupState `json:"lookup,omitempty"`
+	Cancelled bool         `json:"cancelled,omitempty"`
 }
 
 var uuid = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -383,6 +384,12 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	}
 	if !complete {
 		return finish("lookup-scanning", false)
+	}
+	if st.Cancelled {
+		if !used {
+			return finish("awaiting-receipt", false)
+		}
+		return finish("cancelled", true)
 	}
 	if st.TxHash != (common.Hash{}) {
 		if !used {
