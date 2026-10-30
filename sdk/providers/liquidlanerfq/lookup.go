@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -15,14 +17,16 @@ import (
 // complete lookup; an ambiguous POST outcome starts a fresh absence check.
 // Sets retain duplicate/cycle checks across page budgets and restarts.
 type lookupState struct {
-	Cursor  string          `json:"cursor"`
-	Cursors map[string]bool `json:"cursors"`
-	IDs     map[string]bool `json:"ids"`
-	Match   string          `json:"match,omitempty"`
+	Cursor    string          `json:"cursor"`
+	Cursors   map[string]bool `json:"cursors"`
+	IDs       map[string]bool `json:"ids"`
+	Match     string          `json:"match,omitempty"`
+	TxHash    common.Hash     `json:"txHash,omitempty"`
+	Cancelled bool            `json:"cancelled,omitempty"`
 }
 
 func (l *lookupState) validate() error {
-	if !cursorPattern.MatchString(l.Cursor) || !l.Cursors[l.Cursor] || l.IDs == nil || (l.Match != "" && (!uuid.MatchString(l.Match) || !l.IDs[l.Match])) {
+	if !cursorPattern.MatchString(l.Cursor) || !l.Cursors[l.Cursor] || l.IDs == nil || (l.Match != "" && (!uuid.MatchString(l.Match) || !l.IDs[l.Match])) || (l.Match == "" && (l.TxHash != (common.Hash{}) || l.Cancelled)) {
 		return errors.New("RFQ invalid persisted lookup cursor")
 	}
 	for cursor, seen := range l.Cursors {
@@ -103,7 +107,15 @@ func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, 
 			if err != nil || amount.Cmp(d.Request.Outputs[0].Amount) < 0 || !sameAddress(o.Outputs[0].Token, d.Request.Outputs[0].Token) || !sameAddress(o.Outputs[0].Recipient, d.Request.Outputs[0].Recipient) {
 				return false, false, errors.New("RFQ remote output mismatch")
 			}
+			if o.TxHash != nil {
+				raw, err := hexutil.Decode(*o.TxHash)
+				if err != nil || len(raw) != common.HashLength || common.BytesToHash(raw) == (common.Hash{}) {
+					return false, false, errors.New("RFQ invalid order transaction hash")
+				}
+				lookup.TxHash = common.BytesToHash(raw)
+			}
 			lookup.Match = o.OrderID
+			lookup.Cancelled = o.OrderStatus == "cancelled"
 		}
 		if string(response.Cursor) == "null" {
 			st.Lookup = nil
@@ -112,6 +124,8 @@ func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, 
 			}
 			if lookup.Match != "" {
 				st.OrderID = lookup.Match
+				st.TxHash = lookup.TxHash
+				st.Cancelled = lookup.Cancelled
 				return true, true, nil
 			}
 			return false, true, nil

@@ -177,27 +177,19 @@ func TestQuoteHTTPLimitsAndCancellation(t *testing.T) {
 		})
 	}
 }
-func TestDenseSingleBlockAndUnrelatedInvalidations(t *testing.T) {
-	for _, cancel := range []bool{false, true} {
-		t.Run(map[bool]string{false: "Fill limit", true: "indexed unrelated invalidation"}[cancel], func(t *testing.T) {
-			h := newHarness(t)
-			out, s := h.authorized(t)
-			var d prepared
-			_ = json.Unmarshal(out.Data, &d)
-			other := d
-			other.Account = addr(0x1234)
-			for range 1025 {
-				h.addEvent(t, other, 10, cancel)
-			}
-			h.c.used = false
-			p, err := h.p.Advance(t.Context(), s, out, nil)
-			if cancel {
-				if err != nil || p.Done || h.posts != 1 {
-					t.Fatal("unrelated invalidations blocked owner", p, err)
-				}
-			} else if err == nil || !strings.Contains(err.Error(), "single block") || h.posts != 0 {
-				t.Fatal("single-block limit silently truncated", p, err)
-			}
-		})
+func TestUnrelatedHistoryDoesNotBlockPublication(t *testing.T) {
+	h := newHarness(t)
+	out, s := h.authorized(t)
+	var d prepared
+	_ = json.Unmarshal(out.Data, &d)
+	d.Account = addr(0x1234)
+	for range 1025 {
+		h.addEvent(t, d, 10, true)
+	}
+	h.c.used = false
+	h.pages = nil
+	progress, err := h.p.Advance(t.Context(), s, out, nil)
+	if err != nil || progress.Done || h.posts != 1 || h.c.logReads != 0 || h.c.receiptReads != 0 {
+		t.Fatal("unrelated history blocked publication", progress, err)
 	}
 }

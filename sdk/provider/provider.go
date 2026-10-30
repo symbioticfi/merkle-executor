@@ -35,12 +35,6 @@ type CodeOverrideReader interface {
 	CallContractWithCode(context.Context, ethereum.CallMsg, *big.Int, []byte) ([]byte, error)
 }
 
-// LogReader discovers issuer-owned requests at the pinned snapshot. Providers
-// that need event discovery require this interface in addition to Reader.
-type LogReader interface {
-	FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error)
-}
-
 // Execution identifies the confirmed recipe transaction. It is persisted before
 // releasing nonce ownership and is available only while reconciling that execution.
 type Execution struct {
