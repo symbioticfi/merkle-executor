@@ -165,9 +165,10 @@ redemption remain in vault-solver, bound to the configured asset recipe.
 
 Confirmed account authorization precedes idempotent consumer submission. Durable
 request/quote identity, signatures, usage/settlement progress and cursors survive
-restart. Completion requires canonical matching input/output transfers and Reactor
-usage evidence. Paginated lookup and bounded event scanning fail closed on missing,
-ambiguous or overly dense evidence. Lookup checkpoints after 10 API pages per tick
+restart. Fills require canonical matching input/output transfers and Reactor usage
+evidence. Cancelled orders use the backend's `/orders` status and pinned used nonce.
+No cancellation receipt or event scan is needed. Paginated lookup fails closed on
+missing or ambiguous evidence. Lookup checkpoints after 10 API pages per tick
 and resumes across restarts, preserving duplicate checks and withholding publication
 until the scan completes. No new quote is obtained for an existing job.
 [Consumer wire schema and evidence](../sdk/schemas/LIQUID_LANE_RFQ.md).

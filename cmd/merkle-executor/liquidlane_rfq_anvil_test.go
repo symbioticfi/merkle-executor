@@ -55,6 +55,15 @@ func loadRFQArtifact(t *testing.T, name string) serviceArtifact {
 }
 
 func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
+	testAnvilLiquidLaneRFQConsumer(t, false)
+}
+
+func TestAnvilLiquidLaneRFQConsumerRestartAndCancel(t *testing.T) {
+	testAnvilLiquidLaneRFQConsumer(t, true)
+}
+
+func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
+	t.Helper()
 	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
 		t.Skip("set MERKLE_ANVIL_TEST=1 for local RFQ consumer lifecycle")
 	}
@@ -148,7 +157,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
 	var curatorCalls, quotes, gets, posts atomic.Int32
 	var accepted atomic.Bool
-	var fillHash atomic.Pointer[string]
+	var settlementHash atomic.Pointer[string]
 	permission := []any{}
 	for _, leaf := range leaves {
 		permission = append(permission, map[string]any{"hash": leaf.Hash.Hex(), "target": leaf.Target.Hex(), "value": "zero", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": []string{leaf.Proof[0].Hex()}})
@@ -191,7 +200,11 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 			}
 			orders := []wire.RfqOrder{}
 			if accepted.Load() {
-				orders = append(orders, wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: "filled", TxHash: fillHash.Load(), QuoteID: quoteID, Swapper: account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: tokenIn.Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: tokenOut.Hex(), Amount: "950", Recipient: account.Hex()}}})
+				status := "filled"
+				if cancelOrder {
+					status = "cancelled"
+				}
+				orders = append(orders, wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: status, TxHash: settlementHash.Load(), QuoteID: quoteID, Swapper: account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: tokenIn.Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: tokenOut.Hex(), Amount: "950", Recipient: account.Hex()}}})
 			}
 			_ = json.NewEncoder(w).Encode(wire.RfqOrdersResponse{Orders: orders, Cursor: json.RawMessage("null")})
 		case "/api/v1/order":
@@ -283,10 +296,28 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	if e != nil || new(big.Int).SetBytes(rawAllowance).Int64() != 1000 {
 		t.Fatal("recipe did not authorize exact Reactor allowance", e)
 	}
-	order := reactor.IReactorOrder{Request: request, Swapper: account, SwapperSignature: []byte{0}, Filler: owner, Outputs: []reactor.IReactorOutput{{Token: tokenOut, Amount: big.NewInt(950), Recipient: account}}}
-	fill := serviceSeedTransaction(t, ctx, client, owner, &reactorAddress, servicePack(t, reactorArtifact, "fill", order))
-	hash := fill.TxHash.Hex()
-	fillHash.Store(&hash)
+	if cancelOrder {
+		if err = client.Client().CallContext(ctx, nil, "anvil_setBalance", account.Hex(), "0xde0b6b3a7640000"); err != nil {
+			t.Fatal(err)
+		}
+		if err = client.Client().CallContext(ctx, nil, "anvil_impersonateAccount", account.Hex()); err != nil {
+			t.Fatal(err)
+		}
+		receipt := serviceSeedTransaction(t, ctx, client, account, &reactorAddress, servicePack(t, reactorArtifact, "invalidateNonce", request.Nonce))
+		hash := receipt.TxHash.Hex()
+		settlementHash.Store(&hash)
+		if err = client.Client().CallContext(ctx, nil, "anvil_stopImpersonatingAccount", account.Hex()); err != nil {
+			t.Fatal(err)
+		}
+		if err = client.Client().CallContext(ctx, nil, "evm_setNextBlockTimestamp", deadline+1); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		order := reactor.IReactorOrder{Request: request, Swapper: account, SwapperSignature: []byte{0}, Filler: owner, Outputs: []reactor.IReactorOutput{{Token: tokenOut, Amount: big.NewInt(950), Recipient: account}}}
+		fill := serviceSeedTransaction(t, ctx, client, owner, &reactorAddress, servicePack(t, reactorArtifact, "fill", order))
+		hash := fill.TxHash.Hex()
+		settlementHash.Store(&hash)
+	}
 	for range 3 {
 		if err = client.Client().CallContext(ctx, nil, "evm_mine"); err != nil {
 			t.Fatal(err)
@@ -294,10 +325,16 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	}
 	run()
 	job = load()
-	if job.Phase != "settled" || !job.Progress[2].Done || job.Progress[2].Outcome != "settled" {
-		t.Fatal("canonical fill did not settle", job.Phase, job.Progress)
+	wantOutcome := "settled"
+	wantBalances := map[common.Address]int64{tokenIn: 0, tokenOut: 950}
+	if cancelOrder {
+		wantOutcome = "cancelled"
+		wantBalances = map[common.Address]int64{tokenIn: 1000, tokenOut: 0}
 	}
-	for token, want := range map[common.Address]int64{tokenIn: 0, tokenOut: 950} {
+	if job.Phase != "settled" || !job.Progress[2].Done || job.Progress[2].Outcome != wantOutcome {
+		t.Fatal("canonical outcome did not complete", job.Phase, job.Progress)
+	}
+	for token, want := range wantBalances {
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: erc20.NewERC20().PackBalanceOf(account)}, nil)
 		if e != nil || new(big.Int).SetBytes(raw).Int64() != want {
 			t.Fatal("wrong settled balance", token, want, e)

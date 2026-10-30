@@ -39,6 +39,7 @@ hash locates a receipt whose exact Fill, successful status and canonical block m
 match the saved Request and current used nonce. Lookup cursors survive restart;
 API statuses and used nonce bits alone are not settlement. No Reactor history scan
 or consumer-specific nonce invalidation handling is required.
+Backend-reconciled `cancelled` orders end the wait once their pinned nonce is used.
 
 Liquid Lane connector acquisition and calldata construction belong to vault-solver's
 Merkle extension. External signed terms come from RFQ/backend integrations and
