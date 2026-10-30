@@ -17,9 +17,10 @@ one serialized transaction sender. [Design and comparison](docs/DESIGN.md).
 
 | Flow | Implementation |
 | --- | --- |
-| Native on-chain operations | The committed recipe owns calls, reads, amount selection, eligibility gates, approvals, claims and output guards. The executor applies generic permission checks and simulation, without a protocol selector or deployment catalogue. |
+| Native on-chain operations | The committed recipe owns calls, reads, amount selection, eligibility gates, approvals and output guards. The executor applies generic permission checks and simulation, without a protocol selector or deployment catalogue. |
 | CoW Swap | Quote, build account ERC-1271 authorization, wait for its confirmed transaction, submit/reconcile deterministic order UID, verify full fill on-chain. |
 | Liquid Lane RFQ | Acquire an HTTP quote, authorize the committed Request, publish idempotently and reconcile canonical Reactor settlement. |
+| Native issuer claims | Scan owner ledgers, prepare one ready request per execute and batch the same recipe through executor Multicallable. |
 | Merkl reward claims | Read V4 rewards, use cumulative amounts, verify effective distributor root/proof and recipient, encode an approved bounded claim. |
 | Deterministic runtime Inputs | `keeper.NewRecipeInputs()` resolves exact recipe constraints through the shared numerical lens. Unknown or unresolved Inputs fail closed. |
 
@@ -139,19 +140,15 @@ proofs come from the verified permission package. Duplicate provider assignments
 are errors. Result bindings and arithmetic execute on-chain. An explicit skipped
 Manage step still occupies a runtime slot and must pass full simulation.
 
-For a claim → Morpho-cap → Aave-overflow recipe, commit the claim and issuer
-operations, eligibility checks, balance reads and routing arithmetic in the recipe.
-Startup registers CoW, Merkl, Liquid Lane RFQ and Aave V3 capacity providers plus
-generic recipe Inputs. Aave capacity comes from an authenticated post-supply eth_call probe;
-[its recipe](sdk/providers/aave/README.md) selects the actual borrow amount
-and enforces the health floor. The other providers supply HTTP orders, quotes
-and reward proofs;
-native protocol actions use the generic execution path. Request IDs and claim
-eligibility must come from committed literals, reads and results. Runtime inputs
-use exact recipe-result anchors; bounds alone never select an amount and unknown
-sources are rejected. Recipes that depended on issuer-provider-created Inputs or
-request discovery must express that source as an exact recipe constraint or bind a
-Result directly. [Native recipe requirements](docs/PROVIDERS.md#native-on-chain-recipes).
+Claim recipes commit the permitted call. `sdk/providers/claims` prepares request
+IDs and claim amounts from pinned owner ledgers. It scans Noon and Pareto queues,
+reads ERC-7540 aggregate entitlements and cancellation refunds, OpenEden escrows,
+and factory-attested 3F requests. One invocation handles one ready request;
+`RecipeExecutor.multicall` batches up to 16 invocations atomically. A full ledger
+exceeding 4096 entries fails rather than silently omitting older rights. The
+complete batch is simulated and saved before submission. Other financial inputs
+retain deterministic recipe constraints. See [claim preparation](docs/CLAIMS.md).
+
 SDK hosts can reuse these providers or implement the same provider interfaces.
 The daemon selects its automatic providers at startup.
 

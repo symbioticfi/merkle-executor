@@ -13,6 +13,15 @@ import (
 // approvals and calls with zero-valued arguments. Every instruction and the
 // complete result vector are checked before returning a work decision.
 func HasWork(calldata, returned []byte) (bool, error) {
+	if calls, batch, err := multicallEntries(calldata); batch {
+		if err != nil {
+			return false, err
+		}
+		if len(returned) != 0 {
+			return false, errors.New("executor multicall must return no data")
+		}
+		return len(calls) > 0, nil
+	}
 	method := executorABI.GetABI().Methods["execute"]
 	if len(calldata) < 4 || !bytes.Equal(calldata[:4], method.ID) {
 		return false, errors.New("expected executor execute calldata")

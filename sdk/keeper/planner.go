@@ -212,6 +212,38 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 		if err != nil {
 			return nil, nil, errors.Errorf("assemble runtime: %w", err)
 		}
+		var repeated bool
+		for _, output := range plan.Outputs {
+			if len(output.Repeats) == 0 {
+				continue
+			}
+			if repeated || len(plan.Results) != 0 || len(inputs) != 0 || len(skips) != 0 {
+				return nil, nil, errors.New("repeated claims require one batch provider and no external numerical witnesses")
+			}
+			repeated = true
+			calls := [][]byte{plan.Calldata}
+			for _, replacements := range output.Repeats {
+				variant := make(map[string]hexutil.Bytes, len(actions))
+				for key, data := range actions {
+					variant[key] = data
+				}
+				for key, data := range replacements {
+					if _, owns := output.Actions[key]; !owns {
+						return nil, nil, errors.New("repeated claim changes another provider's action")
+					}
+					variant[key] = data
+				}
+				call, _, e := recipes.Assemble(recipe, tree, inputs, variant, skips)
+				if e != nil {
+					return nil, nil, e
+				}
+				calls = append(calls, call)
+			}
+			plan.Calldata, err = recipes.Multicall(calls)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
 		if err := ValidatePlanComposition(plan.Calldata, strategy.Providers, plan.Outputs); err != nil {
 			return nil, nil, err
 		}

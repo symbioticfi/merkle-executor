@@ -58,34 +58,16 @@ native Inputs retain the exact-source rules below.
 
 ## Native on-chain recipes
 
-Other native protocol execution has no Go provider, selector catalogue or
-deployment admission list. The committed recipe owns protocol calls and reads, eligibility
-and pause checks, account/recipient identity, approvals, amount selection, request
-IDs, claims and proceeds guards. The permission tree authorizes each managed call;
-the generic planner preserves its targets, masks, proofs and bindings. The shared
-lens resolves dependencies, and the original executor simulates the exact complete
-transaction before signing.
+Native financial calls retain their committed reads, amount selection and balance
+checks. Claim recipes instead authorize one prepared call: request discovery and
+readiness are handled by `sdk/providers/claims`. It never changes targets, masks,
+proofs or recipient restrictions. See [claim preparation](CLAIMS.md).
 
-Use Result bindings directly for values computed by the recipe. When a runtime
-Input is needed, give it an exact deterministic recipe constraint that generic
-`keeper.NewRecipeInputs()` can resolve. Financial Inputs must equal a deterministic
-expression; an upper/lower bound does not select a value. A request ID must be a
-committed value or be derived exactly from recipe reads/results. The keeper does
-not enumerate an issuer ledger or choose a request from an allowed range.
-
-Recipes that relied on issuer-provider-created Inputs, request discovery or
-readiness checks must commit those sources and checks before execution. Express an
-Input through a generic exact constraint or replace it with a Result binding.
-Unknown, unresolved, future or circular dependencies fail closed. There is no
-issuer-specific fallback or automatic recipe rewrite.
-
-Canonical confirmation settles generic execution only. The keeper does not label a
-native action `requested`, `claimed` or `redeemed`, infer payout from issuer events,
-or retain the account lock while an issuer processes a request. Put pending-state
-checks and duplicate-request prevention in the recipe. A later settlement or claim
-requires a separate committed recipe with fresh reads, eligibility gates and output
-guards. Off-chain providers retain their own authorization and settlement evidence
-checks.
+Financial Inputs still require an exact recipe expression. Numerical claim inputs
+are unnecessary: the provider replaces only permission-masked calldata. Multiple
+ready requests use the executor's native `multicall`, preserving each request's
+same committed recipe. Confirmed transactions complete this execution; pending
+issuer settlement is handled by a later scan.
 
 ## Shared numerical prefix and read batching
 

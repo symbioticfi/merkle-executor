@@ -5,8 +5,9 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
 - Go 1.27.1, Cobra CLI, strict YAML, go-errors wrapping, logr structured logs,
   context-aware I/O and table-driven tests. Keep configuration values in YAML.
 - Generic packages may not branch on protocol names. Native protocol calls, reads,
-  gates, amount selection, claims, authorization and balance guards belong in the
-  committed recipe. The isolated `sdk/providers/aave` provider may supply one
+  gates, financial amount selection, authorization and balance guards belong in the
+  committed recipe. The isolated `sdk/providers/claims` package prepares native
+  issuer claims from owner ledgers; claim recipes only authorize the call. The isolated `sdk/providers/aave` provider may supply one
   authenticated borrow-capacity Input through its eth_call-only prefix probe;
   the recipe still caps the actual amount and enforces its health floor. Other
   protocol providers serve CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs;

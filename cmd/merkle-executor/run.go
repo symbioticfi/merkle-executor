@@ -19,6 +19,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/aave"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/claims"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/liquidlanerfq"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/merkl"
@@ -102,7 +103,11 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 		if err != nil {
 			return errors.Errorf("configure Aave capacity: %w", err)
 		}
-		s.Providers = append(s.Providers, capacity, keeper.NewRecipeInputs())
+		claimProvider, err := claims.NewAutomatic(provider.Deps{Chain: client})
+		if err != nil {
+			return err
+		}
+		s.Providers = append(s.Providers, capacity, keeper.NewRecipeInputs(), claimProvider)
 		strategies = append(strategies, s)
 	}
 	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}

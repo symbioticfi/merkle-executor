@@ -260,7 +260,7 @@ func runFrontendGuardedMerkl(t *testing.T, native bool) {
 	if native {
 		wantDeltaB = "0"
 	}
-	if len(plan.Outputs) != 5 || len(plan.Outputs[1].Actions) != 2 || plan.Outputs[1].Inputs[0] != "100" || plan.Outputs[1].Inputs[1] != "0" || plan.Outputs[1].Inputs[2] != "200" || plan.Outputs[1].Inputs[3] != wantDeltaB || fetches.Load()-before != 1 {
+	if len(plan.Outputs) != 6 || len(plan.Outputs[1].Actions) != 2 || plan.Outputs[1].Inputs[0] != "100" || plan.Outputs[1].Inputs[1] != "0" || plan.Outputs[1].Inputs[2] != "200" || plan.Outputs[1].Inputs[3] != wantDeltaB || fetches.Load()-before != 1 {
 		t.Fatalf("partial guarded reward plan: %+v HTTP=%d", plan.Outputs, fetches.Load()-before)
 	}
 	tokens := erc20.NewERC20()

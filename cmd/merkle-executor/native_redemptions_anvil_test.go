@@ -325,7 +325,7 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := plans[cfg.Strategies[0]]
-	if len(plan.Outputs) != 5 || len(plan.Calldata) == 0 {
+	if len(plan.Outputs) != 6 || len(plan.Calldata) == 0 {
 		t.Fatal("mixed native plan missing automatic providers or execution")
 	}
 	for _, out := range plan.Outputs {
@@ -458,7 +458,7 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != signed.Nonce()+1 {
 		t.Fatal("recovery duplicated native execution", e)
 	}
-	if len(settled.Progress) != 5 {
+	if len(settled.Progress) != 6 {
 		t.Fatalf("wrong provider progress count: %+v", settled.Progress)
 	}
 	for _, progress := range settled.Progress {

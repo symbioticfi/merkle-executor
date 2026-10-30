@@ -55,3 +55,6 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+// The daemon and its SDK are built and tested from the same checkout.
+replace github.com/symbioticfi/merkle-executor/sdk => ./sdk

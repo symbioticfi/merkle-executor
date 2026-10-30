@@ -79,5 +79,7 @@ unsupported boundaries.
 Native issuer contracts are test fixtures only. Source-pinned Noon artifacts and
 compiler settings live under `cmd/merkle-executor/testdata/issuers/noon`, outside
 production ABI generation. [Native validation](../../docs/NATIVE-ISSUER-TESTING.md)
-explains the evidence boundary. Production Go code has no native issuer ABI,
-deployment catalogue or protocol-specific execution provider.
+explains the evidence boundary. Native claim acquisition uses the read-only `ClaimReads.json` subset for the
+Noon withdrawal handler, Idle Pareto queues, ERC-7540, OpenEden escrows and 3F
+request/factory interfaces. Financial protocol execution still comes from the
+committed recipe. See `docs/CLAIMS.md` at the repository root.

@@ -58,7 +58,7 @@ func Decode(policy string, out provider.Output, cfg any) (provider.Output, bool,
 		return provider.Output{}, false, errors.New("persisted derived output differs from its immutable envelope")
 	}
 	if !envelope.Matched {
-		if len(envelope.Config) != 0 || len(inner.Inputs) != 0 || len(inner.Actions) != 0 || len(inner.SkipSteps) != 0 || len(inner.Data) != 0 || len(inner.Results) != 0 {
+		if len(envelope.Config) != 0 || len(inner.Inputs) != 0 || len(inner.Actions) != 0 || len(inner.Repeats) != 0 || len(inner.SkipSteps) != 0 || len(inner.Data) != 0 || len(inner.Results) != 0 {
 			return provider.Output{}, false, errors.New("invalid unmatched provider envelope")
 		}
 		return inner, false, nil
