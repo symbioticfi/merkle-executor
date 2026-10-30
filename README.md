@@ -114,6 +114,9 @@ permissions and simulation remain fresh. The retained recipe cache has a fixed
 the number of configured strategies and are cleared on restart.
 [Batching scopes, counts and compatibility](docs/PROVIDERS.md#shared-numerical-prefix-and-read-batching).
 
+See [Sepolia setup](docs/SEPOLIA.md) for the shared infrastructure basis and the
+curator-created instances required before starting a service.
+
 ## Permissions and runtime inputs
 
 For every new preparation, the daemon reads `account.adapter()` at the authenticated
