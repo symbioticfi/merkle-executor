@@ -25,5 +25,5 @@ integration:
 	MERKLE_ANVIL_TEST=1 go test -tags=integration ./recipes ./txengine -run TestAnvil -count=1 -v
 
 tools: $(ABIGEN)
-$(ABIGEN):
+$(ABIGEN): Makefile
 	GOTOOLCHAIN=$(ABIGEN_TOOLCHAIN) GOBIN='$(CURDIR)/.tools' go install github.com/ethereum/go-ethereum/cmd/abigen@$(ABIGEN_VERSION)
