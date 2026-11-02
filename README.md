@@ -232,9 +232,9 @@ make integration # ephemeral loopback Anvil, real RecipeExecutor bytecode
 make generate    # regenerate committed bindings/wire types from vendored artifacts
 ```
 
-The service uses Go 1.27.1. Generation installs pinned `abigen` 1.17.5 locally in
-`.tools` using Go 1.26.8 because its CLI dependency excludes Go 1.27. Python 3 is
-also required for wire type generation.
+The service uses Go 1.27.3. Generation installs pinned `abigen` 1.17.10 locally in
+`.tools` using the same Go 1.27.3 toolchain. Python 3 is also required for wire
+type generation.
 
 The local integration exercises event discovery, permissions, arithmetic/bindings,
 managed transfers, allowance resets, direct Call, skipped gates and native issuer
