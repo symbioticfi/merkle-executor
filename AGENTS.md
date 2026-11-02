@@ -2,7 +2,7 @@
 
 The service is independently maintained; its architecture is in `docs/DESIGN.md`.
 
-- Go 1.27.1, Cobra CLI, strict YAML, go-errors wrapping, logr structured logs,
+- Go 1.27.3, Cobra CLI, strict YAML, go-errors wrapping, logr structured logs,
   context-aware I/O and table-driven tests. Keep configuration values in YAML.
 - Generic packages may not branch on protocol names. Native protocol calls, reads,
   gates, amount selection, claims, authorization and balance guards belong in the

@@ -15,6 +15,7 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 )
 
@@ -298,4 +299,22 @@ func TestRPCNeverFollowsReadOrSubmissionRedirects(t *testing.T) {
 			}
 		})
 	}
+}
+
+type websocketChainIdentity struct{}
+
+func (websocketChainIdentity) ChainId() string { return "0x1" }
+
+func TestRPCSupportsWebSocketTransport(t *testing.T) {
+	backend := rpc.NewServer()
+	if err := backend.RegisterName("eth", websocketChainIdentity{}); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(backend.WebsocketHandler([]string{"*"}))
+	defer server.Close()
+	client, err := Dial(t.Context(), "ws"+strings.TrimPrefix(server.URL, "http"), "", big.NewInt(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Close()
 }

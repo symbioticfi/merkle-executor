@@ -71,7 +71,9 @@ Root `make check` and `make integration` also check this module explicitly.
 Bindings regenerate from this module's ABI through its pinned abigen tool;
 never edit generated Go.
 
-Liquid Lane's consumer quote/order provider is included. Vault-specific Liquid
+Liquid Lane's consumer quote/order provider is included. It uses `/orders` to
+locate fill transactions, then verifies their canonical receipts and live nonce state;
+it does not scan Reactor history. Vault-specific Liquid
 Lane connector and 3F auction integrations belong to vault-solver: they supply
 bounded provider outputs using their own feeds, sizing and calldata construction.
 Custom integrations implement the same provider contracts.

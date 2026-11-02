@@ -38,9 +38,8 @@ adapters revision above is also a direct mapping read. These are the only three
 safe getters used by the consumer's Advance stage. Domain can be staged into initial
 recipe metadata before quote acquisition. Token `balanceOf` and `allowance` targets
 come from the authenticated recipe and can have arbitrary implementations. They
-remain isolated eth_call members sharing the JSON array; no caller-independence is inferred from their ABI. Fill and indexed
-account cancellation logs share a separate array with the range header. A matching
-event header and receipt share a later batch; canonical closure follows those reads. [Full source hashes and semantics](LIQUID_LANE_RFQ.md).
+remain isolated eth_call members sharing the JSON array; no caller-independence is inferred from their ABI. The `/orders` API supplies a candidate transaction hash; its receipt and canonical
+headers are inspected directly. No Fill or nonce invalidation range is scanned. [Full source hashes and semantics](LIQUID_LANE_RFQ.md).
 
 ## Native recipe reads
 

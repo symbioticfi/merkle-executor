@@ -34,8 +34,12 @@ Liquid Lane RFQ consumers use the SDK provider `liquidlane-rfq` to
 acquire exact-input quotes, populate an approved account Sign action and reconcile
 canonical Reactor events. It persists the quote, Request digest and fixed `0x00`
 signature before publication, preserving identity through ambiguous HTTP responses.
-Only complete all-status lookup permits an idempotent retry. Bounded canonical event
-scan cursors survive restart; API statuses and used nonce bits are not settlement.
+Only complete all-status `/orders` lookup permits an idempotent retry. Its transaction
+hash locates a receipt whose exact Fill, successful status and canonical block must
+match the saved Request and current used nonce. Lookup cursors survive restart;
+API statuses and used nonce bits alone are not settlement. No Reactor history scan
+or consumer-specific nonce invalidation handling is required.
+Backend-reconciled `cancelled` orders end the wait once their pinned nonce is used.
 
 Liquid Lane connector acquisition and calldata construction belong to vault-solver's
 Merkle extension. External signed terms come from RFQ/backend integrations and

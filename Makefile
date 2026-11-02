@@ -1,12 +1,12 @@
 SHELL := bash
 .DEFAULT_GOAL := help
-export GOTOOLCHAIN := go1.27.1
+export GOTOOLCHAIN := go1.27.3
 PKG := github.com/symbioticfi/merkle-executor
 VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS := -X $(PKG)/internal/version.Version=$(VERSION) -X $(PKG)/internal/version.Commit=$(COMMIT) -X $(PKG)/internal/version.Date=$(DATE)
-GOLANGCI_LINT_VERSION := v2.13.2
+GOLANGCI_LINT_VERSION := v2.15.0
 .PHONY: help build test integration vet lint format generate tidy check tools
 help:
 	@echo 'build test integration vet lint format generate tidy check'
