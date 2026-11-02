@@ -63,7 +63,7 @@ No schema or endpoint is fetched automatically during a normal build.
   invalidation sentinel is not success.
 
 Run `make generate` from the SDK or repository directory. The SDK's
-`hack/generate-bindings.sh` uses `abigen --v2` from go-ethereum 1.17.5 for both
+`hack/generate-bindings.sh` uses `abigen --v2` from go-ethereum 1.17.10 for both
 core and protocol bindings.
 
 EIP712 and Merkl golden vectors in provider tests were independently computed with

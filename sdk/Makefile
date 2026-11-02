@@ -1,9 +1,9 @@
 SHELL := bash
-export GOTOOLCHAIN := go1.27.1
+export GOTOOLCHAIN := go1.27.3
 export GOWORK := off
-GOLANGCI_LINT_VERSION := v2.13.2
-ABIGEN_VERSION := v1.17.5
-ABIGEN_TOOLCHAIN := go1.26.8
+GOLANGCI_LINT_VERSION := v2.15.0
+ABIGEN_VERSION := v1.17.10
+ABIGEN_TOOLCHAIN := go1.27.3
 ABIGEN := $(CURDIR)/.tools/abigen
 .PHONY: check test integration generate verify-lens tools
 generate: tools
