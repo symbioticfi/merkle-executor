@@ -34,12 +34,7 @@ type Config struct {
 
 // Curator contains the operator-supplied permission service settings.
 type Curator struct {
-	URL       string `yaml:"url"`
-	APIKeyEnv string `yaml:"apiKeyEnv,omitempty"`
-}
-
-func (c Curator) HTTPConfig() protocolio.HTTPConfig {
-	return protocolio.HTTPConfig{URL: c.URL, APIKeyEnv: c.APIKeyEnv, TimeoutSeconds: permissions.HostTimeoutSeconds, MaxResponseBytes: permissions.HostMaxResponseBytes}
+	URL string `yaml:"url"`
 }
 
 type Chain struct {
@@ -111,7 +106,7 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
-	if err := permissions.ValidateConfig(c.Curator.HTTPConfig()); err != nil {
+	if err := permissions.ValidateURL(c.Curator.URL); err != nil {
 		return err
 	}
 	if c.Mode != "simulate" && c.Mode != "send" {
