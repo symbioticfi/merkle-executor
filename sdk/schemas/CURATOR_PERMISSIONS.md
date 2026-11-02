@@ -42,10 +42,10 @@ calls and proofs independently of the backend certificate.
 ## Transport and recovery
 
 The daemon fixes the permission HTTP timeout at 10 seconds and response cap at
-2 MiB. Context cancellation, credential environment references, sanitized errors
-and redirect rejection use shared `protocolio` transport. The host explicitly supplies
-the credential lookup function; the SDK does not read the environment. Configuration validation
-reads neither credentials nor the network. A failed adapter read prevents HTTP;
+2 MiB. Requests are unauthenticated. Context cancellation, sanitized errors
+and redirect rejection come from the shared protocol HTTP client. The host supplies
+only the service URL and chain reader. URL validation uses no network access.
+A failed adapter read prevents HTTP;
 invalid scope, malformed metadata, incomplete leaves or proof errors fail closed.
 There is no local-file, missing-route or stale-root fallback in the daemon.
 

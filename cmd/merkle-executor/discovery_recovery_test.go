@@ -21,7 +21,7 @@ import (
 )
 
 func TestDerivedAccountAndCuratorChangesCannotRewriteActiveWork(t *testing.T) {
-	for _, change := range []string{"account", "caller", "chain", "url", "credential reference"} {
+	for _, change := range []string{"account", "caller", "chain", "url"} {
 		t.Run(change, func(t *testing.T) {
 			cfg := testCLIConfig(t.TempDir())
 			original := cfg.Strategies[0]
@@ -37,8 +37,6 @@ func TestDerivedAccountAndCuratorChangesCannotRewriteActiveWork(t *testing.T) {
 				cfg.Chain.ChainID++
 			case "url":
 				cfg.Curator.URL = "http://other.invalid/api/v1"
-			case "credential reference":
-				cfg.Curator.APIKeyEnv = "OTHER_CURATOR_KEY"
 			}
 			current := keeper.Config{Name: original, Executor: original, Account: account.Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(original, account, caller)}
 			old := current

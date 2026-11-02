@@ -73,7 +73,7 @@ executors; one pinned, deduplicated read group discovers each `account()` and
 `caller()`, followed by a canonical block check. All executors in one process must
 have the same nonzero caller. Planning and simulation use that caller without a
 private key. The required `curator.url` identifies the curator-backend deployment,
-including `/api/v1`; RPC endpoints and the expected chain ID also remain deployment
+including `/api/v1`. The Curator API is public and uses no API token; RPC endpoints and the expected chain ID also remain deployment
 inputs. No global endpoint or universal safe fee ceiling can be inferred.
 
 `strategies` is a list of full, nonzero executor addresses. Each address is
@@ -83,7 +83,7 @@ rejected, including different checksum spellings. Strategy objects, labels and
 per-strategy options are rejected before network access.
 
 The runtime policy version is `1`. Its recovery fingerprint binds the executor,
-chain, discovered account and caller, curator URL/credential environment name and
+chain, discovered account and caller, curator URL and
 sender fee ceiling. Active work must match that fingerprint before it can resume.
 
 Cache, timeout, polling, confirmation and fee-horizon policies are fixed in code.

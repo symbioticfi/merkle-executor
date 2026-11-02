@@ -3,7 +3,6 @@
 mode: simulate
 curator:
   url: https://curator-backend.example.invalid/api/v1
-  # apiKeyEnv: CURATOR_API_TOKEN
 chain:
   chainId: 1
   rpcUrl: http://127.0.0.1:8545

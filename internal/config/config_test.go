@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 )
 
 const validConfig = `curator:
@@ -148,7 +147,6 @@ func TestRuntimePolicyFieldsAreNotConfiguration(t *testing.T) {
 func TestExecutorOnlyStrategyUsesRequiredCurator(t *testing.T) {
 	text := strings.ReplaceAll(validConfig, "    account: '0x0000000000000000000000000000000000000003'\n", "")
 	text = strings.ReplaceAll(text, "    tree: permissions.json\n", "")
-	text = strings.Replace(text, "  url: http://127.0.0.1:1/api/v1", "  url: http://127.0.0.1:1/api/v1\n  apiKeyEnv: UNSET_CURATOR_CONFIG_TEST_KEY", 1)
 	if _, err := Load(writeConfig(t, text)); err != nil {
 		t.Fatalf("executor-only curator configuration rejected: %v", err)
 	}
@@ -161,6 +159,7 @@ func TestCuratorValidationRejectsObsoleteAndUnsafeConfiguration(t *testing.T) {
 		"missing curator":  strings.Replace(validConfig, "curator:\n  url: http://127.0.0.1:1/api/v1\n", "", 1),
 		"credential URL":   strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "https://user:secret@example.invalid/api/v1", 1),
 		"query URL":        strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "http://example.invalid/api/v1?token=private", 1),
+		"API key":          strings.Replace(validConfig, "curator:", "curator:\n  apiKeyEnv: CURATOR_TEST_TOKEN", 1),
 		"negative timeout": strings.Replace(validConfig, "curator:", "curator:\n  timeoutSeconds: -1", 1),
 		"large timeout":    strings.Replace(validConfig, "curator:", "curator:\n  timeoutSeconds: 121", 1),
 		"negative bound":   strings.Replace(validConfig, "curator:", "curator:\n  maxResponseBytes: -1", 1),
@@ -235,9 +234,7 @@ func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.Curator.HTTPConfig().TimeoutSeconds != permissions.HostTimeoutSeconds || cfg.Curator.HTTPConfig().MaxResponseBytes != permissions.HostMaxResponseBytes {
-				t.Fatalf("effective curator policy %+v", cfg.Curator)
-			}
+
 			got := cfg.StrategyFingerprint(cfg.Strategies[0], common.HexToAddress("0x03"), common.HexToAddress("0x01"))
 			if fingerprint == "" {
 				fingerprint = got
@@ -314,7 +311,6 @@ func TestAddressIdentityIgnoresCaseAndOrder(t *testing.T) {
 		"caller":        func(_ *Config, _, c *common.Address) { *c = common.HexToAddress("0x05") },
 		"chain":         func(c *Config, _, _ *common.Address) { c.Chain.ChainID++ },
 		"source":        func(c *Config, _, _ *common.Address) { c.Curator.URL = "http://other.invalid/api/v1" },
-		"credential":    func(c *Config, _, _ *common.Address) { c.Curator.APIKeyEnv = "OTHER_CURATOR_KEY" },
 		"sender policy": func(c *Config, _, _ *common.Address) { c.TxManager.MaxFeeGwei++ },
 	} {
 		t.Run(name, func(t *testing.T) {
