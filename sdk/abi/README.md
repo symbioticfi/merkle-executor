@@ -10,7 +10,7 @@ These ABI arrays are generated from adapters `codex/bailsec-normalized` at
 The source pin is `source.json`. From the SDK directory, after rebuilding that
 exact clean checkout, run
 `MERKLE_ADAPTERS_REPO=/path/to/adapters python3 hack/sync-adapters.py`, then
-regenerate Go bindings with `make generate`, using abigen 1.17.5 and
+regenerate Go bindings with `make generate`, using abigen 1.17.10 and
 its `--v2` generator. The Recipes instruction payloads are declared in
 `recipes/codec.go`, because they are encoded data rather than public
 contract methods. The independently encoded fixture and local EVM test verify

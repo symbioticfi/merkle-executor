@@ -114,6 +114,9 @@ permissions and simulation remain fresh. The retained recipe cache has a fixed
 the number of configured strategies and are cleared on restart.
 [Batching scopes, counts and compatibility](docs/PROVIDERS.md#shared-numerical-prefix-and-read-batching).
 
+See [Sepolia setup](docs/SEPOLIA.md) for the shared infrastructure basis and the
+curator-created instances required before starting a service.
+
 ## Permissions and runtime inputs
 
 For every new preparation, the daemon reads `account.adapter()` at the authenticated
@@ -229,9 +232,9 @@ make integration # ephemeral loopback Anvil, real RecipeExecutor bytecode
 make generate    # regenerate committed bindings/wire types from vendored artifacts
 ```
 
-The service uses Go 1.27.1. Generation installs pinned `abigen` 1.17.5 locally in
-`.tools` using Go 1.26.8 because its CLI dependency excludes Go 1.27. Python 3 is
-also required for wire type generation.
+The service uses Go 1.27.3. Generation installs pinned `abigen` 1.17.10 locally in
+`.tools` using the same Go 1.27.3 toolchain. Python 3 is also required for wire
+type generation.
 
 The local integration exercises event discovery, permissions, arithmetic/bindings,
 managed transfers, allowance resets, direct Call, skipped gates and native issuer
