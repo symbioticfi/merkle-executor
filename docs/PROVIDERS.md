@@ -197,11 +197,10 @@ or a different gate expression retains its committed recipe policy. The provider
 fills the existing cumulative/proof fields and their declared Inputs; it does not
 replace gates or skip steps. When all these optional claims are idle, their zero gates remain usable alongside
 other ready actions; the engine classifies idle work across the whole recipe.
-All-idle Merkl claims without dedicated optional gates remain not ready. The normal daemon
-Anvil fixture `TestAnvilFrontendGuardedMerklMixedRewards` executes two freshly
-frontend-generated guarded claims, checks the idle/positive combination, executes
-a later valid root without permission changes, and rejects wrong proofs, root
-changes during the claim and underpayment through the original guards.
+All-idle Merkl claims without dedicated optional gates remain not ready. The daemon Anvil fixture `TestAnvilCurrentFrontendMerklVariableProof` executes
+the current frontend claim with a runtime token and a 20-element proof inside
+the 64-element reservation. Separate nested-claim fixtures cover idle/positive
+combinations, changing roots, wrong proofs and original recipe cash-delta guards.
 
 ## CoW asynchronous ERC-1271 sell order
 
