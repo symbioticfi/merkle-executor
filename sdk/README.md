@@ -155,7 +155,7 @@ provider getter or mutable account state is cached. Invalidating a frozen hint u
 entry version so it cannot erase a concurrent replacement. Transient per-attempt copies
 are not part of the retained-byte budget.
 
-`permissions.New` requires the host chain reader to resolve the pinned account
+`permissions.New` accepts the public Curator URL without credentials and requires the host chain reader to resolve the pinned account
 adapter. It fetches the current backend certificate at
 `/merkle/{adapter}/{root}`, verifies bundle/call scope and leaf
 coverage, and returns the unchanged metadata artifact. One pinned EVM read and
@@ -183,3 +183,10 @@ and proof words without reconstructing a canonical root/recipient/balance-check
 program. Generic assembly preserves permission masks and pinned bytes; the complete
 original contract simulation remains authoritative. `recipes.ValidateMutableActions`
 and `recipes.ReadDependent` have been removed. An unchanged masked template no longer needs a provider owner, and deterministic values need no READ ancestry.
+
+Merkl claims use `claim`, with no recipient override. Proof capacities are reserved
+calldata space, while the encoded array length is the actual verified proof length.
+The provider fills only authorized token, cumulative amount, proof length and proof
+words. For a runtime token slot it selects an unclaimed reward in address order;
+subsequent executions can claim remaining tokens. Fixed-size permission data,
+bindings, recipient checks and full transaction simulation are preserved.

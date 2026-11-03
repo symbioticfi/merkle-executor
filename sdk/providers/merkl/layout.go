@@ -28,9 +28,10 @@ type claimLayout struct {
 	data        []byte
 	distributor common.Address
 	amounts     []int
+	tokenWords  []int
+	lengths     []int
 	proofs      [][]int
 	tokens      []common.Address
-	direct      bool
 }
 type wordReference struct {
 	offset  int
@@ -60,12 +61,8 @@ func claimLayoutOf(action recipes.ManagedAction, account common.Address) (*claim
 		if len(data) < 4 {
 			return nil
 		}
-		methods := binding.NewMerklDistributor().GetABI().Methods
-		for _, name := range []string{"claim", "claimWithRecipient"} {
-			method := methods[name]
-			if !bytes.Equal(data[:4], method.ID) {
-				continue
-			}
+		method := binding.NewMerklDistributor().GetABI().Methods["claim"]
+		if bytes.Equal(data[:4], method.ID) {
 			if result != nil {
 				return errors.New("one managed Merkl action must contain one claim")
 			}
@@ -73,40 +70,49 @@ func claimLayoutOf(action recipes.ManagedAction, account common.Address) (*claim
 			if err != nil {
 				return errors.New("invalid Merkl claim template")
 			}
-			packed, err := method.Inputs.Pack(args...)
-			if err != nil || !bytes.Equal(packed, data[4:]) {
-				return errors.New("noncanonical Merkl claim array layout is unsupported")
-			}
 			users, tokens, amounts, proofs := args[0].([]common.Address), args[1].([]common.Address), args[2].([]*big.Int), args[3].([][][32]byte)
 			if len(tokens) < 1 || len(tokens) > 32 || len(users) != len(tokens) || len(amounts) != len(tokens) || len(proofs) != len(tokens) {
 				return errors.New("Merkl claim arrays must have the same bounded length")
 			}
-			result = &claimLayout{data: data, distributor: target, tokens: tokens, direct: name == "claimWithRecipient"}
-			if result.direct {
-				recipients, datas := args[4].([]common.Address), args[5].([][]byte)
-				if len(recipients) != len(tokens) || len(datas) != len(tokens) {
-					return errors.New("Merkl recipient arrays must match tokens")
-				}
-				for i := range tokens {
-					if recipients[i] != account || len(datas[i]) != 0 {
-						return errors.New("Merkl recipient override must pin account and empty callback")
-					}
-				}
-			}
+			result = &claimLayout{data: data, distributor: target, tokens: tokens}
+			tokenArray := 4 + int(new(big.Int).SetBytes(data[36:68]).Uint64())
 			amountArray := 4 + int(new(big.Int).SetBytes(data[68:100]).Uint64())
 			proofArray := 4 + int(new(big.Int).SetBytes(data[100:132]).Uint64())
-			for i, token := range tokens {
-				if users[i] != account || token == (common.Address{}) {
-					return errors.New("Merkl claim must pin authenticated user and nonzero token")
+			reserved := make([][][32]byte, len(proofs))
+			starts := make([]int, len(proofs))
+			for i := range tokens {
+				if users[i] != account {
+					return errors.New("Merkl claim must pin authenticated user")
 				}
+				tokenAt, err := resolve(base + tokenArray + 32 + 32*i)
+				if err != nil {
+					return err
+				}
+				result.tokenWords = append(result.tokenWords, tokenAt)
 				at, err := resolve(base + amountArray + 32 + 32*i)
 				if err != nil {
 					return err
 				}
 				result.amounts = append(result.amounts, at)
 				relative := int(new(big.Int).SetBytes(data[proofArray+32+32*i : proofArray+64+32*i]).Uint64())
+				start := proofArray + 32 + relative
+				end := len(data)
+				if i+1 < len(proofs) {
+					end = proofArray + 32 + int(new(big.Int).SetBytes(data[proofArray+64+32*i:proofArray+96+32*i]).Uint64())
+				}
+				if start < proofArray || start+32 > end || end > len(data) || (end-start-32)%32 != 0 || (end-start-32)/32 > 64 {
+					return errors.New("invalid Merkl proof capacity")
+				}
+				starts[i] = start
+				lengthAt, err := resolve(base + start)
+				if err != nil {
+					return err
+				}
+				result.lengths = append(result.lengths, lengthAt)
+				reserved[i] = make([][32]byte, (end-start-32)/32)
 				var offsets []int
-				for j := range proofs[i] {
+				for j := range reserved[i] {
+					copy(reserved[i][j][:], data[start+32+32*j:start+64+32*j])
 					at, err = resolve(base + proofArray + 32 + relative + 32 + 32*j)
 					if err != nil {
 						return err
@@ -114,6 +120,16 @@ func claimLayoutOf(action recipes.ManagedAction, account common.Address) (*claim
 					offsets = append(offsets, at)
 				}
 				result.proofs = append(result.proofs, offsets)
+			}
+			packed, err := method.Inputs.Pack(users, tokens, amounts, reserved)
+			if err != nil || len(packed)+4 != len(data) {
+				return errors.New("noncanonical Merkl claim array layout is unsupported")
+			}
+			for _, start := range starts {
+				copy(packed[start-4:start+28], data[start:start+32])
+			}
+			if !bytes.Equal(packed, data[4:]) {
+				return errors.New("noncanonical Merkl claim array layout is unsupported")
 			}
 			return nil
 		}
@@ -181,11 +197,14 @@ func claimLayoutOf(action recipes.ManagedAction, account common.Address) (*claim
 
 func (layout *claimLayout) payload(template, claim []byte) []byte {
 	result := bytes.Clone(template)
+	tokenArray := 4 + int(new(big.Int).SetBytes(claim[36:68]).Uint64())
 	amountArray := 4 + int(new(big.Int).SetBytes(claim[68:100]).Uint64())
 	proofArray := 4 + int(new(big.Int).SetBytes(claim[100:132]).Uint64())
 	for i, at := range layout.amounts {
+		copy(result[layout.tokenWords[i]:layout.tokenWords[i]+32], claim[tokenArray+32+32*i:tokenArray+64+32*i])
 		copy(result[at:at+32], claim[amountArray+32+32*i:amountArray+64+32*i])
 		relative := int(new(big.Int).SetBytes(claim[proofArray+32+32*i : proofArray+64+32*i]).Uint64())
+		copy(result[layout.lengths[i]:layout.lengths[i]+32], claim[proofArray+32+relative:proofArray+64+relative])
 		for j, at := range layout.proofs[i] {
 			start := proofArray + 32 + relative + 32 + 32*j
 			copy(result[at:at+32], claim[start:start+32])

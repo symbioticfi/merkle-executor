@@ -75,7 +75,7 @@ func TestMerklStagedPreparationPreservesAPIEligibilityAndLazyErrors(t *testing.T
 					}
 					return multicall.NewMulticall3().GetABI().Methods["aggregate3"].Outputs.Pack(values)
 				})
-				p, err := New(Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: 452, AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: mode == "absent skip", DedicatedClaimGroup: mode == "absent skip"}, provider.Deps{Chain: chain, HTTP: srv.Client()})
+				p, err := New(Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "0:0", CalldataBytes: 452, AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: mode == "absent skip", DedicatedClaimGroup: mode == "absent skip"}, provider.Deps{Chain: chain, HTTP: srv.Client()})
 				if err != nil {
 					t.Fatal(err)
 				}

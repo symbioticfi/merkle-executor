@@ -104,7 +104,7 @@ func TestDefaultRecipientReadOncePerPinnedPreparation(t *testing.T) {
 				users[i] = addr(3)
 				amounts[i] = big.NewInt(100)
 				cfg.Tokens = append(cfg.Tokens, row.Token.Address)
-				cfg.ProofLengths = append(cfg.ProofLengths, 5)
+				cfg.ProofCapacities = append(cfg.ProofCapacities, 5)
 			}
 			payload := a.PackClaim(users, tokens, amounts, proofs)
 			cfg.CalldataBytes = len(payload)

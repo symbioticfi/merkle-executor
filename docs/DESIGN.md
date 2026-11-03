@@ -64,9 +64,8 @@ The daemon accepts a YAML list of executor addresses and registers fixed automat
 providers at startup. Canonical lowercase executor addresses are the durable and
 log identifiers; duplicate addresses and strategy objects are rejected. Runtime
 policy version `1` is included in the recovery fingerprint with the canonical
-executor, discovered account/caller, chain ID, curator URL/credential environment
-name and transaction-manager fee ceiling. The fingerprint does not encode the
-provider roster or an issuer catalogue.
+executor, discovered account/caller, chain ID, curator URL and transaction-manager fee ceiling.
+The fingerprint does not encode the provider roster or an issuer catalogue.
 At startup it pins a valid head, batches deduplicated account and caller getters,
 rejects any invalid member,
 and closes the same-number/hash guard before publishing the complete account map.
@@ -83,7 +82,7 @@ HTTP is in flight. Other SDK hosts may omit the source and keep local tree loadi
 
 Only new preparation fetches permission bytes. Signed-attempt recovery and external
 provider advancement do not depend on curator availability. Runtime fingerprints bind
-the derived account and curator HTTP configuration (credential variable names only).
+the derived account and curator URL.
 Recovery requires the saved fingerprint to match; it never rewrites journal
 identity or selects a different tree source.
 
@@ -189,3 +188,10 @@ Global recovery/state failures emit one sanitized keeper error and an iteration
 metric with `strategy="_global"`, `outcome="error"`. Strategy errors retain their
 own observations without a duplicate global event. Recovery failures remain
 retryable and never trigger submission on the failing iteration.
+
+Merkl claims use `claim`, with no recipient override. Proof capacities are reserved
+calldata space, while the encoded array length is the actual verified proof length.
+The provider fills only authorized token, cumulative amount, proof length and proof
+words. For a runtime token slot it selects an unclaimed reward in address order;
+subsequent executions can claim remaining tokens. Fixed-size permission data,
+bindings, recipient checks and full transaction simulation are preserved.

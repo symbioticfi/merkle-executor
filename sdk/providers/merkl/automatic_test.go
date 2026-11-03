@@ -246,31 +246,3 @@ func TestAutomaticUsesCuratorClaimGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-func TestClaimRecipientOverridePinsCustody(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		recipient common.Address
-		data      []byte
-		want      string
-	}{
-		{name: "account", recipient: addr(3)},
-		{name: "other recipient", recipient: addr(9), want: "override must pin account"},
-		{name: "callback", recipient: addr(3), data: []byte{1}, want: "empty callback"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			raw := binding.NewMerklDistributor().PackClaimWithRecipient([]common.Address{addr(3)}, []common.Address{addr(1)}, []*big.Int{new(big.Int)}, [][][32]byte{{}}, []common.Address{tc.recipient}, [][]byte{tc.data})
-			action := recipes.ManagedAction{Leaf: recipes.Leaf{Target: addr(4), Data: raw, DataMask: make([]byte, len(raw)), Value: new(big.Int)}}
-			layout, err := claimLayoutOf(action, addr(3))
-			if tc.want != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.want) {
-					t.Fatalf("want %s,got %v", tc.want, err)
-				}
-				return
-			}
-			if err != nil || layout == nil || !layout.direct {
-				t.Fatalf("self recipient rejected: %+v %v", layout, err)
-			}
-		})
-	}
-}
