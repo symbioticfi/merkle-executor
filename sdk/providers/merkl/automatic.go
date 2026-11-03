@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"math/big"
 	"reflect"
+	"sort"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	multicall "github.com/symbioticfi/merkle-executor/sdk/bindings/multicall3"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -61,7 +64,7 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 		if action.Leaf.Value.Sign() != 0 {
 			return nil, errors.New("Merkl claim value must be zero")
 		}
-		cfg := Config{HTTP: rewardHTTP(), Multicall3: protocolio.StandardMulticall3, Distributor: layout.distributor.Hex(), Action: action.Key, CalldataBytes: len(layout.data), MinClaimable: "1", DirectRecipient: layout.direct, AllowIdle: true}
+		cfg := Config{HTTP: rewardHTTP(), Multicall3: protocolio.StandardMulticall3, Distributor: layout.distributor.Hex(), Action: action.Key, CalldataBytes: len(layout.data), MinClaimable: "1", AllowIdle: true}
 		fields := map[int]bool{}
 		for i, token := range layout.tokens {
 			identity := cfg.Distributor + token.Hex()
@@ -70,8 +73,8 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 			}
 			seen[identity] = true
 			cfg.Tokens = append(cfg.Tokens, token.Hex())
-			cfg.ProofLengths = append(cfg.ProofLengths, len(layout.proofs[i]))
-			for _, at := range append([]int{layout.amounts[i]}, layout.proofs[i]...) {
+			cfg.ProofCapacities = append(cfg.ProofCapacities, len(layout.proofs[i]))
+			for _, at := range append([]int{layout.tokenWords[i], layout.amounts[i], layout.lengths[i]}, layout.proofs[i]...) {
 				if at < 4 || at+32 > len(action.Leaf.Data) {
 					return nil, errors.New("Merkl field exceeds managed calldata")
 				}
@@ -84,7 +87,7 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 		requirements := keeper.RecipeRequirements{Actions: []string{action.Key}}
 		for _, b := range action.Bindings {
 			if !fields[int(b.Offset)] {
-				return nil, errors.New("Merkl bindings must target cumulative amounts or proof words")
+				return nil, errors.New("Merkl bindings must target reward tokens, cumulative amounts or proof fields")
 			}
 			switch b.Value.Source {
 			case recipes.Input:
@@ -152,13 +155,10 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	cfg := automaticConfig{}
 	anyClaimable := false
 	allOptional := true
+	used := map[string]bool{}
 	for _, claim := range claims {
 		allOptional = allOptional && len(claim.cfg.ClaimableInputs) == 1
-		runtime, err := New(claim.cfg, p.deps)
-		if err != nil {
-			return provider.Output{}, err
-		}
-		prepared, err := runtime.prepareRewards(s, entries, func() ([]multicall.Multicall3Result, error) { return runtime.readBatch(ctx, s) })
+		selected, prepared, err := p.prepareClaim(ctx, s, claim.cfg, entries, used)
 		if err != nil {
 			return provider.Output{}, err
 		}
@@ -179,12 +179,67 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 			out.Inputs[index] = value
 		}
 		out.Actions[claim.cfg.Action] = payload
-		cfg.Claims = append(cfg.Claims, claim.cfg)
+		cfg.Claims = append(cfg.Claims, selected)
+		for _, token := range selected.Tokens {
+			used[selected.Distributor+token] = true
+		}
 	}
 	if !anyClaimable && !allOptional {
 		return provider.Output{}, errors.Errorf("%w: Merkl rewards below minClaimable", provider.ErrNotReady)
 	}
 	return derived.Encode(automaticPolicy, cfg, out, true)
+}
+
+// A runtime reward token is chosen from proven, unclaimed API entries. The recipe
+// and permission mask still decide whether the supplied token is authorized.
+func (p *Automatic) prepareClaim(ctx context.Context, s provider.Snapshot, cfg Config, entries []wire.MerklEntry, used map[string]bool) (Config, provider.Output, error) {
+	candidates := []string{""}
+	for _, token := range cfg.Tokens {
+		if common.HexToAddress(token) != (common.Address{}) {
+			continue
+		}
+		if len(cfg.Tokens) != 1 {
+			return cfg, provider.Output{}, errors.New("Merkl runtime token requires a single-entry claim")
+		}
+		candidates = nil
+		for _, entry := range entries {
+			if entry.Chain.ID != s.ChainID.Int64() {
+				continue
+			}
+			for _, reward := range entry.Rewards {
+				token := common.HexToAddress(reward.Token.Address).Hex()
+				if !used[cfg.Distributor+token] {
+					candidates = append(candidates, token)
+				}
+			}
+		}
+		sort.Strings(candidates)
+	}
+	var out provider.Output
+	for _, token := range candidates {
+		if token != "" {
+			cfg.Tokens = []string{token}
+		}
+		runtime, err := New(cfg, p.deps)
+		if err != nil {
+			return cfg, out, err
+		}
+		out, err = runtime.prepareRewards(s, entries, func() ([]multicall.Multicall3Result, error) { return runtime.readBatch(ctx, s) })
+		if err != nil {
+			return cfg, out, err
+		}
+		var metadata map[string]string
+		if err = json.Unmarshal(out.Data, &metadata); err != nil {
+			return cfg, out, err
+		}
+		if metadata["claimable"] != "0" {
+			return cfg, out, nil
+		}
+	}
+	if len(candidates) == 0 {
+		return cfg, out, errors.Errorf("%w: no Merkl reward token available", provider.ErrNotReady)
+	}
+	return cfg, out, nil
 }
 func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
 	var cfg automaticConfig

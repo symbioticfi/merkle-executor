@@ -175,24 +175,19 @@ until the scan completes. No new quote is obtained for an existing job.
 
 ## Merkl cumulative account rewards
 
-The automatic adapter recognizes canonical committed `claim` and
-`claimWithRecipient` actions and the frontend's guarded account execute wrappers.
-It requires the authenticated account as every user, pinned token addresses, equal
-arrays of 1..32 entries, committed proof depths and a pinned distributor. Wrapped
-claims capture a nonzero live distributor root and require it to remain unchanged
-through the claim, alongside recipient, cumulative-ledger and exact cash-delta
-checks. It follows committed CALL input bindings through at most eight account
-capability wrappers; all instructions, queries and framing stay pinned. Explicit
-recipient overrides must pin this account with empty callback data.
+The automatic adapter recognizes committed `claim` calls, including calls inside
+account capability wrappers. Users are pinned to the authenticated account. Reward
+tokens may be fixed or supplied through an authorized runtime word. A runtime token
+selects the first currently unclaimed API reward in address order, one token per
+claim action; following executions can claim the remaining tokens.
 
-One rewards HTTP request supplies witnesses for every claim action in the recipe.
-Every configured token must have a unique API row with an exact approved proof
-shape, a proof matching the pinned-block effective root, and a cumulative amount
-at least the pinned-block claimed ledger. Each action uses one strict distributor
-aggregate. A later valid effective root can use the same permissions while its
-tokens and proof layout still fit. Proof length growth and recipient guard changes
-require refreshed permissions; the provider never expands arrays, edits instructions or adds claims
-from unused permission leaves.
+One rewards HTTP request supplies witnesses for all claim actions. Each selected
+token's proof is checked against the pinned-block effective root and claimed ledger,
+and recipient settings must send funds to the account. The proof's actual length is
+encoded within its reserved capacity (up to 64 words); unused words are zeroed and
+the overall calldata size is unchanged. Capacity overflow fails. The provider never
+expands permission data or changes instructions, masks, targets or permission proofs.
+Existing recipe bindings and full transaction simulation remain authoritative.
 
 All claim actions are prepared together. A raw multi-token claim can contain idle
 members when another member is positive. For a dedicated single-token Manage,

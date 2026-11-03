@@ -188,3 +188,10 @@ Global recovery/state failures emit one sanitized keeper error and an iteration
 metric with `strategy="_global"`, `outcome="error"`. Strategy errors retain their
 own observations without a duplicate global event. Recovery failures remain
 retryable and never trigger submission on the failing iteration.
+
+Merkl claims use `claim`, with no recipient override. Proof capacities are reserved
+calldata space, while the encoded array length is the actual verified proof length.
+The provider fills only authorized token, cumulative amount, proof length and proof
+words. For a runtime token slot it selects an unclaimed reward in address order;
+subsequent executions can claim remaining tokens. Fixed-size permission data,
+bindings, recipient checks and full transaction simulation are preserved.
