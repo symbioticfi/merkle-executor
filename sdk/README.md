@@ -183,3 +183,10 @@ and proof words without reconstructing a canonical root/recipient/balance-check
 program. Generic assembly preserves permission masks and pinned bytes; the complete
 original contract simulation remains authoritative. `recipes.ValidateMutableActions`
 and `recipes.ReadDependent` have been removed. An unchanged masked template no longer needs a provider owner, and deterministic values need no READ ancestry.
+
+Merkl claims use `claim`, with no recipient override. Proof capacities are reserved
+calldata space, while the encoded array length is the actual verified proof length.
+The provider fills only authorized token, cumulative amount, proof length and proof
+words. For a runtime token slot it selects an unclaimed reward in address order;
+subsequent executions can claim remaining tokens. Fixed-size permission data,
+bindings, recipient checks and full transaction simulation are preserved.

@@ -15,19 +15,15 @@ No schema or endpoint is fetched automatically during a normal build.
 - Merkl response subset: sibling `curator-frontend` Merkl V4 parser and
   <https://api.merkl.xyz/docs>, inspected 2026-09-27. Distributor ABI subset was
   transcribed from <https://github.com/AngleProtocol/merkl-contracts/blob/main/contracts/Distributor.sol>:
-  `claim`, `claimWithRecipient`, `claimed`, `getMerkleRoot`, `claimRecipient`. Its current implementation
+  `claim`, `claimed`, `getMerkleRoot`, `claimRecipient`. Its current implementation
   requires self/operator authorization and supports recipient overrides. Operators
   must verify the actual configured proxy implementation matches this subset.
-  The automatic provider also accepts the frontend's canonical guarded account
-  `execute(bytes[],bytes[],uint256[])` claim, including its checked-operation outer
-  wrapper. It follows pinned CALL input bindings and fills only cumulative/proof
-  words. The live nonzero root must remain unchanged through the claim; that check,
-  recipient guards, claimed-ledger and exact cash-delta checks remain pinned.
-  The recipient-override shape requires recipients equal the authenticated account
-  and empty callback data.
-  `sdk/providers/merkl/testdata/generate-frontend.mjs` regenerates the two-token
-  permission fixture from a supplied frontend checkout; the JSON records revision
-  and source hashes. `cmd/merkle-executor/testdata/merkl/RecipeCapability.sol` is
+  The provider accepts plain `claim`, including a nested account-capability call,
+  and fills authorized token, amount, proof-length and proof words only. It checks
+  the proof and recipient against pinned distributor state. Recipe guards remain
+  unchanged. `sdk/providers/merkl/testdata/generate-frontend.mjs` exports the current
+  lending-claim permission and recipe, recording its source hash and revision.
+  `cmd/merkle-executor/testdata/merkl/RecipeCapability.sol` is
   `forge flatten` output of adapters `0427c657375512a87158010c323556739fe96d1b`
   `src/contracts/merkle-adapter/capabilities/RecipeCapability.sol`, including its
   unmodified dependency closure. The adjacent `generate.py` compiles it offline

@@ -36,7 +36,7 @@ func TestMerklProofViemGolden(t *testing.T) {
 	}
 }
 func TestPrepareCumulativeSelfClaim(t *testing.T) {
-	for _, test := range []string{"valid", "recipient override", "wrong-root", "redirected", "duplicate-token", "proof-layout", "already-claimed"} {
+	for _, test := range []string{"valid", "wrong-root", "redirected", "duplicate-token", "proof-layout", "already-claimed"} {
 		t.Run(test, func(t *testing.T) {
 			sibling := common.HexToHash("0x" + strings.Repeat("11", 32))
 			root := common.HexToHash("0xd98400418a73f31e4b681498ddc089b9c9b92f409942f76789590c1cae24f0ab")
@@ -91,21 +91,16 @@ func TestPrepareCumulativeSelfClaim(t *testing.T) {
 			if len(payload) != 452 {
 				t.Fatalf("claim ABI layout changed: %d", len(payload))
 			}
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: len(payload), AmountInputs: []uint{0}, ClaimableInputs: []uint{1}}
-			if test == "recipient override" {
-				cfg.DirectRecipient = true
-				payload = a.PackClaimWithRecipient([]common.Address{addr(3)}, []common.Address{addr(1)}, []*big.Int{big.NewInt(100)}, [][][32]byte{{sibling}}, []common.Address{addr(3)}, [][]byte{{}})
-				cfg.CalldataBytes = len(payload)
-			}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "0:0", CalldataBytes: len(payload), AmountInputs: []uint{0}, ClaimableInputs: []uint{1}}
 			if test == "proof-layout" {
-				cfg.ProofLengths[0] = 2
+				cfg.ProofCapacities[0] = 2
 			}
 			p, e := New(cfg, provider.Deps{Chain: multicallReader(t, []common.Address{addr(1)}, chain), HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
 			}
 			out, e := p.Prepare(context.Background(), provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
-			if test != "valid" && test != "recipient override" {
+			if test != "valid" {
 				if e == nil {
 					t.Fatalf("invalid %s accepted", test)
 				}
@@ -170,7 +165,7 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 				t.Fatalf("unexpected method %s", method.Name)
 				return nil, nil
 			})
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "7:0", CalldataBytes: 452, MinClaimable: "10", AmountInputs: []uint{2}, ClaimableInputs: []uint{4}, SkipIfEmpty: true, DedicatedClaimGroup: true}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "7:0", CalldataBytes: 452, MinClaimable: "10", AmountInputs: []uint{2}, ClaimableInputs: []uint{4}, SkipIfEmpty: true, DedicatedClaimGroup: true}
 			if test == "idle-no-skip" {
 				cfg.SkipIfEmpty = false
 				cfg.DedicatedClaimGroup = false
@@ -214,13 +209,13 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 func TestOptionalClaimRequiresDedicatedSingleActionLayout(t *testing.T) {
 	for _, test := range []string{"missing-ack", "batch", "nonzero-action", "wrong-layout", "step-overflow"} {
 		t.Run(test, func(t *testing.T) {
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: "https://example.invalid"}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "7:0", CalldataBytes: 452, SkipIfEmpty: true, DedicatedClaimGroup: true}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: "https://example.invalid"}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "7:0", CalldataBytes: 452, SkipIfEmpty: true, DedicatedClaimGroup: true}
 			switch test {
 			case "missing-ack":
 				cfg.DedicatedClaimGroup = false
 			case "batch":
 				cfg.Tokens = append(cfg.Tokens, addr(2).Hex())
-				cfg.ProofLengths = append(cfg.ProofLengths, 1)
+				cfg.ProofCapacities = append(cfg.ProofCapacities, 1)
 			case "nonzero-action":
 				cfg.Action = "7:1"
 			case "wrong-layout":
