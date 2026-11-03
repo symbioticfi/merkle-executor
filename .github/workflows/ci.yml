@@ -17,7 +17,7 @@ jobs:
           cache: true
       - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # pin@v1.9.2
         with:
-          version: v1.8.7
+          version: v1.8.6
       - run: make check
       - run: make generate && git diff --exit-code -- sdk/bindings sdk/protocoltypes sdk/recipes/lens sdk/providers/aave/lens
       - run: make integration
