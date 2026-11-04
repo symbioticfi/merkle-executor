@@ -5,6 +5,16 @@ current `SetRecipe`, assembles runtime calldata from the active permission tree,
 resolves authorized runtime inputs and off-chain protocol data, simulates the
 complete call and optionally sends it.
 
+Every configured executor uses the same automatic batching policy. Self-contained
+recipes repeat in one atomic multicall while further executions remain useful
+and executable. External quotes/proofs are never reused; those recipes retain
+fresh preparation and settlement handling. See [SDK batching](sdk/README.md).
+
+`strategies` is processing priority, not a fund reservation. Later executors read
+confirmed on-chain changes from earlier ones. Pending transaction recovery runs
+first; unsettled asynchronous work reserves its account. Withdrawal obligations
+must be protected by the spending recipes themselves.
+
 Recipes use opcode-prefixed `bytes[]` steps and packed operands/bindings from
 the current `IRecipes` schema. Literal values and indices fit `uint216`;
 runtime inputs and computed results retain all 256 bits. [Wire format](docs/DESIGN.md#recipe-encoding).
