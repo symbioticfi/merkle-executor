@@ -174,7 +174,9 @@ func (k *Keeper) Tick(ctx context.Context) error {
 				return k.globalFailure(err)
 			}
 			if found && job.ID == k.Sender.PendingID() {
-				ordered[0], ordered[i] = ordered[i], ordered[0]
+				pending := ordered[i]
+				copy(ordered[1:i+1], ordered[:i])
+				ordered[0] = pending
 				break
 			}
 		}

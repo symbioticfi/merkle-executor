@@ -4,6 +4,36 @@ Module: `github.com/symbioticfi/merkle-executor/sdk`. It is independently versio
 release tags use `sdk/vX.Y.Z`. Consumers pin an immutable module version. The
 standalone daemon and vault-solver consume this same implementation.
 
+`recipes.Multicall` batches ordered executions of the same committed recipe on
+its executor. The contract preserves the original caller and reverts every call
+if any call fails. `SimulateBatch` returns per-execution results from temporary
+EVM state and separately checks the exact batch against the unchanged executor.
+The simulation helper is used only through RPC code overrides; it is never
+deployed. RPC code-override support is required for batched result validation.
+
+`recipes.BatchExecution` automatically extends a self-contained recipe while
+its live actions make progress. Each execution reads the state left by the
+previous one, including its final supply step. Runtime-input recipes remain a
+single execution; the planner also keeps recipes with external provider work
+single, so quotes, proofs and result witnesses are never reused. Providers that
+do not participate can retain their empty durable envelopes without blocking
+native batching. Constant action sets run once without extra probes. No protocol
+name or per-executor switch selects this behavior.
+
+Approval maintenance alone does not trigger another cycle. No cycle count is
+imposed. The caller supplies the transaction gas budget and deadline. Idle gates,
+identical result vectors, a reverted extension or the gas limit end the batch at
+the last successfully simulated prefix. RPC/decoding failures fail preparation.
+The complete selected batch is validated before submission and revalidated on
+recovery; a signed batch is never rebuilt or partially resent. Hosts without
+code-override support retain ordinary single-execution preparation.
+
+The keeper visits strategies in configured order. A pending nonce owner is
+recovered first without reordering the remaining strategies. Confirmed effects
+are available to later preparations, but an active asynchronous provider reserves
+its account until settlement. Ordering does not earmark funds: recipe gates and
+amount rules must reserve pending withdrawals and control spending priorities.
+
 - `recipes`: committed recipe discovery, permission-tree decoding/proof validation,
   bounded runtime assembly and role/root/snapshot checks.
 - `keeper`: preparation, full simulation, immutable plan validation, durable workflow

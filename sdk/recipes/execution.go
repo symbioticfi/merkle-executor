@@ -119,12 +119,20 @@ func ExecutionHasWork(ctx context.Context, reader Reader, snapshot Snapshot, cal
 }
 
 func validateExecutionResults(ctx context.Context, reader Reader, snapshot Snapshot, caller common.Address, calldata []byte, results map[uint]string) ([]byte, error) {
+	batch := isMulticall(calldata)
+	if batch && len(results) != 0 {
+		return nil, errors.New("batch witnesses must be verified per execution")
+	}
 	current, err := openExecution(ctx, reader, snapshot, caller)
 	if err != nil {
 		return nil, err
 	}
 	requests := snapshotRequests(snapshot.Executor, snapshot.Account, current.Number)
-	requests = append(requests, executionRead(snapshot, caller, calldata, nil))
+	var block *big.Int
+	if batch {
+		block = current.Number
+	}
+	requests = append(requests, executionRead(snapshot, caller, calldata, block))
 	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
 		return nil, err
@@ -138,6 +146,26 @@ func validateExecutionResults(ctx context.Context, reader Reader, snapshot Snaps
 	raw, err := reads.At(len(requests) - 1).CallData()
 	if err != nil {
 		return nil, err
+	}
+	if batch {
+		backend, ok := reader.(BatchReader)
+		if !ok {
+			return nil, errors.New("batch validation requires code-override support")
+		}
+		calls, err := batchCalls(calldata)
+		if err != nil {
+			return nil, err
+		}
+		pin := snapshot
+		pin.BlockNumber, pin.BlockHash, pin.Timestamp = current.Number.Uint64(), current.Hash(), current.Time
+		returned, err := SimulateBatch(ctx, backend, pin, calls, current.GasLimit)
+		if err != nil {
+			return nil, err
+		}
+		raw, err = batchArguments.Pack(returned)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(results) != 0 {
 		if err = VerifyResults(calldata, raw, results); err != nil {
