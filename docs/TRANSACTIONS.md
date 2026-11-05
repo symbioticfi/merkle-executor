@@ -1,5 +1,14 @@
 # Transaction processing
 
+For an EIP-7702 keeper supporting atomic ERC-7579 batches, one self-transaction
+can execute several committed executors in configuration order. A complete
+`executor-batch.v1` journal is persisted before sender admission. Its confirmed
+receipt is copied to every member's strategy journal before acknowledgement;
+recovery completes that fan-out before any provider advances. A failed inner
+call reverts the entire transaction and marks every member failed. Status shows
+the batch's member jobs, and reset refuses an active batch. No delegation change,
+new on-chain contract or independent nonce owner is introduced.
+
 The SDK exposes `txengine` for transaction mechanics and `txmanager` for durable
 recipe ownership. Hosts explicitly construct and start these components, supplying
 RPC connections, signing credentials and telemetry. Logging/tracing helpers live

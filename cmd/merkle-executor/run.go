@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/merkle-executor/internal/config"
@@ -72,6 +73,12 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	if err != nil {
 		return err
 	}
+	batchDiscovery, cancel := context.WithTimeout(ctx, config.DefaultOperationTimeout)
+	batching, err := recipes.SupportsDelegatedBatch(batchDiscovery, client, caller, nil)
+	cancel()
+	if err != nil {
+		return err
+	}
 	if cfg.Signer.Address != "" && common.HexToAddress(cfg.Signer.Address) != caller {
 		return errors.New("signer.address assertion does not match executor caller")
 	}
@@ -107,6 +114,25 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	}
 	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}
 	if planOnly {
+		if batching {
+			operation, cancel := context.WithTimeout(ctx, config.DefaultOperationTimeout)
+			defer cancel()
+			plan, err := planner.PrepareBatch(operation, strategies)
+			if err != nil {
+				return err
+			}
+			to, data, err := plan.Transaction()
+			if err != nil {
+				return err
+			}
+			encoder := json.NewEncoder(out)
+			encoder.SetIndent("", "  ")
+			return encoder.Encode(struct {
+				To   common.Address   `json:"to"`
+				Data hexutil.Bytes    `json:"data"`
+				Plan keeper.BatchPlan `json:"plan"`
+			}{to, data, plan})
+		}
 		plans := make(map[string]keeper.Plan)
 		for _, s := range strategies {
 			operation, cancel := context.WithTimeout(ctx, config.DefaultOperationTimeout)
@@ -130,7 +156,7 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 		return err
 	}
 	metrics := observability.NewMetrics()
-	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: strategies, Mode: cfg.Mode, OperationTimeout: config.DefaultOperationTimeout, Log: log}
+	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: strategies, Mode: cfg.Mode, Batching: batching, OperationTimeout: config.DefaultOperationTimeout, Log: log}
 	if cfg.Mode == "send" {
 		txm, err := txmanager.NewWithMetrics(client, txSigner, chainID, store, cfg.TxManager.EngineConfig(), log, metrics.Registerer())
 		if err != nil {
