@@ -21,6 +21,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/aave"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/claims"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/liquidlanerfq"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/merkl"
@@ -122,7 +123,7 @@ func openEnvironment(ctx context.Context, path string, httpClient *http.Client) 
 		for _, registration := range []struct {
 			name string
 			new  func(provider.Deps) (keeper.Provider, error)
-		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}} {
+		}{{"claims", claims.NewAutomatic}, {"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}} {
 			p, err := registration.new(provider.Deps{Chain: client, HTTP: httpClient, LookupSecret: os.Getenv})
 			if err != nil {
 				return nil, errors.Errorf("configure provider %s: %w", registration.name, err)

@@ -256,3 +256,17 @@ lens fixtures verify caller/origin, constrained preview Inputs, stateful effects
 allowance reset/zero short-circuit, overflow/division errors and original-code
 introspection divergence. These are local/API-fixture results; no deployment,
 external chain, hosted quote/order or live signing verification is implied.
+
+## Native issuer claims
+
+The native claim provider recognizes one unconditional issuer claim with no recipe reads.
+It enumerates Noon request IDs and Pareto queue epochs, checks owner entitlements, and supplies a separate
+execution for each ready request. Fixed-ID permissions remain fixed. Direct
+Pareto and OpenEden refund claims use their owner ledgers. ERC-7540 claims use
+native entitlement reads and fill the amount from the matching `maxDeposit`, `maxMint`,
+`maxWithdraw` or `maxRedeem` result at the pinned snapshot. Owner and recipient remain fixed.
+Ordinary synchronous vault operations are excluded.
+
+The SDK batches the prepared executions. The provider neither inserts gates
+nor edits recipes, targets, recipients, masks or proofs. Native claim reverts
+mean not ready during preflight; transport and malformed-response errors fail.
