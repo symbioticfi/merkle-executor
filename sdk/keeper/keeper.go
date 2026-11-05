@@ -49,6 +49,7 @@ type Keeper struct {
 	Planner          Planning
 	Strategies       []Strategy
 	Mode             string
+	Batching         bool
 	OperationTimeout time.Duration
 	Log              logr.Logger
 	Observe          func(strategy, outcome string)
@@ -79,6 +80,19 @@ func (k *Keeper) checkRecovery() (map[string]common.Address, error) {
 		pending = k.Sender.PendingID()
 	}
 	matched := pending == ""
+	batchOwners, batchID, err := k.checkBatchRecovery(configured)
+	if err != nil {
+		return nil, err
+	}
+	if batchID != "" && !k.Batching {
+		return nil, errors.New("active executor batch requires delegated batching recovery")
+	}
+	for name, account := range batchOwners {
+		owners[name] = account
+	}
+	if pending != "" && batchID == pending {
+		matched = true
+	}
 	for _, name := range names {
 		var job Job
 		found, err := k.Store.Load(key(name), &job)
@@ -163,6 +177,14 @@ func (k *Keeper) Tick(ctx context.Context) error {
 	owners, err := k.checkRecovery()
 	if err != nil {
 		return k.globalFailure(err)
+	}
+	if k.Batching {
+		var batch BatchJob
+		batchFound, err := k.Store.Load(BatchKey, &batch)
+		if err != nil {
+			return k.globalFailure(err)
+		}
+		return k.tickBatch(ctx, owners, batch, batchFound)
 	}
 	// Recover the occupied nonce first, independently of configuration ordering.
 	ordered := append([]Strategy(nil), k.Strategies...)

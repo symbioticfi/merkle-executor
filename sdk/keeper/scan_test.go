@@ -66,8 +66,9 @@ func TestIdleTickReadsJournalsLinearly(t *testing.T) {
 			if err := k.Tick(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			if counter.reads > 3*n+1 {
-				t.Fatalf("%d strategies required %d journal reads; want <= %d", n, counter.reads, 3*n+1)
+			// Inventory plus the shared batch journal are constant-cost recovery reads.
+			if counter.reads > 3*n+2 {
+				t.Fatalf("%d strategies required %d journal reads; want <= %d", n, counter.reads, 3*n+2)
 			}
 			t.Logf("%d strategies: %d journal reads", n, counter.reads)
 		})

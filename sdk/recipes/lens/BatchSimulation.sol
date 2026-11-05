@@ -6,6 +6,26 @@ pragma solidity 0.8.37;
 contract BatchSimulation {
     bytes32 private constant IMPLEMENTATION = keccak256("merkle-executor.batch-simulation");
 
+    struct ExecutorCall {
+        address executor;
+        bytes data;
+    }
+
+    /// @dev Installed at the delegated caller only during eth_call. All targets
+    /// retain their original code; each call sees the actual keeper address.
+    function simulateCalls(ExecutorCall[] calldata calls) external returns (bytes[] memory results) {
+        require(msg.sender == address(this), "caller must be self");
+        results = new bytes[](calls.length);
+        for (uint256 i; i < calls.length; ++i) {
+            bool success;
+            (success, results[i]) = calls[i].executor.call(calls[i].data);
+            if (!success) {
+                bytes memory reason = results[i];
+                assembly { revert(add(reason, 32), mload(reason)) }
+            }
+        }
+    }
+
     function simulate(bytes calldata runtime, bytes[] calldata calls) external returns (bytes[] memory results) {
         // Constructor returning the supplied runtime verbatim.
         bytes memory creation = abi.encodePacked(hex"61", uint16(runtime.length), hex"80600a3d393df3", runtime);

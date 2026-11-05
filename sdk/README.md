@@ -4,6 +4,23 @@ Module: `github.com/symbioticfi/merkle-executor/sdk`. It is independently versio
 release tags use `sdk/vX.Y.Z`. Consumers pin an immutable module version. The
 standalone daemon and vault-solver consume this same implementation.
 
+`recipes.DelegatedMulticall` combines calls to different executors in an atomic
+ERC-7579 batch, sent from the EIP-7702 keeper to itself. Only zero-value recipe
+execution calls are accepted. `SupportsDelegatedBatch` checks the installed
+delegation's mode support; it never changes delegation. `SimulateExecutors`
+checks the exact envelope and reads each result after its predecessors using a
+temporary caller-code override. No production helper contract is needed.
+
+`keeper.Planner.PrepareBatch` retains strategy order, authenticates every member
+and simulates the complete batch before admission. Native recipe gates can use
+earlier proceeds. Calls with conflicting receipt ownership, changed numerical
+witnesses or an unexecutable prefix are deferred. `ValidateBatch` closes current
+metadata and canonical-block checks before sending. Hosts opt in with
+`keeper.Keeper.Batching`; the daemon detects it from the keeper's delegation.
+One `BatchJob` journal retains all members until their individual jobs contain
+the same canonical receipt. Only then is the shared sender acknowledged and
+provider settlement resumed. Active asynchronous work still reserves its account.
+
 `recipes.Multicall` batches ordered executions of the same committed recipe on
 its executor. The contract preserves the original caller and reverts every call
 if any call fails. `SimulateBatch` returns per-execution results from temporary
