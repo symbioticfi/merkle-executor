@@ -232,7 +232,7 @@ func TestAsyncClaimUsesNativeEntitlementAndRejectsOrdinaryOperation(t *testing.T
 	}
 	r.Steps[1] = append([]byte{recipes.Manage}, body...)
 	for _, ready := range []bool{false, true} {
-		out, err := (&Provider{&chain{t: t, ready: ready}}).PrepareRecipe(context.Background(), s, r, tree, nil)
+		out, err := (&Provider{&chain{t: t, ready: ready}}).PrepareRecipe(context.Background(), s, r, tree, map[uint]*big.Int{0: big.NewInt(100)})
 		if ready {
 			if err != nil || len(out) != 1 {
 				t.Fatalf("ready async claim failed: %v", err)
@@ -241,6 +241,11 @@ func TestAsyncClaimUsesNativeEntitlementAndRejectsOrdinaryOperation(t *testing.T
 			t.Fatalf("unsettled async claim: %v", err)
 		}
 	}
+	out, err := (&Provider{&chain{t: t, ready: true}}).PrepareRecipe(context.Background(), s, r, tree, map[uint]*big.Int{0: big.NewInt(0)})
+	if !errors.Is(err, provider.ErrNotReady) || len(out) != 0 {
+		t.Fatal("zero native maximum must stay idle", err)
+	}
+
 }
 
 func TestPinnedIDDoesNotPreventOtherReadyIDsFromBeingScanned(t *testing.T) {

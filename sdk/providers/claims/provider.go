@@ -45,10 +45,11 @@ var queryArgs = func() abi.Arguments {
 
 type Provider struct{ chain provider.Reader }
 type config struct {
-	Key    string
-	Target common.Address
-	Data   hexutil.Bytes
-	Mask   hexutil.Bytes
+	Key          string
+	Target       common.Address
+	Data         hexutil.Bytes
+	Mask         hexutil.Bytes
+	AmountResult *uint `json:",omitempty"`
 }
 type candidate struct {
 	config
@@ -92,6 +93,7 @@ func match(r recipes.Recipe, t *recipes.Tree) (candidate, bool, error) {
 	if name == "claimWithdrawRequest" && len(m.Inputs) == 1 {
 		name = "claimWithdrawRequestForEpoch"
 	}
+	var amountResult *uint
 	switch name {
 	case "claimWithdrawal", "claimDepositRequest", "claimWithdrawRequestForEpoch", "claimWithdrawRequest", "claimInstantWithdrawRequest", "claimDepositEscrow", "claimRedeemEscrow", "claimCancelDepositRequest", "claimCancelRedeemRequest":
 	case "deposit", "mint", "withdraw", "redeem":
@@ -102,6 +104,8 @@ func match(r recipes.Recipe, t *recipes.Tree) (candidate, bool, error) {
 		}
 		// Only a direct native max* read is an asynchronous amount candidate.
 		index := a.Bindings[0].Value.Value
+		n := uint(index.Uint64())
+		amountResult = &n
 		if !index.IsUint64() || index.Uint64() >= uint64(len(r.Steps)-1) {
 			return candidate{}, false, nil
 		}
@@ -133,16 +137,20 @@ func match(r recipes.Recipe, t *recipes.Tree) (candidate, bool, error) {
 	if err != nil {
 		return candidate{}, false, err
 	}
-	return candidate{config{a.Key, a.Leaf.Target, a.Leaf.Data, a.Leaf.DataMask}, name, args}, true, nil
+	return candidate{config{a.Key, a.Leaf.Target, a.Leaf.Data, a.Leaf.DataMask, amountResult}, name, args}, true, nil
 }
 func (*Provider) RecipeRequirements(_ provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (keeper.RecipeRequirements, error) {
 	c, ok, err := match(r, t)
 	if !ok || err != nil {
 		return keeper.RecipeRequirements{}, err
 	}
-	return keeper.RecipeRequirements{Actions: []string{c.Key}}, nil
+	requirements := keeper.RecipeRequirements{Actions: []string{c.Key}}
+	if c.AmountResult != nil {
+		requirements.Values = []recipes.Value{{Source: recipes.Result, Value: new(big.Int).SetUint64(uint64(*c.AmountResult))}}
+	}
+	return requirements, nil
 }
-func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, _ map[uint]*big.Int) ([]provider.Output, error) {
+func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) ([]provider.Output, error) {
 	c, ok, err := match(r, t)
 	if err != nil {
 		return nil, err
@@ -163,6 +171,16 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 	if !ready {
 		return nil, errors.Errorf("%w: no settled native claims", provider.ErrNotReady)
 	}
+	if c.AmountResult != nil {
+		amount, ok := results[*c.AmountResult]
+		if !ok || amount == nil {
+			return nil, errors.New("native claim amount result was not resolved")
+		}
+		if amount.Sign() == 0 {
+			return nil, errors.Errorf("%w: native claim amount is zero", provider.ErrNotReady)
+		}
+	}
+
 	var outputs []provider.Output
 	if ids == nil {
 		ids = []*big.Int{nil}
