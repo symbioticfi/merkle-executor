@@ -9,7 +9,10 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
   committed recipe. The isolated `sdk/providers/aave` provider may supply one
   authenticated borrow-capacity Input through its eth_call-only prefix probe;
   the recipe still caps the actual amount and enforces its health floor. Other
-  protocol providers serve CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs;
+  protocol providers serve CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs.
+  Merkl and 3F standalone claim providers discover eligible rewards/requests and
+  fill one authorized claim per execution; the SDK batches those executions.
+  Native claim validity remains enforced by the distributor/request contracts;
   `keeper.NewRecipeInputs()` handles exact recipe constraints.
   Liquid Lane connector acquisition and calldata construction belong to vault-solver's
   Merkle extension. External signed terms come from RFQ/backend integrations and

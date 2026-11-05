@@ -106,9 +106,14 @@ snapshot and checks canonical headers before and after reconciliation. CoW and R
 providers retain their exact account authorization and settlement attestations.
 
 A canonical native receipt settles generic execution. The keeper does not interpret
-issuer events, discover requests, apply protocol-specific readiness rules or wait
+issuer events, apply protocol-specific readiness rules or wait
 for an issuer payout. Calls, reads, amount selection, authorization, claim gates
-and output checks are committed in the recipe. Other native protocols require no selector
+and output checks are committed in financial recipes. Standalone Merkl and 3F
+claim recipes delegate claim validity to their native contracts. Their isolated
+providers discover eligible rewards/requests and fill one call per execution;
+`Output.Repeats` supplies distinct authorized payloads for the executor multicall.
+Repeats cannot contain outer reads, bindings, funding steps or other effects.
+Other native protocols require no selector
 or deployment catalogue in Go. Separate request and claim recipes read their own
 current pending/eligible state; a successful request transaction does not establish
 later settlement.
@@ -192,6 +197,6 @@ retryable and never trigger submission on the failing iteration.
 Merkl claims use `claim`, with no recipient override. Proof capacities are reserved
 calldata space, while the encoded array length is the actual verified proof length.
 The provider fills only authorized token, cumulative amount, proof length and proof
-words. For a runtime token slot it selects an unclaimed reward in address order;
-subsequent executions can claim remaining tokens. Fixed-size permission data,
+words. For a standalone runtime-token claim it selects every unclaimed reward
+in address order and supplies distinct calldata for each execution. Fixed-size permission data,
 bindings, recipient checks and full transaction simulation are preserved.

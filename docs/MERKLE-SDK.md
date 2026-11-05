@@ -19,7 +19,7 @@ both explicitly. For local SDK editing, an untracked Go workspace can include
 are checked to exclude daemon and vault-solver code. All ABI artifacts, bindings
 and protocol wire schemas are owned and regenerated inside the SDK. `make -C sdk generate` works without the daemon module.
 
-The SDK includes CoW, Merkl and Liquid Lane consumer RFQ providers. Vault-specific
+The SDK includes CoW, Merkl, 3F claim discovery and Liquid Lane consumer RFQ providers. Vault-specific
 connector and 3F auction feeds, sizing and calldata construction remain in
 vault-solver, using the SDK's Prepare/Advance provider contracts.
 
@@ -54,7 +54,8 @@ Omitting this seam retains `keeper.Config.Tree` local-file behavior for SDK cons
 The daemon derives accounts at startup and uses curator-backend for this seam. It
 fetches only during new preparation, preserving saved-attempt and external-order
 recovery during backend outages. The daemon constructs SDK Merkl, CoW and RFQ
-providers with its HTTP/RPC clients.
+providers with its HTTP/RPC clients. A 3F claim provider uses the same pinned RPC
+client to enumerate owned, withdrawable requests for a single-claim recipe.
 Liquid Lane connector acquisition and calldata construction belong to vault-solver's
 Merkle extension. External signed terms come from RFQ/backend integrations and
 are validated by contracts. The daemon does not size connector swaps or verify

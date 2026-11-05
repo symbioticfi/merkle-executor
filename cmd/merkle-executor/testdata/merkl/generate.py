@@ -13,7 +13,8 @@ with tempfile.TemporaryDirectory(prefix="merkl-guarded-fixtures-") as temporary:
         (root/"src"/path.name).write_bytes(path.read_bytes())
     (root/"foundry.toml").write_text('[profile.default]\nsolc="0.8.37"\nevm_version="osaka"\noptimizer=true\noptimizer_runs=200\nvia_ir=true\nbytecode_hash="none"\n[profile.default.lint]\nlint_on_build=false\n')
     subprocess.run(["forge","build","--offline","--root",temporary],check=True)
-    for name in ("RecipeCapability","FixtureGuardedAccount","FixtureGuardedDistributor"):
-        artifact=json.loads((root/f"out/{name}.sol/{name}.json").read_text())
-        document={"abi":artifact["abi"],"bytecode":artifact["bytecode"]["object"],"source":f"{name}.sol","sourceSha256":hashlib.sha256((HERE/f"{name}.sol").read_bytes()).hexdigest(),"compiler":artifact["metadata"]["compiler"]["version"]}
+    for name in ("RecipeCapability","FixtureGuardedAccount","FixtureGuardedDistributor", "FixtureThreeFFactory", "FixtureThreeFRequest"):
+        source="FixtureThreeF.sol" if name.startswith("FixtureThreeF") else f"{name}.sol"
+        artifact=json.loads((root/f"out/{source}/{name}.json").read_text())
+        document={"abi":artifact["abi"],"bytecode":artifact["bytecode"]["object"],"source":source,"sourceSha256":hashlib.sha256((HERE/source).read_bytes()).hexdigest(),"compiler":artifact["metadata"]["compiler"]["version"]}
         (HERE/f"{name}.json").write_text(json.dumps(document,indent=2)+"\n")

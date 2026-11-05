@@ -24,6 +24,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/liquidlanerfq"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/merkl"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/threef"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/signer"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
@@ -132,7 +133,11 @@ func openEnvironment(ctx context.Context, path string, httpClient *http.Client) 
 		if err != nil {
 			return nil, errors.Errorf("configure Aave capacity: %w", err)
 		}
-		s.Providers = append(s.Providers, capacity, keeper.NewRecipeInputs())
+		claims, err := threef.NewAutomatic(provider.Deps{Chain: client})
+		if err != nil {
+			return nil, errors.Errorf("configure 3F claims: %w", err)
+		}
+		s.Providers = append(s.Providers, capacity, keeper.NewRecipeInputs(), claims)
 		strategies = append(strategies, s)
 	}
 	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}

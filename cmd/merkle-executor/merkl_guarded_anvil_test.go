@@ -50,15 +50,18 @@ func loadGuardedMerklArtifact(t *testing.T, name string) serviceArtifact {
 }
 
 func TestAnvilFrontendGuardedMerklMixedRewards(t *testing.T) {
-	runFrontendGuardedMerkl(t, false, false)
+	runFrontendGuardedMerkl(t, false, false, false)
 }
 func TestAnvilIdleMerklDoesNotBlockReadyNativeClaim(t *testing.T) {
-	runFrontendGuardedMerkl(t, true, false)
+	runFrontendGuardedMerkl(t, true, false, false)
 }
 func TestAnvilCurrentFrontendMerklVariableProof(t *testing.T) {
-	runFrontendGuardedMerkl(t, false, true)
+	runFrontendGuardedMerkl(t, false, true, false)
 }
-func runFrontendGuardedMerkl(t *testing.T, native, current bool) {
+func TestAnvilSingleMerklClaimBatchesDistinctRewards(t *testing.T) {
+	runFrontendGuardedMerkl(t, false, true, true)
+}
+func runFrontendGuardedMerkl(t *testing.T, native, current, single bool) {
 	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
 		t.Skip("local Anvil only")
 	}
@@ -73,6 +76,9 @@ func runFrontendGuardedMerkl(t *testing.T, native, current bool) {
 	fixtureName := "frontend-guarded.json"
 	if current {
 		fixtureName = "frontend-current.json"
+	}
+	if single {
+		fixtureName = "frontend-single-claim.json"
 	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "sdk", "providers", "merkl", "testdata", fixtureName))
 	if err != nil {
@@ -142,7 +148,9 @@ func runFrontendGuardedMerkl(t *testing.T, native, current bool) {
 		call(fixture.Distributor, da, "setRecipient", fixture.Account, reward.Token, fixture.Account)
 	}
 	call(fixture.Distributor, da, "setPayoutBps", big.NewInt(10000))
-	call(fixture.Distributor, da, "setClaimed", fixture.Account, fixture.Rewards[0].Token, big.NewInt(100))
+	if !single {
+		call(fixture.Distributor, da, "setClaimed", fixture.Account, fixture.Rewards[0].Token, big.NewInt(100))
+	}
 	target := serviceSeedTransaction(t, ctx, client, owner, nil, append(bytes.Clone(ea.Bytecode), servicePack(t, ea, "", owner, fixture.Account)...)).ContractAddress
 	var nativeLeaf recipes.Leaf
 	if native {
@@ -286,11 +294,14 @@ func runFrontendGuardedMerkl(t *testing.T, native, current bool) {
 	if native {
 		wantDeltaB = "0"
 	}
-	if !current && (len(plan.Outputs) != 5 || len(plan.Outputs[1].Actions) != 2 || plan.Outputs[1].Inputs[0] != "100" || plan.Outputs[1].Inputs[1] != "0" || plan.Outputs[1].Inputs[2] != "200" || plan.Outputs[1].Inputs[3] != wantDeltaB || fetches.Load()-before != 1) {
+	if !current && (len(plan.Outputs) != 6 || len(plan.Outputs[1].Actions) != 2 || plan.Outputs[1].Inputs[0] != "100" || plan.Outputs[1].Inputs[1] != "0" || plan.Outputs[1].Inputs[2] != "200" || plan.Outputs[1].Inputs[3] != wantDeltaB || fetches.Load()-before != 1) {
 		t.Fatalf("partial guarded reward plan: %+v HTTP=%d", plan.Outputs, fetches.Load()-before)
 	}
-	if current && (len(plan.Outputs[1].Actions) != 1 || plan.Outputs[1].Inputs[0] != fixture.Rewards[1].Token.Big().String() || plan.Outputs[1].Inputs[1] != "200" || fetches.Load()-before != 1) {
+	if current && !single && (len(plan.Outputs[1].Actions) != 1 || plan.Outputs[1].Inputs[0] != fixture.Rewards[1].Token.Big().String() || plan.Outputs[1].Inputs[1] != "200" || fetches.Load()-before != 1) {
 		t.Fatalf("current Merkl plan differs: %+v", plan.Outputs)
+	}
+	if single && (len(plan.Outputs[1].Actions) != 1 || len(plan.Outputs[1].Repeats) != 1 || len(plan.Outputs[1].Inputs) != 0) {
+		t.Fatal("single claim recipe not batched")
 	}
 	tokens := erc20.NewERC20()
 	dist := distributor.NewMerklDistributor()
@@ -304,6 +315,9 @@ func runFrontendGuardedMerkl(t *testing.T, native, current bool) {
 	for i, reward := range fixture.Rewards {
 		balance, err := client.CallContract(ctx, ethereum.CallMsg{To: &reward.Token, Data: tokens.PackBalanceOf(fixture.Account)}, nil)
 		want := int64(0)
+		if single && i == 0 {
+			want = 100
+		}
 		if i == 1 {
 			want = 200
 			if native {
