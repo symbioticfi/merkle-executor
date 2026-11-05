@@ -31,14 +31,11 @@ type recipeRequest struct {
 	requirements keeper.RecipeRequirements
 }
 
-func NewAutomatic(deps provider.Deps) (provider.Provider, error) {
+func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
 	if _, ok := deps.Chain.(chainReader); !ok {
 		return nil, errors.New("automatic RFQ requires contract, receipt and header reads")
 	}
 	return &Automatic{deps: deps}, nil
-}
-func (*Automatic) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("RFQ requires authenticated recipe")
 }
 
 func consumerHTTP() protocolio.HTTPConfig {

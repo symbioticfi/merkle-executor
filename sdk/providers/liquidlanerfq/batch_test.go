@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -16,7 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 func TestRequestMatchesGoEthereumTypedData(t *testing.T) {
@@ -78,42 +75,10 @@ func (b *batchChain) BatchRead(ctx context.Context, requests []protocolio.ReadRe
 	}
 	return out, nil
 }
-func TestStagedPreparationIdentityAndBatchParity(t *testing.T) {
+func TestAdvanceBatchesPinnedReads(t *testing.T) {
 	h := newHarness(t)
-	direct, err := h.p.Prepare(t.Context(), h.s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	calls, quotes := h.c.calls, h.quotes
-	pin := protocolio.PreparationPin{ChainID: h.s.ChainID.String(), BlockNumber: h.s.BlockNumber.Uint64(), BlockHash: h.s.BlockHash, Timestamp: h.s.Timestamp, Executor: h.s.Executor, Account: h.s.Account, Caller: h.s.Caller}
-	plan, err := h.p.PlanPreparation(pin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if h.c.calls != calls || h.quotes != quotes || len(plan.Requests) != 1 || !plan.Requests[0].MulticallSafe {
-		t.Fatal("planning performed I/O")
-	}
-	for _, mutate := range []func(*provider.Snapshot){func(s *provider.Snapshot) { s.Account = addr(99) }, func(s *provider.Snapshot) { s.BlockHash = common.HexToHash("0x01") }, func(s *provider.Snapshot) { s.BlockNumber = big.NewInt(9) }} {
-		s := h.s
-		mutate(&s)
-		_, err = plan.Resolve(t.Context(), s, func(int) protocolio.ReadResult {
-			t.Fatal("mismatch consumed staged result")
-			return protocolio.ReadResult{}
-		})
-		if err == nil || h.quotes != quotes {
-			t.Fatal("staged identity was accepted")
-		}
-	}
 	b := &batchChain{testChain: h.c}
 	h.p.chain = b
-	reads, err := protocolio.ReadGroup(t.Context(), b, plan.Requests...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	staged, err := plan.Resolve(t.Context(), h.s, reads.At)
-	if err != nil || !reflect.DeepEqual(staged, direct) {
-		t.Fatal("staged output differs", err)
-	}
 	out, s := h.authorized(t)
 	b.groups = nil
 	progress, err := h.p.Advance(t.Context(), s, out, nil)

@@ -42,7 +42,7 @@ func batchHarness(t *testing.T) (*Keeper, *recoveryStore, *batchPlannerFixture, 
 	second := &recoveryProvider{done: true}
 	strategy := k.Strategies[0]
 	strategy.Config.Name, strategy.Config.Executor = "withdraw", common.Address{0x11}.Hex()
-	strategy.Providers = []provider.Provider{second}
+	strategy.Providers = []Provider{second}
 	k.Strategies = append(k.Strategies, strategy)
 	return k, store, p, sender, []*recoveryProvider{first, second}
 }
@@ -193,7 +193,7 @@ func TestBatchRejectsMismatchedMemberIdentity(t *testing.T) {
 	if _, err := store.Load(ExecutionKey, &batch); err != nil {
 		t.Fatal(err)
 	}
-	batch.Members[0].Job.Plan.Recipe.Account = common.Address{42}
+	batch.Members[0].Plan.Recipe.Account = common.Address{42}
 	if err := store.Save(ExecutionKey, batch); err != nil {
 		t.Fatal(err)
 	}
@@ -232,12 +232,12 @@ func TestBatchProtectsTransactionWideReceiptOwnership(t *testing.T) {
 		{"unrelated native call", other, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			providers := []provider.Provider{&recoveryProvider{}}
+			providers := []Provider{&recoveryProvider{}}
 			if tc.exclusive {
 				providers[0] = &exclusiveProvider{claims: map[string]common.Address{"0:0": tc.target}}
 			}
 			strategies := []Strategy{
-				{Config: Config{Name: "one"}, Providers: []provider.Provider{&exclusiveProvider{claims: map[string]common.Address{"0:0": first}}}},
+				{Config: Config{Name: "one"}, Providers: []Provider{&exclusiveProvider{claims: map[string]common.Address{"0:0": first}}}},
 				{Config: Config{Name: "two"}, Providers: providers},
 			}
 			batch := ExecutionPlan{Members: []PlanMember{
@@ -291,11 +291,11 @@ func TestExecutionCompositionIncludesRepeatedNativeCalls(t *testing.T) {
 					native = target
 				}
 				first := &recoveryProvider{}
-				var runtime provider.Provider = first
+				var runtime Provider = first
 				if exclusive {
 					runtime = &exclusiveProvider{claims: map[string]common.Address{"0:0": target}}
 				}
-				strategies := []Strategy{{Config: Config{Name: "claim"}, Providers: []provider.Provider{runtime}}, {Config: Config{Name: "native"}, Providers: []provider.Provider{&recoveryProvider{}}}}
+				strategies := []Strategy{{Config: Config{Name: "claim"}, Providers: []Provider{runtime}}, {Config: Config{Name: "native"}, Providers: []Provider{&recoveryProvider{}}}}
 				repeated, err := recipes.Multicall([][]byte{compositionCalldata(t, native), compositionCalldata(t, native)})
 				if err != nil {
 					t.Fatal(err)

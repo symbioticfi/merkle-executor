@@ -45,9 +45,12 @@ func (r *permissionReader) CallContract(ctx context.Context, m ethereum.CallMsg,
 
 type permissionProvider struct{ calls int }
 
-func (p *permissionProvider) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
+func (*permissionProvider) RecipeRequirements(provider.Snapshot, recipes.Recipe, *recipes.Tree) (RecipeRequirements, error) {
+	return RecipeRequirements{}, nil
+}
+func (p *permissionProvider) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) ([]provider.Output, error) {
 	p.calls++
-	return provider.Output{}, nil
+	return []provider.Output{{}}, nil
 }
 func (*permissionProvider) Advance(context.Context, provider.Snapshot, provider.Output, json.RawMessage) (provider.Progress, error) {
 	return provider.Progress{Done: true}, nil
@@ -123,7 +126,7 @@ func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 				}
 			}
 			pr := &permissionProvider{}
-			strategy.Providers = []provider.Provider{pr}
+			strategy.Providers = []Provider{pr}
 			_, err = planner.Prepare(t.Context(), strategy)
 			ok := mode == "valid" || mode == "local tree" || mode == "mutate chain"
 			if ok && !errors.Is(err, provider.ErrNotReady) || !ok && (err == nil || errors.Is(err, provider.ErrNotReady)) {

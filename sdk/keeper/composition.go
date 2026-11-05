@@ -8,20 +8,16 @@ import (
 	"strconv"
 )
 
-// ValidateComposition rejects ambiguous receipt attribution without changing the
-// committed program. It also runs on recovered jobs, using their durable bytes.
-func ValidateComposition(calldata []byte, providers []provider.Provider) error {
-	return validateComposition(calldata, providers, nil)
-}
-
-func ValidatePlanComposition(calldata []byte, providers []provider.Provider, outputs [][]provider.Output) error {
+// ValidatePlanComposition checks receipt attribution against immutable call data.
+func ValidatePlanComposition(calldata []byte, providers []Provider, outputs [][]provider.Output) error {
 	if len(providers) != len(outputs) {
 		return errors.New("provider output count differs from prepared plan")
 	}
-	return validateComposition(calldata, providers, outputs)
-}
-
-func validateComposition(calldata []byte, providers []provider.Provider, outputs [][]provider.Output) error {
+	for _, group := range outputs {
+		if len(group) == 0 {
+			return errors.New("provider returned no execution outputs")
+		}
+	}
 	owners := make(map[common.Address]int)
 	claims := make(map[string]common.Address)
 	for i, p := range providers {
@@ -43,7 +39,7 @@ func validateComposition(calldata []byte, providers []provider.Provider, outputs
 	return validateTargetClaims(targets, owners, claims)
 }
 
-func exclusiveTargets(p provider.Provider, outputs [][]provider.Output, i int) (map[string]common.Address, error) {
+func exclusiveTargets(p Provider, outputs [][]provider.Output, i int) (map[string]common.Address, error) {
 	if exclusive, ok := p.(provider.ExclusiveOutputTargetProvider); ok {
 		if i >= len(outputs) || len(outputs[i]) == 0 {
 			return nil, errors.New("derived exclusive targets require persisted provider outputs")
@@ -62,9 +58,6 @@ func exclusiveTargets(p provider.Provider, outputs [][]provider.Output, i int) (
 			}
 		}
 		return all, nil
-	}
-	if exclusive, ok := p.(provider.ExclusiveTargetProvider); ok {
-		return exclusive.ExclusiveTargets(), nil
 	}
 	return nil, nil
 }

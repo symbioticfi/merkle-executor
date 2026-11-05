@@ -30,14 +30,11 @@ type recipeOrder struct {
 	requirements keeper.RecipeRequirements
 }
 
-func NewAutomatic(deps provider.Deps) (provider.Provider, error) {
+func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
 	if deps.Chain == nil {
 		return nil, errors.New("automatic CoW requires chain reader")
 	}
 	return &Automatic{deps: deps}, nil
-}
-func (*Automatic) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("CoW requires an authenticated recipe")
 }
 
 func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (*recipeOrder, error) {

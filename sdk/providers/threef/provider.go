@@ -30,14 +30,11 @@ type config struct {
 	Template hexutil.Bytes
 }
 
-func NewAutomatic(deps provider.Deps) (provider.Provider, error) {
+func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
 	if deps.Chain == nil {
 		return nil, errors.New("3F requires chain reader")
 	}
 	return &Provider{chain: deps.Chain}, nil
-}
-func (*Provider) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("3F requires authenticated recipe")
 }
 func derive(s provider.Snapshot, r recipes.Recipe, tree *recipes.Tree) (config, bool, error) {
 	actions, err := recipes.ManagedActions(r, tree)

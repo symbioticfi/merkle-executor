@@ -11,7 +11,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/submission"
+	"github.com/symbioticfi/merkle-executor/sdk/submission"
 )
 
 type Store interface {
@@ -20,7 +20,7 @@ type Store interface {
 	Delete(string) error
 }
 type Sender interface {
-	Send(context.Context, txmanager.Request) (txmanager.Result, error)
+	Send(context.Context, submission.Request) (submission.Result, error)
 	Acknowledge(context.Context, string) error
 	PendingID() string
 }
@@ -36,7 +36,7 @@ type Job struct {
 	Phase      string                `json:"phase"`
 	Plan       Plan                  `json:"plan"`
 	Progress   [][]provider.Progress `json:"progress"`
-	Result     txmanager.Result      `json:"result"`
+	Result     submission.Result     `json:"result"`
 	FinishedAt time.Time             `json:"finishedAt"`
 }
 
@@ -95,7 +95,7 @@ func (k *Keeper) checkRecovery() (map[string]common.Address, error) {
 		if !found {
 			continue
 		}
-		if job.Phase == "prepared" || job.Phase == "authorized" {
+		if job.Phase == "authorized" {
 			owners[name] = job.Plan.Snapshot.Account
 		}
 		s, exists := configured[name]
@@ -145,7 +145,7 @@ func (k *Keeper) inventory() ([]string, error) {
 
 func validateJob(job Job, s Strategy) error {
 	switch job.Phase {
-	case "prepared", "authorized", "settled", "failed":
+	case "authorized", "settled", "failed":
 	default:
 		return errors.New("invalid durable job phase")
 	}
@@ -190,25 +190,6 @@ func (k *Keeper) advanceStrategy(ctx context.Context, s Strategy) error {
 	found, err := k.Store.Load(key(s.Config.Name), &job)
 	if err != nil || !found {
 		return err
-	}
-	if job.Phase == "prepared" {
-		if k.Sender.PendingID() == "" {
-			// An unsigned plan may contain expired inputs. Rebuild it this tick.
-			return k.Store.Delete(key(s.Config.Name))
-		}
-		if k.Sender.PendingID() != job.ID {
-			return nil
-		}
-		// Recover an already signed individual transaction through the same journal.
-		execution := ExecutionJob{ID: job.ID, Phase: "prepared", To: job.Plan.Snapshot.Executor,
-			Data: job.Plan.Calldata, Members: []ExecutionMember{{Name: s.Config.Name, Job: job}}}
-		if err := k.Store.Save(ExecutionKey, execution); err != nil {
-			return err
-		}
-		if err := k.submitExecution(ctx, &execution); err != nil {
-			return err
-		}
-		job.Result, job.Phase = execution.Result, execution.Phase
 	}
 	if job.Phase == "settled" || job.Phase == "failed" {
 		if k.Sender.PendingID() == job.ID {

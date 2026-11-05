@@ -18,7 +18,9 @@ type exclusiveProvider struct {
 	claims map[string]common.Address
 }
 
-func (p *exclusiveProvider) ExclusiveTargets() map[string]common.Address { return p.claims }
+func (p *exclusiveProvider) ExclusiveOutputTargets(provider.Output) (map[string]common.Address, error) {
+	return p.claims, nil
+}
 
 func compositionCalldata(t *testing.T, targets ...common.Address) []byte {
 	return compositionCalldataWithGate(t, 1, targets...)
@@ -49,7 +51,7 @@ func TestRecoveryRejectsAmbiguousCompositionBeforeRelease(t *testing.T) {
 			target := common.HexToAddress("0x123")
 			first := &exclusiveProvider{claims: map[string]common.Address{"0:0": target}}
 			second := &exclusiveProvider{claims: map[string]common.Address{"1:0": target}}
-			k.Strategies[0].Providers = []provider.Provider{first, second}
+			k.Strategies[0].Providers = []Provider{first, second}
 			job := Job{ID: "owned", ConfigHash: k.Strategies[0].Config.Fingerprint(), Phase: phase,
 				Plan:     Plan{Calldata: compositionCalldata(t, target, target), Outputs: [][]provider.Output{{{}}, {{}}}},
 				Progress: [][]provider.Progress{{{Done: true}}, {{}}}}
@@ -92,7 +94,7 @@ func TestCompositionIncludesStaticAndOtherProviders(t *testing.T) {
 		{"missing action", []common.Address{target}, []map[string]common.Address{{"1:0": target}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var providers []provider.Provider
+			var providers []Provider
 			for _, claims := range tc.claims {
 				providers = append(providers, &exclusiveProvider{claims: claims})
 			}
@@ -100,7 +102,7 @@ func TestCompositionIncludesStaticAndOtherProviders(t *testing.T) {
 			if tc.name == "zero gated static duplicate" {
 				gate = 0
 			}
-			err := ValidateComposition(compositionCalldataWithGate(t, gate, tc.targets...), providers)
+			err := ValidatePlanComposition(compositionCalldataWithGate(t, gate, tc.targets...), providers, emptyOutputs(len(providers)))
 			if (err == nil) != tc.ok {
 				t.Fatalf("composition validation: %v", err)
 			}
@@ -127,7 +129,7 @@ func TestCompositionRejectsDirectAccountManageCall(t *testing.T) {
 	steps := append(args[1].([][]byte), append([]byte{11}, call...))
 	calldata := executor.NewRecipeExecutor().PackExecute(args[0].([][]byte), steps, args[2].([]*big.Int), args[3].([][]byte))
 	pr := &exclusiveProvider{claims: map[string]common.Address{"0:0": target}}
-	if err := ValidateComposition(calldata, []provider.Provider{pr}); err == nil {
+	if err := ValidatePlanComposition(calldata, []Provider{pr}, emptyOutputs(1)); err == nil {
 		t.Fatal("direct account.manage can supply zero-gated provider evidence")
 	}
 }
@@ -146,7 +148,7 @@ func TestFreshCompositionFailsBeforeSigning(t *testing.T) {
 	k, store, _, sender, _ := recoveryHarness(t)
 	target := common.HexToAddress("0x123")
 	pr := &exclusiveProvider{claims: map[string]common.Address{"0:0": target}}
-	k.Strategies[0].Providers = []provider.Provider{pr}
+	k.Strategies[0].Providers = []Provider{pr}
 	k.Planner = &compositionPlanner{plan: Plan{Calldata: compositionCalldata(t, target, target), Outputs: [][]provider.Output{{{}}}}}
 	if err := k.Tick(context.Background()); err == nil {
 		t.Fatal("fresh ambiguous composition accepted")
@@ -175,10 +177,18 @@ func TestCompositionChecksEveryProviderExecution(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = ValidatePlanComposition(batch, []provider.Provider{runtime}, [][]provider.Output{{{}, {}}})
+			err = ValidatePlanComposition(batch, []Provider{runtime}, [][]provider.Output{{{}, {}}})
 			if (err == nil) != tc.ok {
 				t.Fatal(err)
 			}
 		})
 	}
+}
+
+func emptyOutputs(count int) [][]provider.Output {
+	outputs := make([][]provider.Output, count)
+	for i := range outputs {
+		outputs[i] = []provider.Output{{}}
+	}
+	return outputs
 }

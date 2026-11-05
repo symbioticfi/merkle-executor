@@ -33,14 +33,11 @@ type automaticConfig struct {
 	Claims []Config `json:"claims"`
 }
 
-func NewAutomatic(deps provider.Deps) (provider.Provider, error) {
+func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
 	if deps.Chain == nil {
 		return nil, errors.New("automatic Merkl requires chain reader")
 	}
 	return &Automatic{deps: deps}, nil
-}
-func (*Automatic) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("Merkl requires authenticated recipe")
 }
 func rewardHTTP() protocolio.HTTPConfig {
 	return protocolio.HTTPConfig{URL: RewardAPI, MaxResponseBytes: 8 << 20}

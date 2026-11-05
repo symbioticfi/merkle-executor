@@ -60,7 +60,8 @@ amount rules must reserve pending withdrawals and control spending priorities.
   bounded runtime assembly and role/root/snapshot checks.
 - `keeper`: preparation, full simulation, immutable plan validation, durable workflow
   recovery and provider reconciliation with canonical execution evidence.
-- `provider`: Prepare/Advance contracts and explicit chain/HTTP dependencies.
+- `provider`: runtime data, snapshots and explicit chain/HTTP dependencies.
+- `keeper.Provider`: authenticated recipe requirements, per-execution preparation and settlement.
 - `providers/cowswap`, `providers/liquidlanerfq`, `providers/merkl`: opt-in order,
   quote and reward-proof preparation with durable settlement reconciliation.
 - `providers/aave`: authenticated Aave V3 capacity preparation shared by both hosts.
@@ -131,17 +132,17 @@ bounded provider outputs using their own feeds, sizing and calldata construction
 Custom integrations implement the same provider contracts.
 
 Providers that reconcile transaction-wide receipt logs without unique protocol
-identity implement `provider.ExclusiveTargetProvider`. The keeper validates their
+identity implement `provider.ExclusiveOutputTargetProvider`. The keeper validates their
 action keys against all populated Manage slots before signing and during recovery,
 including completed provider claims. Static or other-provider calls to an owned
 target, and arbitrary `Call` instructions, are unsupported. Normal `Approve` and
 numerical bindings remain available. Validation reads persisted execute bytes and
 does not modify or release ambiguous durable work. Hosts bypassing the keeper must
-call `keeper.ValidateComposition` before submission and reconciliation themselves.
+call `keeper.ValidatePlanComposition` before submission and reconciliation themselves.
 
 Input indices are bounded by `parse.MaxInputIndex` (4095), also exported through
-`recipes.MaxInputIndex`. Strict provider YAML decoding rejects aliases so moving
-an anchor cannot alter a value behind an unchanged host configuration fingerprint.
+`recipes.MaxInputIndex`. Providers derive configuration from authenticated recipes; host YAML contains
+connection and scheduling settings, not input mappings.
 
 `protocolio.BatchReader` is optional and transport-neutral. `ReadGroup` chunks
 independent stages at 256 members and returns ordered member results, separately
@@ -183,18 +184,9 @@ can batch both original and current headers. Submission batches initial owned-at
 receipts and opening confirmation evidence while retaining nonce ownership and durable
 transitions.
 
-`protocolio.StagedProvider` optionally supplies a pure `PlanPreparation` for a value-only
-provisional pin. It does no I/O and receives no fabricated recipe/root authority. A
-preparation-local resolver receives the authenticated snapshot and a bounded, lazy
-accessor for its own results. Exact chain/block/hash/time/executor/account/caller
-identity must match before resolution; providers should classify API eligibility
-before consuming getters. `keeper.Planner` automatically uses this optional contract.
-Nonstaged providers and direct `Provider.Prepare` calls execute without staging. Speculative
-batch member errors stay lazy; outer transport/shape failures are fatal before provider
-classification and never trigger single-call retries.
-
-`PrepareExecutionWithOptions` can stage these reads with initial metadata and accept a
-`RecipeCache`. `PrepareExecution` and standalone discovery APIs do not use the cache.
+`PrepareExecution` accepts a `RecipeCache` in its preparation options. The build
+callback receives only the authenticated recipe and snapshot; providers acquire
+runtime data after that boundary.
 `NewRecipeCache(capacity, bytes)` bounds a mutex-protected FIFO by entries and conservative
 retained allocation bytes (including payloads, empty slice slots and fixed overhead).
 Hosts set capacity from configured strategies; a nil cache disables it. Only exact

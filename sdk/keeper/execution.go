@@ -12,7 +12,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/submission"
+	"github.com/symbioticfi/merkle-executor/sdk/submission"
 )
 
 // ExecutionKey stores the complete submission until every member journal is durable.
@@ -30,8 +30,9 @@ type ExecutionPlan struct {
 
 // ExecutionMember retains the member's own provider outputs and recovery identity.
 type ExecutionMember struct {
-	Name string `json:"name"`
-	Job  Job    `json:"job"`
+	Name       string `json:"name"`
+	ConfigHash string `json:"configHash"`
+	Plan       Plan   `json:"plan"`
 }
 
 // ExecutionJob owns one transaction until every member journal is durable.
@@ -41,7 +42,7 @@ type ExecutionJob struct {
 	To      common.Address    `json:"to"`
 	Data    hexutil.Bytes     `json:"data"`
 	Members []ExecutionMember `json:"members"`
-	Result  txmanager.Result  `json:"result"`
+	Result  submission.Result `json:"result"`
 }
 
 // Transaction encodes a direct call or an ordered delegated self-call.
@@ -84,7 +85,7 @@ func (b ExecutionPlan) Transaction() (common.Address, []byte, error) {
 func (b ExecutionJob) plan() ExecutionPlan {
 	plan := ExecutionPlan{To: b.To, Members: make([]PlanMember, len(b.Members))}
 	for i, member := range b.Members {
-		plan.Members[i] = PlanMember{Name: member.Name, Plan: member.Job.Plan}
+		plan.Members[i] = PlanMember{Name: member.Name, Plan: member.Plan}
 	}
 	return plan
 }
@@ -111,13 +112,10 @@ func (k *Keeper) checkExecutionRecovery(configured map[string]Strategy) (map[str
 		if _, duplicate := owners[member.Name]; duplicate {
 			return nil, "", errors.New("duplicate durable batch member")
 		}
-		if member.Job.ID != batch.ID || member.Job.Phase != "prepared" {
-			return nil, "", errors.New("invalid durable batch member")
+		if member.ConfigHash != s.Config.Fingerprint() {
+			return nil, "", errors.Errorf("strategy %s configuration changed while work is active", member.Name)
 		}
-		if err := validateJob(member.Job, s); err != nil {
-			return nil, "", err
-		}
-		owners[member.Name] = member.Job.Plan.Snapshot.Account
+		owners[member.Name] = member.Plan.Snapshot.Account
 	}
 	if err := validateExecutionComposition(batch.plan(), k.Strategies); err != nil {
 		return nil, "", err
@@ -191,7 +189,7 @@ func (k *Keeper) tickExecution(ctx context.Context, owners map[string]common.Add
 			return k.globalFailure(loadErr)
 		}
 		delete(owners, s.Config.Name)
-		if found && (job.Phase == "prepared" || job.Phase == "authorized") {
+		if found && job.Phase == "authorized" {
 			owners[s.Config.Name] = job.Plan.Snapshot.Account
 		}
 		if err == nil && (!found || job.Phase == "settled" && time.Since(job.FinishedAt) >= s.Config.Interval) {
@@ -257,7 +255,7 @@ func (k *Keeper) tickExecution(ctx context.Context, owners map[string]common.Add
 				cancel()
 				return k.globalFailure(loadErr)
 			}
-			if found && (job.Phase == "prepared" || job.Phase == "authorized") {
+			if found && job.Phase == "authorized" {
 				owners[s.Config.Name] = job.Plan.Snapshot.Account
 			} else {
 				delete(owners, s.Config.Name)
@@ -285,14 +283,7 @@ func newExecution(plan ExecutionPlan, strategies []Strategy) (ExecutionJob, erro
 	for _, member := range plan.Members {
 		for _, strategy := range strategies {
 			if strategy.Config.Name == member.Name {
-				progress := make([][]provider.Progress, len(strategy.Providers))
-				for i, outputs := range member.Plan.Outputs {
-					progress[i] = make([]provider.Progress, len(outputs))
-				}
-				execution.Members = append(execution.Members, ExecutionMember{Name: member.Name, Job: Job{
-					ID: execution.ID, ConfigHash: strategy.Config.Fingerprint(), Phase: "prepared", Plan: member.Plan,
-					Progress: progress,
-				}})
+				execution.Members = append(execution.Members, ExecutionMember{Name: member.Name, ConfigHash: strategy.Config.Fingerprint(), Plan: member.Plan})
 				break
 			}
 		}
@@ -321,7 +312,7 @@ func (k *Keeper) submitExecution(ctx context.Context, batch *ExecutionJob) error
 		if k.Sender.PendingID() != "" && k.Sender.PendingID() != batch.ID {
 			return errors.New("another transaction owns the sender")
 		}
-		result, err := k.Sender.Send(ctx, txmanager.Request{ID: batch.ID, To: batch.To, Data: batch.Data})
+		result, err := k.Sender.Send(ctx, submission.Request{ID: batch.ID, To: batch.To, Data: batch.Data})
 		if err != nil {
 			if result.Pending && errors.Is(err, context.DeadlineExceeded) {
 				return provider.ErrNotReady
@@ -340,8 +331,11 @@ func (k *Keeper) submitExecution(ctx context.Context, batch *ExecutionJob) error
 		}
 	}
 	for _, member := range batch.Members {
-		job := member.Job
-		job.Result, job.Phase = batch.Result, batch.Phase
+		job := Job{ID: batch.ID, ConfigHash: member.ConfigHash, Plan: member.Plan, Result: batch.Result, Phase: batch.Phase,
+			Progress: make([][]provider.Progress, len(member.Plan.Outputs))}
+		for i, outputs := range member.Plan.Outputs {
+			job.Progress[i] = make([]provider.Progress, len(outputs))
+		}
 		if job.Phase == "failed" {
 			job.FinishedAt = time.Now().UTC()
 		}

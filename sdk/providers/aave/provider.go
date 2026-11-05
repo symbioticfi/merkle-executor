@@ -40,9 +40,6 @@ func New(reader provider.Reader) (*Provider, error) {
 	}
 	return &Provider{reader: reader}, nil
 }
-func (*Provider) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("Aave capacity requires authenticated recipe")
-}
 func (p *Provider) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (keeper.RecipeRequirements, error) {
 	b, err := derive(s, r, t)
 	if err != nil {
