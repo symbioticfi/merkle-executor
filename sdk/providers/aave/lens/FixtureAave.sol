@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.37;
+pragma solidity 0.8.38;
 
 // Local Anvil fixture only. Values model the Aave V3 getters used by the probe.
 contract FixtureAave {

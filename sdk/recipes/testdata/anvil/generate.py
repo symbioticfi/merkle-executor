@@ -32,7 +32,7 @@ with tempfile.TemporaryDirectory(prefix="merkle-keeper-fixtures-") as temporary:
     project = Path(temporary)
     (project / "src").mkdir()
     (project / "src/Fixture.sol").write_bytes((HERE / "Fixture.sol").read_bytes())
-    (project / "foundry.toml").write_text('[profile.default]\nsolc = "0.8.37"\nevm_version = "osaka"\noptimizer = true\noptimizer_runs = 200\nbytecode_hash = "none"\n')
+    (project / "foundry.toml").write_text('[profile.default]\nsolc = "0.8.38"\nevm_version = "osaka"\noptimizer = true\noptimizer_runs = 200\nbytecode_hash = "none"\n')
     subprocess.run(["forge", "build", "--offline", "--root", temporary], check=True)
     for contract in ("FixtureAccount", "FixtureToken"):
         artifact("Fixture.sol", project / f"out/Fixture.sol/{contract}.json", f"{contract}.json")

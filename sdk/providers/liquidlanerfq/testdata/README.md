@@ -1,7 +1,7 @@
 # Local RFQ consumer fixtures
 
 Run `python3 sdk/providers/liquidlanerfq/testdata/generate.py` with the cached
-solc 0.8.37 toolchain. Artifacts record source SHA-256 and compiler version, use
+solc 0.8.38 toolchain. Artifacts record source SHA-256 and compiler version, use
 Osaka, optimizer 200 runs, and disable the metadata bytecode hash. Generation uses
 a temporary directory and never writes sibling repositories.
 

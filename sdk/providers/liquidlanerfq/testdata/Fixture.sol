@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.37;
+pragma solidity 0.8.38;
 
 // Local integration fixture only. Administrative methods intentionally have no
 // access controls; no fixture contract is suitable for deployment outside tests.

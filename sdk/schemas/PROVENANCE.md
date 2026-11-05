@@ -27,7 +27,7 @@ No schema or endpoint is fetched automatically during a normal build.
   `forge flatten` output of adapters `0427c657375512a87158010c323556739fe96d1b`
   `src/contracts/merkle-adapter/capabilities/RecipeCapability.sol`, including its
   unmodified dependency closure. The adjacent `generate.py` compiles it offline
-  with solc 0.8.37, Osaka, via-IR, optimizer 200, metadata hash disabled. The
+  with solc 0.8.38, Osaka, via-IR, optimizer 200, metadata hash disabled. The
   account/distributor scaffolding and tokens are local fixtures. These tests
   establish execution of current frontend wire and atomic guards on Anvil;
   they do not establish a live distributor deployment or API availability.
