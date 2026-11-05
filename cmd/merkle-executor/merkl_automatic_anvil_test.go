@@ -151,14 +151,16 @@ func TestAnvilAutomaticMerklClaimFeedsRecipeBalance(t *testing.T) {
 	path := writeCLIConfig(t, t.TempDir(), cfg)
 	httpClient := &http.Client{Transport: serviceRewriteTransport{host: "api.merkl.xyz", target: rewrite}}
 	var output bytes.Buffer
-	if err = runBotWithHTTP(ctx, path, true, true, &output, httpClient); err != nil {
+	if err = planBotWithHTTP(ctx, path, &output, httpClient); err != nil {
 		t.Fatal(err)
 	}
-	var plans map[string]keeper.Plan
-	if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
+	var response struct {
+		Plan keeper.ExecutionPlan `json:"plan"`
+	}
+	if err = json.Unmarshal(output.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	plan := plans[cfg.Strategies[0]]
+	plan := response.Plan.Members[0].Plan
 	if len(plan.Outputs) != 5 || plan.Results[1] != "100" || plan.Results[2] != "17" || plan.Outputs[1].Inputs[0] != "100" || len(plan.Outputs[1].Actions) != 1 || lenses.Load() != 1 || rewardsHTTP.Load() != 1 {
 		t.Fatalf("incorrect staged preparation: results=%v lens=%d rewardHTTP=%d", plan.Results, lenses.Load(), rewardsHTTP.Load())
 	}
@@ -177,13 +179,13 @@ func TestAnvilAutomaticMerklClaimFeedsRecipeBalance(t *testing.T) {
 	recipe.Steps[4] = issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{leaves[1].Hash}, [][]*big.Int{{}})
 	serviceSeedTransaction(t, ctx, client, owner, &target, eABI.PackSetRecipe(recipe.Queries, recipe.Steps))
 	output.Reset()
-	if err = runBotWithHTTP(ctx, path, true, true, &output, httpClient); err != nil {
+	if err = planBotWithHTTP(ctx, path, &output, httpClient); err != nil {
 		t.Fatal(err)
 	}
-	if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
+	if err = json.Unmarshal(output.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	plan = plans[cfg.Strategies[0]]
+	plan = response.Plan.Members[0].Plan
 	serviceSeedTransaction(t, ctx, client, owner, &target, plan.Calldata)
 	for address, want := range map[common.Address]int64{account: 83, recipient: 17} {
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: tokenABI.PackBalanceOf(address)}, nil)

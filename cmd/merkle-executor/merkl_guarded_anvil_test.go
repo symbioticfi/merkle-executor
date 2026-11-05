@@ -265,21 +265,23 @@ func runFrontendGuardedMerkl(t *testing.T, native, current bool) {
 	// distributor paying half its ledger delta must fail original-code simulation.
 	if !native && !current {
 		call(fixture.Distributor, da, "setPayoutBps", big.NewInt(5000))
-		if err = runBotWithHTTP(ctx, path, true, true, new(bytes.Buffer), httpClient); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
+		if err = planBotWithHTTP(ctx, path, new(bytes.Buffer), httpClient); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
 			t.Fatal("frontend exact-cash-delta guard did not reject underpayment", err)
 		}
 		call(fixture.Distributor, da, "setPayoutBps", big.NewInt(10000))
 	}
 	before := fetches.Load()
 	var output bytes.Buffer
-	if err = runBotWithHTTP(ctx, path, true, true, &output, httpClient); err != nil {
+	if err = planBotWithHTTP(ctx, path, &output, httpClient); err != nil {
 		t.Fatal(err)
 	}
-	var plans map[string]keeper.Plan
-	if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
+	var response struct {
+		Plan keeper.ExecutionPlan `json:"plan"`
+	}
+	if err = json.Unmarshal(output.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	plan := plans[cfg.Strategies[0]]
+	plan := response.Plan.Members[0].Plan
 	wantDeltaB := "200"
 	if native {
 		wantDeltaB = "0"
@@ -345,23 +347,23 @@ func runFrontendGuardedMerkl(t *testing.T, native, current bool) {
 	badRows := append([]wire.MerklReward(nil), newRows...)
 	badRows[0].Proofs = rows[0].Proofs
 	rewardRows.Store(badRows)
-	if err = runBotWithHTTP(ctx, path, true, true, new(bytes.Buffer), httpClient); err == nil || !strings.Contains(err.Error(), "proof does not match effective on-chain root") {
+	if err = planBotWithHTTP(ctx, path, new(bytes.Buffer), httpClient); err == nil || !strings.Contains(err.Error(), "proof does not match effective on-chain root") {
 		t.Fatal("rollover accepted a proof for another root", err)
 	}
 	rewardRows.Store(newRows)
 	call(fixture.Distributor, da, "setRootAfterClaim", fixture.RewardRoot)
-	if err = runBotWithHTTP(ctx, path, true, true, new(bytes.Buffer), httpClient); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
+	if err = planBotWithHTTP(ctx, path, new(bytes.Buffer), httpClient); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
 		t.Fatal("frontend guard accepted a root change during claim", err)
 	}
 	call(fixture.Distributor, da, "setRootAfterClaim", common.Hash{})
 	output.Reset()
-	if err = runBotWithHTTP(ctx, path, true, true, &output, httpClient); err != nil {
+	if err = planBotWithHTTP(ctx, path, &output, httpClient); err != nil {
 		t.Fatal("scheduled recipe rejected a valid later root", err)
 	}
-	if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
+	if err = json.Unmarshal(output.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	plan = plans[cfg.Strategies[0]]
+	plan = response.Plan.Members[0].Plan
 	for i, want := range []string{"150", "50", "300", "100"} {
 		if plan.Outputs[1].Inputs[uint(i)] != want {
 			t.Fatalf("later-root cumulative/delta differs: %v", plan.Outputs[1].Inputs)
