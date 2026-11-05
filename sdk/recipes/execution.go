@@ -81,6 +81,10 @@ func PrepareExecutionWithOptions(ctx context.Context, reader Reader, executor, a
 		if err != nil {
 			return err
 		}
+		raw, err = simulationResults(ctx, reader, snapshot, calldata, raw, current.GasLimit)
+		if err != nil {
+			return err
+		}
 		if err := options.VerifySimulation(raw); err != nil {
 			return err
 		}
@@ -147,26 +151,13 @@ func validateExecutionResults(ctx context.Context, reader Reader, snapshot Snaps
 	if err != nil {
 		return nil, err
 	}
-	if batch {
-		backend, ok := reader.(BatchReader)
-		if !ok {
-			return nil, errors.New("batch validation requires code-override support")
-		}
-		calls, err := batchCalls(calldata)
-		if err != nil {
-			return nil, err
-		}
-		pin := snapshot
-		pin.BlockNumber, pin.BlockHash, pin.Timestamp = current.Number.Uint64(), current.Hash(), current.Time
-		returned, err := SimulateBatch(ctx, backend, pin, calls, current.GasLimit)
-		if err != nil {
-			return nil, err
-		}
-		raw, err = batchArguments.Pack(returned)
-		if err != nil {
-			return nil, err
-		}
+	pin := snapshot
+	pin.BlockNumber, pin.BlockHash, pin.Timestamp = current.Number.Uint64(), current.Hash(), current.Time
+	raw, err = simulationResults(ctx, reader, pin, calldata, raw, current.GasLimit)
+	if err != nil {
+		return nil, err
 	}
+
 	if len(results) != 0 {
 		if err = VerifyResults(calldata, raw, results); err != nil {
 			return nil, err
@@ -177,6 +168,28 @@ func validateExecutionResults(ctx context.Context, reader Reader, snapshot Snaps
 	}
 	return raw, nil
 }
+
+// The deployed multicall returns no per-call values. Use the same stateful
+// probe for initial preparation and recovered-plan validation.
+func simulationResults(ctx context.Context, reader Reader, snapshot Snapshot, calldata, raw []byte, gas uint64) ([]byte, error) {
+	if !isMulticall(calldata) {
+		return raw, nil
+	}
+	backend, ok := reader.(BatchReader)
+	if !ok {
+		return nil, errors.New("batch validation requires code-override support")
+	}
+	calls, err := batchCalls(calldata)
+	if err != nil {
+		return nil, err
+	}
+	returned, err := SimulateBatch(ctx, backend, snapshot, calls, gas)
+	if err != nil {
+		return nil, err
+	}
+	return batchArguments.Pack(returned)
+}
+
 func executionRead(snapshot Snapshot, caller common.Address, calldata []byte, block *big.Int) protocolio.ReadRequest {
 	return protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: caller, To: &snapshot.Executor, Data: calldata}, Block: block}
 }

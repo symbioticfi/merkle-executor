@@ -227,6 +227,10 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 		if err != nil {
 			return nil, nil, errors.Errorf("assemble runtime: %w", err)
 		}
+		plan.Calldata, err = repeatActions(recipe, tree, plan.Calldata, plan.Outputs)
+		if err != nil {
+			return nil, nil, err
+		}
 		if err := ValidatePlanComposition(plan.Calldata, strategy.Providers, plan.Outputs); err != nil {
 			return nil, nil, err
 		}

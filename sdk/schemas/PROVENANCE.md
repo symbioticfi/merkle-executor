@@ -75,5 +75,17 @@ unsupported boundaries.
 Native issuer contracts are test fixtures only. Source-pinned Noon artifacts and
 compiler settings live under `cmd/merkle-executor/testdata/issuers/noon`, outside
 production ABI generation. [Native validation](../../docs/NATIVE-ISSUER-TESTING.md)
-explains the evidence boundary. Production Go code has no native issuer ABI,
-deployment catalogue or protocol-specific execution provider.
+explains the evidence boundary. Native issuer actions retain their committed accounting recipes. The 3F
+standalone claim provider only discovers ready request addresses; it does not
+calculate or enforce payouts.
+
+
+- `abi/RecipeCapability.json`, `abi/ThreeFRequestsFactory.json` and
+  `abi/ThreeFRequest.json` contain the used functions of `IRecipeCapability`,
+  `IThreeFRequestFactory` and `IThreeFVaultController` from adapters main commit
+  `e8b5f82486eb32cf0b12bc7a93da2fdbbe6ce94c`. The 3F request getter/burn return
+  values are uint256. The frontend claim fixture is generated from
+  `threeFGuardedClaim`: the factory check and dynamic burn target share one
+  masked input, while owner and receiver are pinned to the account.
+  `cmd/merkle-executor/testdata/merkl/FixtureThreeF.sol` supplies local test
+  contracts only. Its ABI and bytecode are built by the adjacent `generate.py`.

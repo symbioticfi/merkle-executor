@@ -151,6 +151,9 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if err != nil {
 		return provider.Output{}, err
 	}
+	if len(r.Queries) == 0 && len(r.Steps) == 1 && len(claims) == 1 && len(claims[0].action.Bindings) == 0 && len(claims[0].layout.tokens) == 1 && claims[0].action.Slot.Gate.Source == recipes.Literal && claims[0].action.Slot.Gate.Value.Cmp(big.NewInt(1)) == 0 {
+		return p.prepareAll(ctx, s, claims[0], entries)
+	}
 	out := provider.Output{Inputs: map[uint]string{}, Actions: map[string]hexutil.Bytes{}}
 	cfg := automaticConfig{}
 	anyClaimable := false
@@ -250,12 +253,16 @@ func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provid
 	if !matched {
 		return provider.Progress{Done: true}, nil
 	}
-	if len(cfg.Claims) == 0 || len(inner.Actions) != len(cfg.Claims) || len(inner.SkipSteps) != 0 {
+	if len(cfg.Claims) == 0 || len(inner.SkipSteps) != 0 || (len(inner.Repeats) == 0 && len(inner.Actions) != len(cfg.Claims)) || (len(inner.Repeats) != 0 && (len(inner.Actions) != 1 || len(cfg.Claims) != 1+len(inner.Repeats) || len(inner.Inputs) != 0 || len(inner.Results) != 0)) {
 		return provider.Progress{}, errors.New("persisted Merkl claim shape differs")
 	}
 	seen := map[string]bool{}
-	for _, claim := range cfg.Claims {
-		if !reflect.DeepEqual(claim.HTTP, rewardHTTP()) || claim.Multicall3 != protocolio.StandardMulticall3 || claim.MinClaimable != "1" || claim.SkipIfEmpty || claim.DedicatedClaimGroup || len(claim.AmountInputs) != 0 || !claim.AllowIdle || len(claim.ClaimableInputs) > 1 || seen[claim.Action] || len(inner.Actions[claim.Action]) == 0 {
+	for i, claim := range cfg.Claims {
+		actions := inner.Actions
+		if len(inner.Repeats) != 0 && i > 0 {
+			actions = inner.Repeats[i-1]
+		}
+		if !reflect.DeepEqual(claim.HTTP, rewardHTTP()) || claim.Multicall3 != protocolio.StandardMulticall3 || claim.MinClaimable != "1" || claim.SkipIfEmpty || claim.DedicatedClaimGroup || len(claim.AmountInputs) != 0 || !claim.AllowIdle || len(claim.ClaimableInputs) > 1 || (seen[claim.Action] && len(inner.Repeats) == 0) || len(actions) != 1 && len(inner.Repeats) != 0 || len(actions[claim.Action]) == 0 {
 			return provider.Progress{}, errors.New("persisted Merkl automatic constants differ")
 		}
 		seen[claim.Action] = true

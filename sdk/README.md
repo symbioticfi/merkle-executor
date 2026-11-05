@@ -35,7 +35,9 @@ deployed. RPC code-override support is required for batched result validation.
 its live actions make progress. Each execution reads the state left by the
 previous one, including its final supply step. Runtime-input recipes remain a
 single execution; the planner also keeps recipes with external provider work
-single, so quotes, proofs and result witnesses are never reused. Providers that
+single, so quotes, proofs and result witnesses are never reused. A provider can
+supply distinct action variants for one unconditional, read-free managed call;
+the planner mask-checks each variant and simulates their complete multicall. Providers that
 do not participate can retain their empty durable envelopes without blocking
 native batching. Constant action sets run once without extra probes. No protocol
 name or per-executor switch selects this behavior.
@@ -237,6 +239,16 @@ and `recipes.ReadDependent` have been removed. An unchanged masked template no l
 Merkl claims use `claim`, with no recipient override. Proof capacities are reserved
 calldata space, while the encoded array length is the actual verified proof length.
 The provider fills only authorized token, cumulative amount, proof length and proof
-words. For a runtime token slot it selects an unclaimed reward in address order;
-subsequent executions can claim remaining tokens. Fixed-size permission data,
+words. For a standalone runtime-token claim it selects every unclaimed reward
+in address order and supplies distinct calldata for each execution. Fixed-size permission data,
 bindings, recipient checks and full transaction simulation are preserved.
+
+
+Standalone 3F claim recipes contain one account capability call. The capability
+checks `factory.isRequest(request)` and calls that request's `burnAll(account,
+account)`; there are no outer readiness or payout checks. `providers/threef`
+scans the committed factory, including transferred rights from its first request,
+and supplies each owned, withdrawable request through the same multicall path.
+Factory discovery uses its request/PT/YT CREATE sequence and bounded EIP-2681
+nonce domain. Source failures fail preparation; they never truncate the scan.
+Payout readiness is enforced again by the request contract at execution.
