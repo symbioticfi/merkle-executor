@@ -17,9 +17,13 @@ import (
 )
 
 type chain struct {
-	t     *testing.T
-	fail  bool
-	ready bool
+	t           *testing.T
+	fail        bool
+	ready       bool
+	maximum     *big.Int
+	synchronous bool
+	rejectClaim bool
+	failMaximum bool
 }
 
 func (c *chain) CallContract(_ context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
@@ -40,11 +44,22 @@ func (c *chain) CallContract(_ context.Context, msg ethereum.CallMsg, block *big
 	}
 	n := int64(0)
 	switch m.Name {
-	case "claimWithdrawal", "claimDepositRequest", "claimWithdrawRequest0", "claimWithdrawRequest", "claimInstantWithdrawRequest", "claimDepositEscrow", "claimRedeemEscrow", "claimCancelDepositRequest", "claimCancelRedeemRequest":
+	case "deposit", "mint", "withdraw", "redeem", "claimWithdrawal", "claimDepositRequest", "claimWithdrawRequest0", "claimWithdrawRequest", "claimInstantWithdrawRequest", "claimDepositEscrow", "claimRedeemEscrow", "claimCancelDepositRequest", "claimCancelRedeemRequest":
 		if msg.From != common.HexToAddress("0xa1") {
 			c.t.Fatal("native preflight sender differs from account")
 		}
+		if c.rejectClaim {
+			return nil, errors.New("execution reverted: unavailable")
+		}
 		return nil, nil
+	case "maxDeposit", "maxMint", "maxWithdraw", "maxRedeem":
+		if c.failMaximum {
+			return nil, errors.New("execution reverted: broken maximum")
+		}
+		if c.maximum != nil {
+			return m.Outputs.Pack(c.maximum)
+		}
+		return m.Outputs.Pack(big.NewInt(100))
 	case "getUserNextRequestId":
 		n = 4
 	case "withdrawPeriod":
@@ -80,6 +95,9 @@ func (c *chain) CallContract(_ context.Context, msg ethereum.CallMsg, block *big
 			n = 1
 		}
 	case "claimableDepositRequest", "claimableRedeemRequest", "depositEscrowBalance", "redeemEscrowBalance", "claimableCancelDepositRequest", "claimableCancelRedeemRequest":
+		if c.synchronous {
+			return nil, errors.New("execution reverted: unsupported selector")
+		}
 		if c.ready {
 			n = 100
 		}
@@ -106,7 +124,7 @@ func fixture(t *testing.T, name string, args ...any) (provider.Snapshot, recipes
 	}
 	mask := make([]byte, len(data))
 	switch name {
-	case "claimWithdrawal", "claimDepositRequest", "claimWithdrawRequestForEpoch":
+	case "deposit", "mint", "withdraw", "redeem", "claimWithdrawal", "claimDepositRequest", "claimWithdrawRequestForEpoch":
 		for i := 4; i < 36; i++ {
 			mask[i] = 255
 		}
@@ -203,49 +221,91 @@ func TestOnlySingleUnconditionalClaimMatches(t *testing.T) {
 	}
 }
 
-func TestAsyncClaimUsesNativeEntitlementAndRejectsOrdinaryOperation(t *testing.T) {
+func TestAsyncClaimsSupplyNativeMaximumWithoutRecipeReads(t *testing.T) {
+	account := common.HexToAddress("0xa1")
+	for _, method := range []string{"deposit", "mint", "withdraw", "redeem"} {
+		t.Run(method, func(t *testing.T) {
+			args := []any{big.NewInt(0), account}
+			if method == "withdraw" || method == "redeem" {
+				args = append(args, account)
+			}
+			s, r, tree := fixture(t, method, args...)
+			if len(r.Queries) != 0 || len(r.Steps) != 1 {
+				t.Fatal("claim recipe contains reads")
+			}
+			p := &Provider{&chain{t: t, ready: true, maximum: big.NewInt(75)}}
+			req, err := p.RecipeRequirements(s, r, tree)
+			if err != nil || len(req.Values) != 0 || len(req.Inputs) != 0 || len(req.Actions) != 1 {
+				t.Fatalf("claim must require calldata only: %+v %v", req, err)
+			}
+			out, err := p.PrepareRecipe(context.Background(), s, r, tree, nil)
+			if err != nil || len(out) != 1 {
+				t.Fatalf("ready async claim: %v", err)
+			}
+			data := out[0].Actions["0:0"]
+			if new(big.Int).SetBytes(data[4:36]).Cmp(big.NewInt(75)) != 0 {
+				t.Fatal("did not use native maximum")
+			}
+			if !bytes.Equal(data[36:], tree.Leaves[0].Data[36:]) || new(big.Int).SetBytes(tree.Leaves[0].Data[4:36]).Sign() != 0 {
+				t.Fatal("changed recipient/controller or permission")
+			}
+		})
+	}
+}
+
+func TestAsyncClaimsStayIdleWithoutEntitlementOrCapacity(t *testing.T) {
 	account := common.HexToAddress("0xa1")
 	s, r, tree := fixture(t, "withdraw", big.NewInt(0), account, account)
-	// An ordinary synchronous call is not claimed by this provider.
-	if _, ok, err := match(r, tree); ok || err != nil {
-		t.Fatalf("ordinary withdrawal matched: %v", err)
-	}
-	ty := func(name string) abi.Type {
-		v, err := abi.NewType(name, "", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return v
-	}
-	read, _ := contractABI.Pack("maxWithdraw", account)
-	q, err := queryArgs.Pack(tree.Leaves[0].Target, read, []*big.Int{}, new(big.Int))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.Queries = [][]byte{q}
-	r.Steps = append([][]byte{append([]byte{recipes.Read}, make([]byte, 32)...)}, r.Steps...)
-	result := new(big.Int).Lsh(big.NewInt(int64(recipes.Result)), 216)
-	binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(4), 224), result)
-	body, err := (abi.Arguments{{Type: ty("uint256")}, {Type: ty("bytes32[]")}, {Type: ty("uint256[][]")}}).Pack(big.NewInt(1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{binding}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.Steps[1] = append([]byte{recipes.Manage}, body...)
-	for _, ready := range []bool{false, true} {
-		out, err := (&Provider{&chain{t: t, ready: ready}}).PrepareRecipe(context.Background(), s, r, tree, map[uint]*big.Int{0: big.NewInt(100)})
-		if ready {
-			if err != nil || len(out) != 1 {
-				t.Fatalf("ready async claim failed: %v", err)
-			}
-		} else if !errors.Is(err, provider.ErrNotReady) {
-			t.Fatalf("unsettled async claim: %v", err)
+	for _, state := range []chain{
+		{t: t},
+		{t: t, ready: true, maximum: new(big.Int)},
+		{t: t, ready: true, rejectClaim: true},
+	} {
+		out, err := (&Provider{&state}).PrepareRecipe(context.Background(), s, r, tree, nil)
+		if !errors.Is(err, provider.ErrNotReady) || len(out) != 0 {
+			t.Fatalf("unavailable claim: %v %v", out, err)
 		}
 	}
-	out, err := (&Provider{&chain{t: t, ready: true}}).PrepareRecipe(context.Background(), s, r, tree, map[uint]*big.Int{0: big.NewInt(0)})
-	if !errors.Is(err, provider.ErrNotReady) || len(out) != 0 {
-		t.Fatal("zero native maximum must stay idle", err)
-	}
+}
 
+func TestBrokenNativeMaximumFailsPreparation(t *testing.T) {
+	account := common.HexToAddress("0xa1")
+	s, r, tree := fixture(t, "withdraw", big.NewInt(0), account, account)
+	_, err := (&Provider{&chain{t: t, ready: true, failMaximum: true}}).PrepareRecipe(context.Background(), s, r, tree, nil)
+	if err == nil || errors.Is(err, provider.ErrNotReady) {
+		t.Fatalf("broken maximum was treated as empty: %v", err)
+	}
+}
+
+func TestOrdinarySynchronousOperationIsNotPreparedAsAClaim(t *testing.T) {
+	account := common.HexToAddress("0xa1")
+	s, r, tree := fixture(t, "withdraw", big.NewInt(0), account, account)
+	out, err := (&Provider{&chain{t: t, ready: true, synchronous: true}}).PrepareRecipe(context.Background(), s, r, tree, nil)
+	if err != nil || len(out) != 1 {
+		t.Fatalf("unmatched synchronous call: %v", err)
+	}
+	_, matched, err := derived.Decode(policy, out[0], &config{})
+	if err != nil || matched || len(out[0].Actions) != 0 {
+		t.Fatalf("synchronous call became a claim: %v", err)
+	}
+}
+
+func TestAsyncClaimCannotChangeAccountOrFixedAmount(t *testing.T) {
+	account := common.HexToAddress("0xa1")
+	s, r, tree := fixture(t, "withdraw", big.NewInt(0), common.HexToAddress("0xbad"), account)
+	p := &Provider{&chain{t: t, ready: true}}
+	if _, err := p.PrepareRecipe(context.Background(), s, r, tree, nil); err == nil || err.Error() != "claim recipient or controller is not the account" {
+		t.Fatalf("foreign receiver allowed: %v", err)
+	}
+	s, r, tree = fixture(t, "withdraw", big.NewInt(0), account, account)
+	clear(tree.Leaves[0].DataMask)
+	old := tree.Leaves[0].Hash
+	tree.Leaves[0].Hash, _ = recipes.HashLeaf(tree.Leaves[0])
+	tree.Root = tree.Leaves[0].Hash
+	r.Steps[0] = bytes.ReplaceAll(r.Steps[0], old[:], tree.Leaves[0].Hash[:])
+	if _, err := p.PrepareRecipe(context.Background(), s, r, tree, nil); !errors.Is(err, provider.ErrNotReady) {
+		t.Fatalf("changed fixed amount: %v", err)
+	}
 }
 
 func TestPinnedIDDoesNotPreventOtherReadyIDsFromBeingScanned(t *testing.T) {

@@ -11,7 +11,7 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
   the recipe still caps the actual amount and enforces its health floor. Other
   protocol providers serve CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs.
   Native issuer, Merkl and 3F standalone claim providers discover eligible rewards/requests and
-  fill one authorized claim per execution; the SDK batches those executions.
+  select amounts and fill one authorized claim per execution; the SDK batches those executions.
   Native claim validity remains enforced by the distributor/request contracts;
   the planner handles exact recipe constraints.
   Liquid Lane connector acquisition and calldata construction belong to vault-solver's

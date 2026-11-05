@@ -31,25 +31,12 @@ var contractABI = func() abi.ABI {
 	return a
 }()
 
-var queryArgs = func() abi.Arguments {
-	var args abi.Arguments
-	for _, name := range []string{"address", "bytes", "uint256[]", "uint256"} {
-		ty, err := abi.NewType(name, "", nil)
-		if err != nil {
-			panic(err)
-		}
-		args = append(args, abi.Argument{Type: ty})
-	}
-	return args
-}()
-
 type Provider struct{ chain provider.Reader }
 type config struct {
-	Key          string
-	Target       common.Address
-	Data         hexutil.Bytes
-	Mask         hexutil.Bytes
-	AmountResult *uint `json:",omitempty"`
+	Key    string
+	Target common.Address
+	Data   hexutil.Bytes
+	Mask   hexutil.Bytes
 }
 type candidate struct {
 	config
@@ -64,25 +51,17 @@ func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
 	return &Provider{chain: deps.Chain}, nil
 }
 
-// A native claim is one unconditional call, preceded only by argument reads.
+// A native claim is one unconditional call with executor-supplied calldata.
 func match(r recipes.Recipe, t *recipes.Tree) (candidate, bool, error) {
 	actions, err := recipes.ManagedActions(r, t)
 	if err != nil {
 		return candidate{}, false, err
 	}
-	if len(actions) != 1 {
+	if len(r.Queries) != 0 || len(r.Steps) != 1 || len(actions) != 1 {
 		return candidate{}, false, nil
 	}
 	a := actions[0]
-	if a.Step != uint(len(r.Steps)-1) || a.Slot.Gate.Source != recipes.Literal || a.Slot.Gate.Value.Cmp(big.NewInt(1)) != 0 {
-		return candidate{}, false, nil
-	}
-	for _, step := range r.Steps[:len(r.Steps)-1] {
-		if step[0] != recipes.Read {
-			return candidate{}, false, nil
-		}
-	}
-	if len(a.Leaf.Data) < 4 {
+	if len(a.Bindings) != 0 || a.Slot.Gate.Source != recipes.Literal || a.Slot.Gate.Value.Cmp(big.NewInt(1)) != 0 || len(a.Leaf.Data) < 4 {
 		return candidate{}, false, nil
 	}
 	m, err := contractABI.MethodById(a.Leaf.Data[:4])
@@ -93,39 +72,11 @@ func match(r recipes.Recipe, t *recipes.Tree) (candidate, bool, error) {
 	if name == "claimWithdrawRequest" && len(m.Inputs) == 1 {
 		name = "claimWithdrawRequestForEpoch"
 	}
-	var amountResult *uint
 	switch name {
 	case "claimWithdrawal", "claimDepositRequest", "claimWithdrawRequestForEpoch", "claimWithdrawRequest", "claimInstantWithdrawRequest", "claimDepositEscrow", "claimRedeemEscrow", "claimCancelDepositRequest", "claimCancelRedeemRequest":
 	case "deposit", "mint", "withdraw", "redeem":
-		// These selectors also denote synchronous operations. Only the native maximum-bound
-		// argument shape is eligible, and preparation checks the async entitlement separately.
-		if len(a.Bindings) != 1 || a.Bindings[0].Offset != 4 || a.Bindings[0].Value.Source != recipes.Result {
-			return candidate{}, false, nil
-		}
-		// Only a direct native max* read is an asynchronous amount candidate.
-		index := a.Bindings[0].Value.Value
-		n := uint(index.Uint64())
-		amountResult = &n
-		if !index.IsUint64() || index.Uint64() >= uint64(len(r.Steps)-1) {
-			return candidate{}, false, nil
-		}
-		step := r.Steps[index.Uint64()]
-		if len(step) != 33 || step[0] != recipes.Read {
-			return candidate{}, false, nil
-		}
-		queryIndex := new(big.Int).SetBytes(step[1:])
-		if !queryIndex.IsUint64() || queryIndex.Uint64() >= uint64(len(r.Queries)) {
-			return candidate{}, false, nil
-		}
-		query := r.Queries[queryIndex.Uint64()]
-		values, err := queryArgs.Unpack(query)
-		if err != nil || values[0].(common.Address) != a.Leaf.Target || len(values[2].([]*big.Int)) != 0 || values[3].(*big.Int).Sign() != 0 {
-			return candidate{}, false, nil
-		}
-		read := values[1].([]byte)
-		want := map[string]string{"deposit": "maxDeposit", "mint": "maxMint", "withdraw": "maxWithdraw", "redeem": "maxRedeem"}[name]
-		if len(read) != 36 || !bytes.Equal(read[:4], contractABI.Methods[want].ID) {
-			return candidate{}, false, nil
+		if err := a.Pinned(36, len(a.Leaf.Data)-36); err != nil {
+			return candidate{}, false, err
 		}
 	default:
 		return candidate{}, false, nil
@@ -137,20 +88,16 @@ func match(r recipes.Recipe, t *recipes.Tree) (candidate, bool, error) {
 	if err != nil {
 		return candidate{}, false, err
 	}
-	return candidate{config{a.Key, a.Leaf.Target, a.Leaf.Data, a.Leaf.DataMask, amountResult}, name, args}, true, nil
+	return candidate{config{a.Key, a.Leaf.Target, a.Leaf.Data, a.Leaf.DataMask}, name, args}, true, nil
 }
 func (*Provider) RecipeRequirements(_ provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (keeper.RecipeRequirements, error) {
 	c, ok, err := match(r, t)
 	if !ok || err != nil {
 		return keeper.RecipeRequirements{}, err
 	}
-	requirements := keeper.RecipeRequirements{Actions: []string{c.Key}}
-	if c.AmountResult != nil {
-		requirements.Values = []recipes.Value{{Source: recipes.Result, Value: new(big.Int).SetUint64(uint64(*c.AmountResult))}}
-	}
-	return requirements, nil
+	return keeper.RecipeRequirements{Actions: []string{c.Key}}, nil
 }
-func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) ([]provider.Output, error) {
+func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, _ map[uint]*big.Int) ([]provider.Output, error) {
 	c, ok, err := match(r, t)
 	if err != nil {
 		return nil, err
@@ -171,15 +118,6 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 	if !ready {
 		return nil, errors.Errorf("%w: no settled native claims", provider.ErrNotReady)
 	}
-	if c.AmountResult != nil {
-		amount, ok := results[*c.AmountResult]
-		if !ok || amount == nil {
-			return nil, errors.New("native claim amount result was not resolved")
-		}
-		if amount.Sign() == 0 {
-			return nil, errors.Errorf("%w: native claim amount is zero", provider.ErrNotReady)
-		}
-	}
 
 	var outputs []provider.Output
 	if ids == nil {
@@ -189,7 +127,7 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 		data := bytes.Clone(c.Data)
 		if id != nil {
 			if len(data) < 36 {
-				return nil, errors.New("claim ID exceeds calldata")
+				return nil, errors.New("claim argument exceeds calldata")
 			}
 			id.FillBytes(data[4:36])
 		}
@@ -203,16 +141,12 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 		if !allowed {
 			continue
 		}
-		// A native eth_call catches settlement or liquidity changes without sending a transaction.
-		// Amount-bound calls are checked by the planner after their query bindings are resolved.
-		if c.method != "deposit" && c.method != "mint" && c.method != "withdraw" && c.method != "redeem" {
-			valid, err := p.nativeReady(ctx, s, c.Target, data)
-			if err != nil {
-				return nil, err
-			}
-			if !valid {
-				continue
-			}
+		valid, err := p.nativeReady(ctx, s, c.Target, data)
+		if err != nil {
+			return nil, err
+		}
+		if !valid {
+			continue
 		}
 
 		out, err := derived.Encode(policy, c.config, provider.Output{Actions: map[string]hexutil.Bytes{c.Key: data}}, true)
@@ -246,9 +180,12 @@ func (p *Provider) read(ctx context.Context, s provider.Snapshot, target common.
 	if err != nil {
 		return nil, err
 	}
-	raw, err := protocolio.CallData(ctx, p.chain, s, target, data)
+	raw, err := p.chain.CallContract(ctx, ethereum.CallMsg{To: &target, Data: data}, s.BlockNumber)
 	if err != nil {
-		return nil, err
+		if isRevert(err) {
+			return nil, errors.New("execution reverted")
+		}
+		return nil, errors.New("protocol chain read failed")
 	}
 	out, err := contractABI.Unpack(name, raw)
 	if err != nil {
@@ -268,6 +205,26 @@ func (p *Provider) number(ctx context.Context, s provider.Snapshot, target commo
 }
 func (p *Provider) ready(ctx context.Context, s provider.Snapshot, c candidate) ([]*big.Int, bool, error) {
 	switch c.method {
+	case "deposit", "mint", "withdraw", "redeem":
+		for _, arg := range c.args[1:] {
+			if arg.(common.Address) != s.Account {
+				return nil, false, errors.New("claim recipient or controller is not the account")
+			}
+		}
+		entitlement := "claimableDepositRequest"
+		if c.method == "withdraw" || c.method == "redeem" {
+			entitlement = "claimableRedeemRequest"
+		}
+		amount, err := p.number(ctx, s, c.Target, entitlement, new(big.Int), s.Account)
+		if err != nil || amount.Sign() == 0 {
+			return nil, false, err
+		}
+		getter := map[string]string{"deposit": "maxDeposit", "mint": "maxMint", "withdraw": "maxWithdraw", "redeem": "maxRedeem"}[c.method]
+		amount, err = p.number(ctx, s, c.Target, getter, s.Account)
+		if err != nil {
+			return nil, false, errors.Errorf("read %s: %w", getter, err)
+		}
+		return []*big.Int{amount}, amount.Sign() > 0, nil
 	case "claimWithdrawal":
 		return p.noon(ctx, s, c)
 	case "claimDepositRequest", "claimWithdrawRequestForEpoch":

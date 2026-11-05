@@ -259,12 +259,13 @@ external chain, hosted quote/order or live signing verification is implied.
 
 ## Native issuer claims
 
-The native claim provider recognizes one unconditional issuer claim, preceded
-only by reads used as native claim arguments. It enumerates Noon request IDs
-and Pareto queue epochs, checks owner entitlements, and supplies a separate
+The native claim provider recognizes one unconditional issuer claim with no recipe reads.
+It enumerates Noon request IDs and Pareto queue epochs, checks owner entitlements, and supplies a separate
 execution for each ready request. Fixed-ID permissions remain fixed. Direct
 Pareto and OpenEden refund claims use their owner ledgers. ERC-7540 claims use
-native entitlement reads; ordinary synchronous vault operations are excluded.
+native entitlement reads and fill the amount from the matching `maxDeposit`, `maxMint`,
+`maxWithdraw` or `maxRedeem` result at the pinned snapshot. Owner and recipient remain fixed.
+Ordinary synchronous vault operations are excluded.
 
 The SDK batches the prepared executions. The provider neither inserts gates
 nor edits recipes, targets, recipients, masks or proofs. Native claim reverts
