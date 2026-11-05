@@ -1,0 +1,600 @@
+{
+  "recipe": "0x000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000101090000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000001b751de1524a6d971fc9f8a647a9b455a64f39134cfd73c6ccf5d3459b091042200000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "queries": [],
+  "steps": [
+    {
+      "operation": 9,
+      "data": "0x0000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000a00000000000000000000000000000000000000000000000000000000000000001b751de1524a6d971fc9f8a647a9b455a64f39134cfd73c6ccf5d3459b0910422000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ],
+  "inputs": [],
+  "runtime": [
+    {
+      "slot": 0,
+      "step": 0,
+      "kind": "manage",
+      "amount": {
+        "source": 0,
+        "value": "1"
+      },
+      "calls": [
+        {
+          "hash": "0xb751de1524a6d971fc9f8a647a9b455a64f39134cfd73c6ccf5d3459b0910422",
+          "bound": [],
+          "keeper": [
+            {
+              "name": "rewardToken",
+              "offset": 228,
+              "length": 32,
+              "kind": "uint",
+              "bits": 160
+            },
+            {
+              "name": "cumulativeAmount",
+              "offset": 292,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proofLength",
+              "offset": 388,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof0",
+              "offset": 420,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof1",
+              "offset": 452,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof2",
+              "offset": 484,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof3",
+              "offset": 516,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof4",
+              "offset": 548,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof5",
+              "offset": 580,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof6",
+              "offset": 612,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof7",
+              "offset": 644,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof8",
+              "offset": 676,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof9",
+              "offset": 708,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof10",
+              "offset": 740,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof11",
+              "offset": 772,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof12",
+              "offset": 804,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof13",
+              "offset": 836,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof14",
+              "offset": 868,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof15",
+              "offset": 900,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof16",
+              "offset": 932,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof17",
+              "offset": 964,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof18",
+              "offset": 996,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof19",
+              "offset": 1028,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof20",
+              "offset": 1060,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof21",
+              "offset": 1092,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof22",
+              "offset": 1124,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof23",
+              "offset": 1156,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof24",
+              "offset": 1188,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof25",
+              "offset": 1220,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof26",
+              "offset": 1252,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof27",
+              "offset": 1284,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof28",
+              "offset": 1316,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof29",
+              "offset": 1348,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof30",
+              "offset": 1380,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            },
+            {
+              "name": "proof31",
+              "offset": 1412,
+              "length": 32,
+              "kind": "uint",
+              "bits": 256
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "provenance": {
+    "generator": "frontend-merkl-fixture.mjs",
+    "frontendRevision": "2a683f167f3ea2802fb51ec4b0e374b22dc464e1",
+    "merklSourceSha256": "1acb8fd3cf23846e90af476bdd5068159c553d9f0e0bfe7f542d916d47d42883",
+    "facts": "modeled topology, no chain reads"
+  },
+  "account": "0x0000000000000000000000000000000000000104",
+  "adapter": "0x0000000000000000000000000000000000000103",
+  "capability": "0x0000000000000000000000000000000000000105",
+  "distributor": "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae",
+  "rewardRoot": "0x43fed88c5b122b7769883db13abec7b7c855b31d424d792a20c00fe9abe4c8de",
+  "rewards": [
+    {
+      "token": "0x0000000000000000000000000000000000000201",
+      "cumulative": "100",
+      "proof": [
+        "0x2847ad0d21637321425143d748bde9efda58b2c9e46feff2ea45d3d013f70f96"
+      ]
+    },
+    {
+      "token": "0x0000000000000000000000000000000000000202",
+      "cumulative": "200",
+      "proof": [
+        "0xe17df8600deb4ad072dde09f5d6813284184338048c70ec0bddb987b2bafa8fe"
+      ]
+    }
+  ],
+  "root": "0xb5c66746aa7b0f9f1a7e3131bf58d313467f159a2451106ea3f31595895d50ec",
+  "calls": [
+    {
+      "hash": "0xa592039966a8045fb8ac913dfaa7d748a6b7944d74331070152290aa0674d312",
+      "target": "0x0000000000000000000000000000000000000103",
+      "targetLabel": "Merkle adapter",
+      "value": "zero",
+      "fn": "pull(uint256)",
+      "data": "0x4d0392a80000000000000000000000000000000000000000000000000000000000000000",
+      "dataMask": "0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "summary": "Return REWARD from the strategy account to the adapter",
+      "slots": [
+        {
+          "name": "amount",
+          "offset": 4,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        }
+      ],
+      "refs": [
+        {
+          "permission": "0xe0dfc72c06c34bd785ede1d62491a99002ba8bb42973ced149bfd7d795c2a2aa",
+          "name": "pull"
+        }
+      ],
+      "proof": [
+        "0xb751de1524a6d971fc9f8a647a9b455a64f39134cfd73c6ccf5d3459b0910422"
+      ]
+    },
+    {
+      "hash": "0xb751de1524a6d971fc9f8a647a9b455a64f39134cfd73c6ccf5d3459b0910422",
+      "target": "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae",
+      "targetLabel": "Merkl",
+      "value": "zero",
+      "fn": "claim(address[],address[],uint256[],bytes32[][])",
+      "data": "0x71ee95c0000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000014000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000104000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "dataMask": "0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "summary": "Claim Merkl rewards",
+      "slots": [
+        {
+          "name": "rewardToken",
+          "offset": 228,
+          "length": 32,
+          "kind": "uint",
+          "bits": 160
+        },
+        {
+          "name": "cumulativeAmount",
+          "offset": 292,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proofLength",
+          "offset": 388,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof0",
+          "offset": 420,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof1",
+          "offset": 452,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof2",
+          "offset": 484,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof3",
+          "offset": 516,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof4",
+          "offset": 548,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof5",
+          "offset": 580,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof6",
+          "offset": 612,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof7",
+          "offset": 644,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof8",
+          "offset": 676,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof9",
+          "offset": 708,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof10",
+          "offset": 740,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof11",
+          "offset": 772,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof12",
+          "offset": 804,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof13",
+          "offset": 836,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof14",
+          "offset": 868,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof15",
+          "offset": 900,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof16",
+          "offset": 932,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof17",
+          "offset": 964,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof18",
+          "offset": 996,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof19",
+          "offset": 1028,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof20",
+          "offset": 1060,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof21",
+          "offset": 1092,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof22",
+          "offset": 1124,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof23",
+          "offset": 1156,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof24",
+          "offset": 1188,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof25",
+          "offset": 1220,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof26",
+          "offset": 1252,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof27",
+          "offset": 1284,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof28",
+          "offset": 1316,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof29",
+          "offset": 1348,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof30",
+          "offset": 1380,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        },
+        {
+          "name": "proof31",
+          "offset": 1412,
+          "length": 32,
+          "kind": "uint",
+          "bits": 256
+        }
+      ],
+      "refs": [
+        {
+          "permission": "0xedf8c3640443565f76c94a43fed884e61cde781961b9d73e8955d29603aa3997",
+          "name": "claimRewards"
+        }
+      ],
+      "proof": [
+        "0xa592039966a8045fb8ac913dfaa7d748a6b7944d74331070152290aa0674d312"
+      ]
+    }
+  ],
+  "requirements": []
+}

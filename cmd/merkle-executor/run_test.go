@@ -396,9 +396,11 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || job.Result.Hash == (common.Hash{}) || len(job.Progress) != 5 || job.FinishedAt.IsZero() {
 		t.Fatalf("job did not settle: %+v", job.Result)
 	}
-	for _, progress := range job.Progress {
-		if !progress.Done {
-			t.Fatal("provider progress was not persisted")
+	for _, group := range job.Progress {
+		for _, progress := range group {
+			if !progress.Done {
+				t.Fatal("provider progress was not persisted")
+			}
 		}
 	}
 	if found, err := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); err != nil || found {

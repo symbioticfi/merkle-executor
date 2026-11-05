@@ -45,7 +45,7 @@ func sampleQuote() wire.CowOrder {
 	q.AppData = hash.Hex()
 	return q
 }
-func fixtureProvider(c Config, deps provider.Deps) (provider.Provider, error) {
+func fixtureProvider(c Config, deps provider.Deps) (*Provider, error) {
 	p, err := New(c, deps)
 	if err != nil {
 		return nil, err

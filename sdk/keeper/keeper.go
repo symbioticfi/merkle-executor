@@ -11,7 +11,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/submission"
+	"github.com/symbioticfi/merkle-executor/sdk/submission"
 )
 
 type Store interface {
@@ -20,7 +20,7 @@ type Store interface {
 	Delete(string) error
 }
 type Sender interface {
-	Send(context.Context, txmanager.Request) (txmanager.Result, error)
+	Send(context.Context, submission.Request) (submission.Result, error)
 	Acknowledge(context.Context, string) error
 	PendingID() string
 }
@@ -31,13 +31,13 @@ type Planning interface {
 }
 
 type Job struct {
-	ID         string              `json:"id"`
-	ConfigHash string              `json:"configHash"`
-	Phase      string              `json:"phase"`
-	Plan       Plan                `json:"plan"`
-	Progress   []provider.Progress `json:"progress"`
-	Result     txmanager.Result    `json:"result"`
-	FinishedAt time.Time           `json:"finishedAt"`
+	ID         string                `json:"id"`
+	ConfigHash string                `json:"configHash"`
+	Phase      string                `json:"phase"`
+	Plan       Plan                  `json:"plan"`
+	Progress   [][]provider.Progress `json:"progress"`
+	Result     submission.Result     `json:"result"`
+	FinishedAt time.Time             `json:"finishedAt"`
 }
 
 type Keeper struct {
@@ -95,7 +95,7 @@ func (k *Keeper) checkRecovery() (map[string]common.Address, error) {
 		if !found {
 			continue
 		}
-		if job.Phase == "prepared" || job.Phase == "authorized" {
+		if job.Phase == "authorized" {
 			owners[name] = job.Plan.Snapshot.Account
 		}
 		s, exists := configured[name]
@@ -145,7 +145,7 @@ func (k *Keeper) inventory() ([]string, error) {
 
 func validateJob(job Job, s Strategy) error {
 	switch job.Phase {
-	case "prepared", "authorized", "settled", "failed":
+	case "authorized", "settled", "failed":
 	default:
 		return errors.New("invalid durable job phase")
 	}
@@ -161,6 +161,11 @@ func validateJob(job Job, s Strategy) error {
 		}
 		if len(job.Plan.Outputs) != len(s.Providers) || len(job.Progress) != len(s.Providers) {
 			return errors.New("durable provider state count mismatch")
+		}
+		for i, outputs := range job.Plan.Outputs {
+			if len(outputs) == 0 || len(outputs) != len(job.Progress[i]) {
+				return errors.New("durable provider execution count mismatch")
+			}
 		}
 	}
 	return nil
@@ -185,25 +190,6 @@ func (k *Keeper) advanceStrategy(ctx context.Context, s Strategy) error {
 	found, err := k.Store.Load(key(s.Config.Name), &job)
 	if err != nil || !found {
 		return err
-	}
-	if job.Phase == "prepared" {
-		if k.Sender.PendingID() == "" {
-			// An unsigned plan may contain expired inputs. Rebuild it this tick.
-			return k.Store.Delete(key(s.Config.Name))
-		}
-		if k.Sender.PendingID() != job.ID {
-			return nil
-		}
-		// Recover an already signed individual transaction through the same journal.
-		execution := ExecutionJob{ID: job.ID, Phase: "prepared", To: job.Plan.Snapshot.Executor,
-			Data: job.Plan.Calldata, Members: []ExecutionMember{{Name: s.Config.Name, Job: job}}}
-		if err := k.Store.Save(ExecutionKey, execution); err != nil {
-			return err
-		}
-		if err := k.submitExecution(ctx, &execution); err != nil {
-			return err
-		}
-		job.Result, job.Phase = execution.Result, execution.Phase
 	}
 	if job.Phase == "settled" || job.Phase == "failed" {
 		if k.Sender.PendingID() == job.ID {
@@ -234,21 +220,23 @@ func (k *Keeper) advanceStrategy(ctx context.Context, s Strategy) error {
 		}
 		done := true
 		for i, p := range s.Providers {
-			if job.Progress[i].Done {
-				continue
+			for j, output := range job.Plan.Outputs[i] {
+				if job.Progress[i][j].Done {
+					continue
+				}
+				progress, err := p.Advance(ctx, snapshot, output, job.Progress[i][j].State)
+				if err != nil {
+					return errors.Errorf("reconcile provider %d: %w", i, err)
+				}
+				if err := k.Planner.VerifyConfirmedSnapshot(ctx, snapshot); err != nil {
+					return err
+				}
+				job.Progress[i][j] = progress
+				if err := k.Store.Save(key(s.Config.Name), job); err != nil {
+					return err
+				}
+				done = done && progress.Done
 			}
-			progress, err := p.Advance(ctx, snapshot, job.Plan.Outputs[i], job.Progress[i].State)
-			if err != nil {
-				return errors.Errorf("reconcile provider %d: %w", i, err)
-			}
-			if err := k.Planner.VerifyConfirmedSnapshot(ctx, snapshot); err != nil {
-				return err
-			}
-			job.Progress[i] = progress
-			if err := k.Store.Save(key(s.Config.Name), job); err != nil {
-				return err
-			}
-			done = done && progress.Done
 		}
 		if done {
 			job.Phase = "settled"
@@ -256,9 +244,11 @@ func (k *Keeper) advanceStrategy(ctx context.Context, s Strategy) error {
 			if err := k.Store.Save(key(s.Config.Name), job); err != nil {
 				return err
 			}
-			outcomes := make([]string, len(job.Progress))
-			for i, p := range job.Progress {
-				outcomes[i] = p.Outcome
+			var outcomes []string
+			for _, group := range job.Progress {
+				for _, p := range group {
+					outcomes = append(outcomes, p.Outcome)
+				}
 			}
 			k.Log.Info("strategy cycle finished", "strategy", s.Config.Name, "transaction", job.Result.Hash.Hex(), "outcomes", outcomes)
 		}

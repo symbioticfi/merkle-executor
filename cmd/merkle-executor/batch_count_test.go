@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,7 +31,7 @@ import (
 )
 
 func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
-	account, token, dist, aggregate, target, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01"), common.HexToAddress("0x04"), common.HexToAddress("0x05"), common.HexToAddress("0x06"), common.HexToAddress("0x07")
+	account, token, dist, aggregate, target, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01"), common.HexToAddress("0x04"), common.HexToAddress(protocolio.StandardMulticall3), common.HexToAddress("0x06"), common.HexToAddress("0x07")
 	root := crypto.Keccak256Hash(protocolio.AddressWord(account), protocolio.AddressWord(token), protocolio.Word(big.NewInt(100)))
 	claim := distributor.NewMerklDistributor().PackClaim([]common.Address{account}, []common.Address{token}, []*big.Int{big.NewInt(100)}, [][][32]byte{{}})
 	leaf := recipes.Leaf{Target: dist, Value: new(big.Int), Data: claim, DataMask: make([]byte, len(claim))}
@@ -202,8 +203,8 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer backend.Close()
-	cfg := merkl.Config{HTTP: protocolio.HTTPConfig{URL: rewards.URL}, Distributor: dist.Hex(), Multicall3: aggregate.Hex(), Tokens: []string{token.Hex()}, ProofCapacities: []int{0}, Action: "0:0", CalldataBytes: len(claim), MinClaimable: "1"}
-	p, err := merkl.New(cfg, provider.Deps{Chain: backend, HTTP: rewards.Client()})
+	endpoint, _ := url.Parse(rewards.URL)
+	p, err := merkl.NewAutomatic(provider.Deps{Chain: backend, HTTP: &http.Client{Transport: serviceRewriteTransport{host: "api.merkl.xyz", target: endpoint}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,16 +226,16 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 					advanceOnValidation = advanced
 					simulationBlock = `"0xc"`
 					requests, arrays, methods = 0, 0, 0
-					plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []provider.Provider{p}})
+					plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []keeper.Provider{p}})
 					wantMethods := 10
 					if advanced {
 						wantMethods = 12
 					}
-					wantRequests, wantArrays := 6, 5
+					wantRequests, wantArrays := 7, 6
 					if warm {
-						wantRequests, wantArrays, wantMethods = 5, 4, wantMethods-1
+						wantRequests, wantArrays, wantMethods = 6, 5, wantMethods-1
 					}
-					if err != nil || requests != wantRequests || arrays != wantArrays || methods != wantMethods || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0].Actions["0:0"], claim) {
+					if err != nil || requests != wantRequests || arrays != wantArrays || methods != wantMethods || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0][0].Actions["0:0"], claim) {
 						t.Fatalf("Merkl Prepare requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
 					}
 					if previous != nil && !bytes.Equal(previous, plan.Calldata) {

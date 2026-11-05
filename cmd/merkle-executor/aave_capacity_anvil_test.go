@@ -131,7 +131,11 @@ func TestAnvilAavePostSupplyCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := native.PrepareRecipe(ctx, snapshot, r, tree, nil)
+	outputs, err := native.PrepareRecipe(ctx, snapshot, r, tree, nil)
+	var out provider.Output
+	if len(outputs) == 1 {
+		out = outputs[0]
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,7 +29,7 @@ func TestIssuerArtifactsMatchSourcePins(t *testing.T) {
 			if err := json.Unmarshal(raw, &artifact); err != nil {
 				t.Fatal(err)
 			}
-			if artifact.Source != "Fixture.sol" || artifact.SourceSha256 != hex.EncodeToString(digest[:]) || !strings.HasPrefix(artifact.Compiler, "0.8.37+") {
+			if artifact.Source != "Fixture.sol" || artifact.SourceSha256 != hex.EncodeToString(digest[:]) || !strings.HasPrefix(artifact.Compiler, "0.8.38+") {
 				t.Fatal("issuer artifact differs from its source/compiler pin")
 			}
 			if artifact := loadIssuerArtifact(t, name); len(artifact.Bytecode) == 0 || len(artifact.ABI.Methods) == 0 {

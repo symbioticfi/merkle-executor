@@ -3,6 +3,7 @@ package keeper
 import (
 	"bytes"
 	"context"
+	"maps"
 	"math/big"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -12,7 +13,6 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
-
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
@@ -26,16 +26,16 @@ type Backend interface {
 
 type Strategy struct {
 	Config    Config
-	Providers []provider.Provider
+	Providers []Provider
 }
 
 type Plan struct {
-	Snapshot provider.Snapshot `json:"snapshot"`
-	Recipe   recipes.Snapshot  `json:"recipe"`
-	Calldata hexutil.Bytes     `json:"calldata"`
-	Leaves   []common.Hash     `json:"leaves"`
-	Outputs  []provider.Output `json:"outputs"`
-	Results  map[uint]string   `json:"results,omitempty"`
+	Snapshot provider.Snapshot   `json:"snapshot"`
+	Recipe   recipes.Snapshot    `json:"recipe"`
+	Calldata hexutil.Bytes       `json:"calldata"`
+	Leaves   []common.Hash       `json:"leaves"`
+	Outputs  [][]provider.Output `json:"outputs"`
+	Results  map[uint]string     `json:"results,omitempty"`
 }
 
 // PermissionSource supplies encoded artifacts; the SDK validates every leaf and
@@ -59,20 +59,16 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 	if p.PermissionSource != nil && (p.ChainID == nil || p.ChainID.Sign() <= 0 || p.ChainID.BitLen() > 256) {
 		return plan, errors.New("permission source requires valid chain ID")
 	}
-	var preparation *protocolio.Preparation
 	var returned []byte
 	selfContained := false
-	options := recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache, Stage: func(pin protocolio.PreparationPin) []protocolio.ReadRequest {
-		preparation = protocolio.PlanPreparation(strategy.Providers, pin)
-		return preparation.Requests()
-	}, VerifySimulation: func(raw []byte) error {
+	options := recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache, VerifySimulation: func(raw []byte) error {
 		if err := recipes.VerifyResults(plan.Calldata, raw, plan.Results); err != nil {
 			return err
 		}
 		returned = bytes.Clone(raw)
 		return nil
 	}}
-	err := recipes.PrepareExecutionWithOptions(ctx, p.Chain, common.HexToAddress(strategy.Config.Executor), common.HexToAddress(strategy.Config.Account), p.Caller, options, func(snap recipes.Snapshot, recipe recipes.Recipe, staged protocolio.ReadAccessor) ([]byte, []common.Hash, error) {
+	err := recipes.PrepareExecution(ctx, p.Chain, common.HexToAddress(strategy.Config.Executor), common.HexToAddress(strategy.Config.Account), p.Caller, options, func(snap recipes.Snapshot, recipe recipes.Recipe) ([]byte, []common.Hash, error) {
 		if strategy.Config.RecipeHash != "" && snap.RecipeHash != common.HexToHash(strategy.Config.RecipeHash) {
 			return nil, nil, errors.New("configured recipe hash mismatch")
 		}
@@ -100,84 +96,74 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 		plan.Recipe = snap
 		plan.Snapshot = provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snap.BlockNumber), BlockHash: snap.BlockHash, Timestamp: snap.Timestamp, Executor: snap.Executor, Account: snap.Account, Caller: snap.Caller, RecipeHash: snap.RecipeHash, Root: snap.Root}
 		inputs := make(map[uint]string)
+		derivedInputs := make(map[uint]string)
 		actions := make(map[string]hexutil.Bytes)
 		var skips []uint
 		var expressions []recipes.Value
 		owned := make(map[uint]bool)
 		actionOwners := map[string]bool{}
-		authenticated := false
 		requirements := make([]RecipeRequirements, len(strategy.Providers))
 		ready := make([]bool, len(strategy.Providers))
-		plan.Outputs = make([]provider.Output, len(strategy.Providers))
+		plan.Outputs = make([][]provider.Output, len(strategy.Providers))
 		prefix := recipes.PrefixRuntime{Tree: tree, Inputs: inputs, Actions: actions, AvailableInputs: map[uint]bool{}, BlockedActions: map[string]bool{}}
 		for i, runtime := range strategy.Providers {
-			if rp, ok := runtime.(RecipeProvider); ok {
-				authenticated = true
-				requirements[i], err = rp.RecipeRequirements(plan.Snapshot, recipes.CloneRecipe(recipe), recipes.CloneTree(tree))
-				if err != nil {
-					return nil, nil, errors.Errorf("invalid authenticated recipe: %w", err)
-				}
-				if len(requirements[i].Inputs)+len(requirements[i].Actions)+len(requirements[i].Values)+len(requirements[i].ExclusiveTargets) != 0 {
-					selfContained = false
-				}
-				expressions = append(expressions, requirements[i].Values...)
-				for _, index := range requirements[i].Inputs {
-					if owned[index] {
-						return nil, nil, errors.New("multiple providers own the same recipe input")
-					}
-					owned[index] = true
-					if len(requirements[i].Values) == 0 {
-						prefix.AvailableInputs[index] = true
-					}
-				}
-				for _, key := range requirements[i].Actions {
-					if actionOwners[key] {
-						return nil, nil, errors.New("multiple providers own the same recipe action")
-					}
-					actionOwners[key] = true
-					if len(requirements[i].Values) > 0 {
-						prefix.BlockedActions[key] = true
-					}
-				}
-			} else {
-				// Opaque providers have no replay contract; prepare them once.
+			requirements[i], err = runtime.RecipeRequirements(plan.Snapshot, recipes.CloneRecipe(recipe), recipes.CloneTree(tree))
+			if err != nil {
+				return nil, nil, errors.Errorf("invalid authenticated recipe: %w", err)
+			}
+			if len(requirements[i].Inputs)+len(requirements[i].Actions)+len(requirements[i].Values)+len(requirements[i].ExclusiveTargets) != 0 {
 				selfContained = false
 			}
+			expressions = append(expressions, requirements[i].Values...)
+			for _, index := range requirements[i].Inputs {
+				if owned[index] {
+					return nil, nil, errors.New("multiple providers own the same recipe input")
+				}
+				owned[index] = true
+				if len(requirements[i].Values) == 0 {
+					prefix.AvailableInputs[index] = true
+				}
+			}
+			for _, key := range requirements[i].Actions {
+				if actionOwners[key] {
+					return nil, nil, errors.New("multiple providers own the same recipe action")
+				}
+				actionOwners[key] = true
+				if len(requirements[i].Values) > 0 {
+					prefix.BlockedActions[key] = true
+				}
+			}
 		}
-		anchors := map[uint]recipes.EconomicValue{}
-		if authenticated {
-			if err = ValidateRecipeComposition(recipe, tree, requirements); err != nil {
-				return nil, nil, err
-			}
-			anchors, err = recipes.AnchoredInputs(recipe, owned)
-			if err != nil {
-				return nil, nil, err
-			}
-			for _, anchor := range anchors {
-				expressions = append(expressions, recipes.EconomicExpressions(anchor)...)
-			}
-			if err = recipes.ValidatePrefix(recipe, expressions, prefix); err != nil {
-				return nil, nil, err
-			}
+		if err = ValidateRecipeComposition(recipe, tree, requirements); err != nil {
+			return nil, nil, err
+		}
+		anchors, err := recipes.AnchoredInputs(recipe, owned)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, anchor := range anchors {
+			expressions = append(expressions, recipes.EconomicExpressions(anchor)...)
+		}
+		if err = recipes.ValidatePrefix(recipe, expressions, prefix); err != nil {
+			return nil, nil, err
 		}
 		resolve := func(i int, results map[uint]*big.Int) error {
-			var out provider.Output
-			if rp, ok := strategy.Providers[i].(RecipeProvider); ok {
-				copyResults := make(map[uint]*big.Int, len(results))
-				for index, value := range results {
-					copyResults[index] = new(big.Int).Set(value)
-				}
-				out, err = rp.PrepareRecipe(ctx, plan.Snapshot, recipes.CloneRecipe(recipe), recipes.CloneTree(tree), copyResults)
-			} else {
-				out, err = preparation.Resolve(ctx, i, plan.Snapshot, staged)
+			var outputs []provider.Output
+			copyResults := make(map[uint]*big.Int, len(results))
+			for index, value := range results {
+				copyResults[index] = new(big.Int).Set(value)
 			}
+			outputs, err = strategy.Providers[i].PrepareRecipe(ctx, plan.Snapshot, recipes.CloneRecipe(recipe), recipes.CloneTree(tree), copyResults)
 			if err != nil {
 				return errors.Errorf("resolve runtime: %w", err)
 			}
-			if err = merge(inputs, actions, &skips, out); err != nil {
+			if len(outputs) == 0 {
+				return errors.New("provider returned no execution outputs")
+			}
+			if err = merge(inputs, actions, &skips, outputs[0]); err != nil {
 				return err
 			}
-			plan.Outputs[i] = out
+			plan.Outputs[i] = outputs
 			ready[i] = true
 			return nil
 		}
@@ -188,23 +174,21 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 				}
 			}
 		}
-		resolved := map[uint]*big.Int{}
-		if authenticated {
-			prefix.SkipSteps = skips
-			prefix.AvailableInputs = nil
-			resolved, err = recipes.ResolveValuesWithRuntime(ctx, p.Chain, snap, recipe, expressions, prefix)
-			if err != nil {
-				return nil, nil, err
-			}
-			for index, anchor := range anchors {
-				value, e := recipes.EconomicResult(anchor, resolved)
-				if e != nil {
-					return nil, nil, e
-				}
-				inputs[index] = value.String()
-			}
-			plan.Results = recipes.ResultsWitness(resolved)
+		prefix.SkipSteps = skips
+		prefix.AvailableInputs = nil
+		resolved, err := recipes.ResolveValuesWithRuntime(ctx, p.Chain, snap, recipe, expressions, prefix)
+		if err != nil {
+			return nil, nil, err
 		}
+		for index, anchor := range anchors {
+			value, e := recipes.EconomicResult(anchor, resolved)
+			if e != nil {
+				return nil, nil, e
+			}
+			inputs[index] = value.String()
+			derivedInputs[index] = value.String()
+		}
+		plan.Results = recipes.ResultsWitness(resolved)
 		for i := range strategy.Providers {
 			if !ready[i] {
 				if err = resolve(i, resolved); err != nil {
@@ -215,15 +199,17 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 		if plan.Results == nil {
 			plan.Results = map[uint]string{}
 		}
-		for _, output := range plan.Outputs {
-			for index, value := range output.Results {
-				if old, ok := plan.Results[index]; ok && old != value {
-					return nil, nil, errors.New("provider prefix witness conflicts with recipe result")
+		for _, outputs := range plan.Outputs {
+			for _, output := range outputs {
+				for index, value := range output.Results {
+					if old, ok := plan.Results[index]; ok && old != value {
+						return nil, nil, errors.New("provider prefix witness conflicts with recipe result")
+					}
+					plan.Results[index] = value
 				}
-				plan.Results[index] = value
 			}
 		}
-		plan.Calldata, plan.Leaves, err = recipes.Assemble(recipe, tree, inputs, actions, skips)
+		plan.Calldata, plan.Leaves, err = assembleOutputs(recipe, tree, derivedInputs, plan.Outputs)
 		if err != nil {
 			return nil, nil, errors.Errorf("assemble runtime: %w", err)
 		}
@@ -246,9 +232,11 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 	if !selfContained || len(plan.Results) != 0 {
 		return plan, nil
 	}
-	for _, output := range plan.Outputs {
-		if len(output.Results)+len(output.Inputs)+len(output.Actions)+len(output.SkipSteps) != 0 {
-			return plan, nil
+	for _, outputs := range plan.Outputs {
+		for _, output := range outputs {
+			if len(output.Results)+len(output.Inputs)+len(output.Actions)+len(output.SkipSteps) != 0 {
+				return plan, nil
+			}
 		}
 	}
 	backend, ok := p.Chain.(recipes.BatchReader)
@@ -313,6 +301,59 @@ func merge(inputs map[uint]string, actions map[string]hexutil.Bytes, skips *[]ui
 		*skips = append(*skips, step)
 	}
 	return nil
+}
+
+func assembleOutputs(recipe recipes.Recipe, tree *recipes.Tree, derived map[uint]string, outputs [][]provider.Output) ([]byte, []common.Hash, error) {
+	count := 1
+	for _, group := range outputs {
+		count = max(count, len(group))
+	}
+	var calls [][]byte
+	var leaves []common.Hash
+	seen := map[common.Hash]bool{}
+	for i := 0; i < count; i++ {
+		inputs, actions := map[uint]string{}, map[string]hexutil.Bytes{}
+		maps.Copy(inputs, derived)
+		var skips []uint
+		for _, group := range outputs {
+			out, err := executionOutput(group, i, count)
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := merge(inputs, actions, &skips, out); err != nil {
+				return nil, nil, err
+			}
+		}
+		call, used, err := recipes.Assemble(recipe, tree, inputs, actions, skips)
+		if err != nil {
+			return nil, nil, err
+		}
+		calls = append(calls, call)
+		for _, leaf := range used {
+			if !seen[leaf] {
+				seen[leaf] = true
+				leaves = append(leaves, leaf)
+			}
+		}
+	}
+	if len(calls) == 1 {
+		return calls[0], leaves, nil
+	}
+	data, err := recipes.Multicall(calls)
+	return data, leaves, err
+}
+
+func executionOutput(group []provider.Output, index, count int) (provider.Output, error) {
+	if len(group) == count {
+		return group[index], nil
+	}
+	if len(group) == 1 {
+		out := group[0]
+		if len(out.Inputs)+len(out.Actions)+len(out.Results)+len(out.SkipSteps) == 0 {
+			return out, nil
+		}
+	}
+	return provider.Output{}, errors.New("provider must supply runtime data for each batch execution")
 }
 
 func (p *Planner) ConfirmedSnapshot(ctx context.Context, original provider.Snapshot) (provider.Snapshot, error) {

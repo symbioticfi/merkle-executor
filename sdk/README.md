@@ -35,7 +35,9 @@ deployed. RPC code-override support is required for batched result validation.
 its live actions make progress. Each execution reads the state left by the
 previous one, including its final supply step. Runtime-input recipes remain a
 single execution; the planner also keeps recipes with external provider work
-single, so quotes, proofs and result witnesses are never reused. Providers that
+single, so quotes, proofs and result witnesses are never reused. A provider can
+supply distinct action variants for one unconditional, read-free managed call;
+the planner mask-checks each variant and simulates their complete multicall. Providers that
 do not participate can retain their empty durable envelopes without blocking
 native batching. Constant action sets run once without extra probes. No protocol
 name or per-executor switch selects this behavior.
@@ -58,7 +60,8 @@ amount rules must reserve pending withdrawals and control spending priorities.
   bounded runtime assembly and role/root/snapshot checks.
 - `keeper`: preparation, full simulation, immutable plan validation, durable workflow
   recovery and provider reconciliation with canonical execution evidence.
-- `provider`: Prepare/Advance contracts and explicit chain/HTTP dependencies.
+- `provider`: runtime data, snapshots and explicit chain/HTTP dependencies.
+- `keeper.Provider`: authenticated recipe requirements, per-execution preparation and settlement.
 - `providers/cowswap`, `providers/liquidlanerfq`, `providers/merkl`: opt-in order,
   quote and reward-proof preparation with durable settlement reconciliation.
 - `providers/aave`: authenticated Aave V3 capacity preparation shared by both hosts.
@@ -129,17 +132,17 @@ bounded provider outputs using their own feeds, sizing and calldata construction
 Custom integrations implement the same provider contracts.
 
 Providers that reconcile transaction-wide receipt logs without unique protocol
-identity implement `provider.ExclusiveTargetProvider`. The keeper validates their
+identity implement `provider.ExclusiveOutputTargetProvider`. The keeper validates their
 action keys against all populated Manage slots before signing and during recovery,
 including completed provider claims. Static or other-provider calls to an owned
 target, and arbitrary `Call` instructions, are unsupported. Normal `Approve` and
 numerical bindings remain available. Validation reads persisted execute bytes and
 does not modify or release ambiguous durable work. Hosts bypassing the keeper must
-call `keeper.ValidateComposition` before submission and reconciliation themselves.
+call `keeper.ValidatePlanComposition` before submission and reconciliation themselves.
 
 Input indices are bounded by `parse.MaxInputIndex` (4095), also exported through
-`recipes.MaxInputIndex`. Strict provider YAML decoding rejects aliases so moving
-an anchor cannot alter a value behind an unchanged host configuration fingerprint.
+`recipes.MaxInputIndex`. Providers derive configuration from authenticated recipes; host YAML contains
+connection and scheduling settings, not input mappings.
 
 `protocolio.BatchReader` is optional and transport-neutral. `ReadGroup` chunks
 independent stages at 256 members and returns ordered member results, separately
@@ -181,18 +184,9 @@ can batch both original and current headers. Submission batches initial owned-at
 receipts and opening confirmation evidence while retaining nonce ownership and durable
 transitions.
 
-`protocolio.StagedProvider` optionally supplies a pure `PlanPreparation` for a value-only
-provisional pin. It does no I/O and receives no fabricated recipe/root authority. A
-preparation-local resolver receives the authenticated snapshot and a bounded, lazy
-accessor for its own results. Exact chain/block/hash/time/executor/account/caller
-identity must match before resolution; providers should classify API eligibility
-before consuming getters. `keeper.Planner` automatically uses this optional contract.
-Nonstaged providers and direct `Provider.Prepare` calls execute without staging. Speculative
-batch member errors stay lazy; outer transport/shape failures are fatal before provider
-classification and never trigger single-call retries.
-
-`PrepareExecutionWithOptions` can stage these reads with initial metadata and accept a
-`RecipeCache`. `PrepareExecution` and standalone discovery APIs do not use the cache.
+`PrepareExecution` accepts a `RecipeCache` in its preparation options. The build
+callback receives only the authenticated recipe and snapshot; providers acquire
+runtime data after that boundary.
 `NewRecipeCache(capacity, bytes)` bounds a mutex-protected FIFO by entries and conservative
 retained allocation bytes (including payloads, empty slice slots and fixed overhead).
 Hosts set capacity from configured strategies; a nil cache disables it. Only exact
@@ -237,6 +231,16 @@ and `recipes.ReadDependent` have been removed. An unchanged masked template no l
 Merkl claims use `claim`, with no recipient override. Proof capacities are reserved
 calldata space, while the encoded array length is the actual verified proof length.
 The provider fills only authorized token, cumulative amount, proof length and proof
-words. For a runtime token slot it selects an unclaimed reward in address order;
-subsequent executions can claim remaining tokens. Fixed-size permission data,
+words. For a standalone runtime-token claim it selects every unclaimed reward
+in address order and supplies distinct calldata for each execution. Fixed-size permission data,
 bindings, recipient checks and full transaction simulation are preserved.
+
+
+Standalone 3F claim recipes contain one account capability call. The capability
+checks `factory.isRequest(request)` and calls that request's `burnAll(account,
+account)`; there are no outer readiness or payout checks. `providers/threef`
+scans the committed factory, including transferred rights from its first request,
+and supplies each owned, withdrawable request through the same multicall path.
+Factory discovery uses its request/PT/YT CREATE sequence and bounded EIP-2681
+nonce domain. Source failures fail preparation; they never truncate the scan.
+Payout readiness is enforced again by the request contract at execution.

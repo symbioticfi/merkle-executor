@@ -136,17 +136,6 @@ func New(c Config, deps provider.Deps) (*Provider, error) {
 	p.http, err = protocolio.NewHTTP(c.HTTP, deps.HTTP, deps.LookupSecret)
 	return p, err
 }
-func (p *Provider) PlanPreparation(pin protocolio.PreparationPin) (protocolio.PreparationPlan, error) {
-	if err := pin.Validate(); err != nil {
-		return protocolio.PreparationPlan{}, err
-	}
-	return protocolio.PreparationPlan{Requests: []protocolio.ReadRequest{protocolio.ContractRead(p.reactor, reactor.NewLiquidLaneReactor().PackEip712Domain(), new(big.Int).SetUint64(pin.BlockNumber), true)}, Resolve: func(ctx context.Context, s provider.Snapshot, at protocolio.ReadAccessor) (provider.Output, error) {
-		if !pin.Matches(s) {
-			return provider.Output{}, errors.New("RFQ staged identity mismatch")
-		}
-		return p.prepare(ctx, s, at(0))
-	}}, nil
-}
 func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.Output, error) {
 	if err := protocolio.Snapshot(s); err != nil {
 		return provider.Output{}, err
@@ -426,5 +415,3 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	st.OrderID = response.OrderID
 	return finish("published", false)
 }
-
-var _ provider.Provider = (*Provider)(nil)

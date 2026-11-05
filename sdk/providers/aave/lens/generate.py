@@ -16,7 +16,7 @@ with tempfile.TemporaryDirectory(prefix="aave-borrow-probe-") as directory:
     root=Path(directory)
     (root/"src").mkdir()
     for name,path in SOURCES.items(): (root/"src"/name).write_bytes(path.read_bytes())
-    (root/"foundry.toml").write_text('[profile.default]\nsolc="0.8.37"\nevm_version="cancun"\noptimizer=true\noptimizer_runs=200\nvia_ir=true\nbytecode_hash="none"\n')
+    (root/"foundry.toml").write_text('[profile.default]\nsolc="0.8.38"\nevm_version="cancun"\noptimizer=true\noptimizer_runs=200\nvia_ir=true\nbytecode_hash="none"\n')
     subprocess.run(["forge","build","--root",directory],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     artifact=json.loads((root/"out/AaveBorrowProbe.sol/AaveBorrowProbe.json").read_text())
     fixture=json.loads((root/"out/FixtureAave.sol/FixtureAave.json").read_text())

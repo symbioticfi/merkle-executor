@@ -11,7 +11,7 @@ permission package, simulates the exact transaction and manages its lifecycle.
 - SDK `provider`: integration-neutral snapshots, runtime outputs and asynchronous progress.
   Hosts supply explicit chain/HTTP dependencies and select providers at startup.
 - SDK `providers`: CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs, selected
-  from authenticated recipes. Generic `keeper.NewRecipeInputs()` resolves exact
+  from authenticated recipes. The planner resolves exact
   recipe constraints. The isolated Aave V3 provider supplies one authenticated
   borrow-capacity Input through an eth_call-only post-supply prefix probe;
   actual amount selection and health guards remain in recipe bytes.
@@ -94,7 +94,8 @@ all 12 existing recipe operations. Build each Manage/Approve runtime slot exactl
 an explicitly skipped Manage slot remains empty and must pass full simulation.
 
 Simulation-only operation requires no key. Sending is an explicit deployment mode.
-Persist prepared jobs, then signed transaction bytes before broadcasting. Ambiguous
+Persist one prepared execution containing every member's plan, then signed transaction
+bytes before broadcasting. Confirmed members keep their own settlement progress. Ambiguous
 submission, timeouts, restarts and unconfirmed receipts retain nonce ownership. Only
 canonical confirmed receipts advance workflows. Durable external phases block another
 run of the same strategy until settled. No private keys, API tokens or complete provider
@@ -106,9 +107,16 @@ snapshot and checks canonical headers before and after reconciliation. CoW and R
 providers retain their exact account authorization and settlement attestations.
 
 A canonical native receipt settles generic execution. The keeper does not interpret
-issuer events, discover requests, apply protocol-specific readiness rules or wait
+issuer events, apply protocol-specific readiness rules or wait
 for an issuer payout. Calls, reads, amount selection, authorization, claim gates
-and output checks are committed in the recipe. Other native protocols require no selector
+and output checks are committed in financial recipes. Standalone Merkl and 3F
+claim recipes delegate claim validity to their native contracts. Their isolated
+providers discover eligible rewards/requests and fill one call per execution;
+Each provider returns ordinary outputs, one per execution, with independently
+validated inputs and calldata. The standard assembler builds every entry and the
+existing executor multicall combines them atomically. The journal tracks each
+output separately for reconciliation.
+Other native protocols require no selector
 or deployment catalogue in Go. Separate request and claim recipes read their own
 current pending/eligible state; a successful request transaction does not establish
 later settlement.
@@ -126,18 +134,13 @@ recipe reads/results. Other provider-created native Inputs require such a
 constraint or a Result binding. Unknown and unresolved dependencies fail closed;
 the keeper never adds a protocol-specific discovery fallback.
 
-## Preparation read stages
+## Recipe preparation
 
-The keeper can plan independent provider reads from a provisional value-only block
-pin and configured identity. This optional SDK contract lives in `protocolio`, keeping
-policy in isolated providers and avoiding an import cycle through `provider`. Planning
-is pure local encoding. Initial metadata and planned calls share a bounded read group;
-only authenticated discovery plus active permission-tree validation can invoke their resolvers.
-Each resolver sees its own lazy results and must match the exact provisional pin.
-Ordinary member errors remain deferred until API eligibility requires them. Transport
-and batch-shape failures fail closed before provider classification, including when
-speculative results would later be unused. Merkl stages its existing strict aggregate
-as an isolated EVM call. Other providers retain their existing preparation behavior.
+Every provider implements the same recipe-aware interface. The planner verifies
+its declared input and action ownership before acquiring runtime data. Providers
+receive the authenticated recipe and permission tree, and return one output per
+execution. Native recipes need no provider: the planner derives exact inputs
+through the shared numerical lens.
 
 A shared bounded recipe cache retains immutable event evidence only after successful
 closing preparation guards. Its key is full chain ID plus executor; its body preserves
@@ -192,6 +195,6 @@ retryable and never trigger submission on the failing iteration.
 Merkl claims use `claim`, with no recipient override. Proof capacities are reserved
 calldata space, while the encoded array length is the actual verified proof length.
 The provider fills only authorized token, cumulative amount, proof length and proof
-words. For a runtime token slot it selects an unclaimed reward in address order;
-subsequent executions can claim remaining tokens. Fixed-size permission data,
+words. For a standalone runtime-token claim it selects every unclaimed reward
+in address order and supplies distinct calldata for each execution. Fixed-size permission data,
 bindings, recipient checks and full transaction simulation are preserved.

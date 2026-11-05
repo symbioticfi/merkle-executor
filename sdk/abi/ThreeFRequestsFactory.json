@@ -1,0 +1,19 @@
+[
+  {
+    "type": "function",
+    "name": "isRequest",
+    "inputs": [
+      {
+        "name": "request",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  }
+]

@@ -330,9 +330,11 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	if len(plan.Outputs) != 5 || len(plan.Calldata) == 0 {
 		t.Fatal("mixed native plan missing automatic providers or execution")
 	}
-	for _, out := range plan.Outputs {
-		if len(out.Actions)+len(out.Inputs)+len(out.SkipSteps) != 0 {
-			t.Fatal("native issuer action acquired provider mutation ownership")
+	for _, group := range plan.Outputs {
+		for _, out := range group {
+			if len(out.Actions)+len(out.Inputs)+len(out.SkipSteps) != 0 {
+				t.Fatal("native issuer action acquired provider mutation ownership")
+			}
 		}
 	}
 	simulated, err := client.CallContract(ctx, ethereum.CallMsg{From: caller, To: &executor, Data: plan.Calldata}, nil)
@@ -463,9 +465,11 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	if len(settled.Progress) != 5 {
 		t.Fatalf("wrong provider progress count: %+v", settled.Progress)
 	}
-	for _, progress := range settled.Progress {
-		if !progress.Done {
-			t.Fatalf("native provider did not finish recovery: %+v", progress)
+	for _, group := range settled.Progress {
+		for _, progress := range group {
+			if !progress.Done {
+				t.Fatalf("native provider did not finish recovery: %+v", progress)
+			}
 		}
 	}
 	// A native-only recipe with zero gates is idle even though the previous claim

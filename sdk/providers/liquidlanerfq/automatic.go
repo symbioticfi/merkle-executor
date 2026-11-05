@@ -31,14 +31,11 @@ type recipeRequest struct {
 	requirements keeper.RecipeRequirements
 }
 
-func NewAutomatic(deps provider.Deps) (provider.Provider, error) {
+func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
 	if _, ok := deps.Chain.(chainReader); !ok {
 		return nil, errors.New("automatic RFQ requires contract, receipt and header reads")
 	}
 	return &Automatic{deps: deps}, nil
-}
-func (*Automatic) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("RFQ requires authenticated recipe")
 }
 
 func consumerHTTP() protocolio.HTTPConfig {
@@ -186,40 +183,40 @@ func (p *Automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t 
 	}
 	return request.requirements, nil
 }
-func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
+func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) ([]provider.Output, error) {
 	request, err := p.derive(s, r, t)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	if request == nil {
 		return derived.Empty(automaticPolicy)
 	}
 	amount, err := recipes.EconomicResult(request.budget, results)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	minimum := new(big.Int)
 	for _, floor := range request.floors {
 		value, err := recipes.EconomicResult(floor, results)
 		if err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 		if value.Cmp(minimum) > 0 {
 			minimum = value
 		}
 	}
 	if amount.Sign() == 0 || minimum.Sign() == 0 {
-		return provider.Output{}, provider.ErrNotReady
+		return nil, provider.ErrNotReady
 	}
 	request.cfg.AmountIn = amount.String()
 	request.cfg.MinAmountOut = minimum.String()
 	runtime, err := New(request.cfg, p.deps)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	out, err := runtime.Prepare(ctx, s)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	payload := out.Actions[request.cfg.Action]
 	for _, floor := range request.floors {
@@ -228,14 +225,14 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		}
 		expected, err := recipes.EconomicResult(floor, results)
 		if err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 		if new(big.Int).SetBytes(payload[request.template.Offset+288:request.template.Offset+320]).Cmp(expected) != 0 {
-			return provider.Output{}, errors.New("RFQ selected output conflicts with exact recipe result binding")
+			return nil, errors.New("RFQ selected output conflicts with exact recipe result binding")
 		}
 	}
 	if err = derived.BindOutput(request.template, payload, results, &out); err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	return derived.Encode(automaticPolicy, request.cfg, out, true)
 }

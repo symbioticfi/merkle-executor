@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.37;
+pragma solidity 0.8.38;
 
 /// @dev eth_call-only adapter. Executes the unchanged runtime at the original
 /// address/storage/caller and returns the values omitted by Multicallable.

@@ -75,7 +75,7 @@ func cachedPrepare(t *testing.T, r *cachedReader, c *RecipeCache, batched bool, 
 	if batched {
 		reader = cachedBatch{r}
 	}
-	return PrepareExecutionWithOptions(t.Context(), reader, r.executor, r.account, common.HexToAddress("0x3333"), PreparationOptions{ChainID: big.NewInt(1), Cache: c}, func(s Snapshot, recipe Recipe, _ protocolio.ReadAccessor) ([]byte, []common.Hash, error) {
+	return PrepareExecution(t.Context(), reader, r.executor, r.account, common.HexToAddress("0x3333"), PreparationOptions{ChainID: big.NewInt(1), Cache: c}, func(s Snapshot, recipe Recipe) ([]byte, []common.Hash, error) {
 		r.validating = true
 		if build != nil {
 			if err := build(s, recipe); err != nil {
@@ -296,7 +296,7 @@ func TestRecipeCacheBoundedEvictionIsolationAndConcurrentReplacement(t *testing.
 }
 func TestPrepareExecutionNilBuildFailsBeforeReads(t *testing.T) {
 	r, _ := cacheFixture(t, Recipe{})
-	if err := PrepareExecution(t.Context(), r, r.executor, r.account, r.caller, nil); err == nil || r.allReads != 0 {
+	if err := PrepareExecution(t.Context(), r, r.executor, r.account, r.caller, PreparationOptions{}, nil); err == nil || r.allReads != 0 {
 		t.Fatalf("nil build reached reads: %v reads%d", err, r.allReads)
 	}
 }

@@ -7,7 +7,7 @@ assertions and provider mappings are rejected before network access.
 The recovery fingerprint includes runtime policy version `1`, executor, account,
 caller, chain ID, curator configuration and transaction-manager fee policy. The
 daemon installs automatic CoW, Merkl, Liquid Lane RFQ and Aave V3 capacity providers,
-then `keeper.NewRecipeInputs()`, in a fixed order. Typed provider settings are internal
+and 3F claim providers in a fixed order. Typed provider settings are internal
 recipe and recovery data.
 Token pairs, amounts, minimum proceeds, action/input mappings, deployment targets
 and authorization shapes come from the
@@ -67,8 +67,8 @@ lens resolves dependencies, and the original executor simulates the exact comple
 transaction before signing.
 
 Use Result bindings directly for values computed by the recipe. When a runtime
-Input is needed, give it an exact deterministic recipe constraint that generic
-`keeper.NewRecipeInputs()` can resolve. Financial Inputs must equal a deterministic
+Input is needed, give it an exact deterministic recipe constraint that
+the planner can resolve. Financial Inputs must equal a deterministic
 expression; an upper/lower bound does not select a value. A request ID must be a
 committed value or be derived exactly from recipe reads/results. The keeper does
 not enumerate an issuer ledger or choose a request from an allowed range.
@@ -106,7 +106,7 @@ by signed economics or the supporting prefix. This detects override-code
 introspection or other divergence. Preparation verifies this witness against the complete transaction.
 Recovery of an already signed attempt keeps the exact saved bytes and reconciles
 canonical receipt/execution evidence; it does not rerun economic preparation,
-acquire a fresh quote or rewrite signed values. The lens targets Cancun and is reproducibly generated with pinned solc 0.8.37.
+acquire a fresh quote or rewrite signed values. The lens targets Cancun and is reproducibly generated with pinned solc 0.8.38.
 `make generate` regenerates it; `make -C sdk verify-lens` checks exact artifacts.
 
 Some valid compositions are explicitly unsupported: a needed READ following an
@@ -136,10 +136,9 @@ count. Opening/canonical headers, recipe event evidence, current metadata/roles 
 original full simulation remain necessary separate stages. The 16 MiB recipe cache
 retains only canonical event bodies, never balances, roots, roles or quotes.
 
-SDK fixture counts in `batch_count_test.go` and `batch_anvil_test.go` measure
-explicitly configured providers: 6 cold / 5 warm preparation requests and 3 explicit revalidation
-requests for their small recipes. They are not counts for the normal automatic
-daemon. `TestAnvilAutomaticMerklClaimFeedsRecipeBalance` verifies the normal daemon
+`TestMerklPlannerNetworkRequestCounts` measures the automatic Merkl provider:
+7 cold / 6 warm preparation requests and 3 explicit revalidation requests for
+its small recipe. `TestAnvilAutomaticMerklClaimFeedsRecipeBalance` verifies the normal daemon
 uses one shared lens and one rewards HTTP fetch for a claim followed by balance
 READ and a derived transfer. RPC counts are local fixture evidence, not latency or
 deployment guarantees.
@@ -245,7 +244,7 @@ existing work.
 
 Direct typed provider constructors serve recipe derivation, saved output
 validation and focused tests. They are not daemon configuration inputs. Generic static/http/rpc data providers are not included in the daemon; deterministic
-recipe-constrained Inputs use `keeper.NewRecipeInputs()` and the shared lens.
+recipe-constrained inputs are resolved by the planner through the shared lens.
 
 ## Evidence and generation
 

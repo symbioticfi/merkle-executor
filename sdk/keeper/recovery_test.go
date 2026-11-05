@@ -19,7 +19,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/submission"
+	"github.com/symbioticfi/merkle-executor/sdk/submission"
 )
 
 type recoveryStore struct {
@@ -34,7 +34,7 @@ func (s *recoveryStore) Save(key string, value any) error {
 			s.failPhase = ""
 			return errors.New("injected journal write failure")
 		}
-		if s.failDone && len(job.Progress) > 0 && job.Progress[0].Done {
+		if s.failDone && len(job.Progress) > 0 && job.Progress[0][0].Done {
 			s.failDone = false
 			return errors.New("injected progress write failure")
 		}
@@ -49,7 +49,7 @@ type recoveryPlanner struct {
 
 func (p *recoveryPlanner) Prepare(_ context.Context, s Strategy) (Plan, error) {
 	p.prepared++
-	return Plan{Snapshot: provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(10), BlockHash: common.HexToHash("0x10"), Timestamp: 100, Account: common.HexToAddress(s.Config.Account), Executor: common.HexToAddress(s.Config.Executor), Caller: common.HexToAddress("0x30")}, Recipe: recipes.Snapshot{Account: common.HexToAddress(s.Config.Account), Executor: common.HexToAddress(s.Config.Executor), Caller: common.HexToAddress("0x30")}, Calldata: executor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil), Outputs: []provider.Output{{Data: json.RawMessage(`{"uid":"stable-order"}`)}}}, nil
+	return Plan{Snapshot: provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(10), BlockHash: common.HexToHash("0x10"), Timestamp: 100, Account: common.HexToAddress(s.Config.Account), Executor: common.HexToAddress(s.Config.Executor), Caller: common.HexToAddress("0x30")}, Recipe: recipes.Snapshot{Account: common.HexToAddress(s.Config.Account), Executor: common.HexToAddress(s.Config.Executor), Caller: common.HexToAddress("0x30")}, Calldata: executor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil), Outputs: [][]provider.Output{{{Data: json.RawMessage(`{"uid":"stable-order"}`)}}}}, nil
 }
 func (p *recoveryPlanner) PrepareExecution(ctx context.Context, strategies []Strategy) (ExecutionPlan, error) {
 	return prepareFixture(ctx, strategies, p.Prepare)
@@ -79,7 +79,7 @@ func (p *recoveryPlanner) VerifyConfirmedSnapshot(context.Context, provider.Snap
 
 type recoverySender struct {
 	pending     string
-	requests    []txmanager.Request
+	requests    []submission.Request
 	broadcasts  int
 	reverted    bool
 	ackFailures int
@@ -88,16 +88,16 @@ type recoverySender struct {
 }
 
 func (s *recoverySender) PendingID() string { return s.pending }
-func (s *recoverySender) Send(_ context.Context, req txmanager.Request) (txmanager.Result, error) {
+func (s *recoverySender) Send(_ context.Context, req submission.Request) (submission.Result, error) {
 	if s.pending == "" {
 		s.pending = req.ID
 		s.broadcasts++
 	}
 	if s.pending != req.ID {
-		return txmanager.Result{}, errors.New("unexpected competing intent")
+		return submission.Result{}, errors.New("unexpected competing intent")
 	}
 	s.requests = append(s.requests, req)
-	return txmanager.Result{ID: req.ID, Hash: common.HexToHash("0xfeed"), Confirmed: !s.reverted, Reverted: s.reverted, Execution: s.execution.Clone()}, nil
+	return submission.Result{ID: req.ID, Hash: common.HexToHash("0xfeed"), Confirmed: !s.reverted, Reverted: s.reverted, Execution: s.execution.Clone()}, nil
 }
 func (s *recoverySender) Acknowledge(_ context.Context, id string) error {
 	if s.beforeAck != nil {
@@ -123,8 +123,11 @@ type recoveryProvider struct {
 	executions []*provider.Execution
 }
 
-func (p *recoveryProvider) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("planner stub owns preparation")
+func (*recoveryProvider) RecipeRequirements(provider.Snapshot, recipes.Recipe, *recipes.Tree) (RecipeRequirements, error) {
+	return RecipeRequirements{}, nil
+}
+func (*recoveryProvider) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) ([]provider.Output, error) {
+	return nil, errors.New("planner stub owns preparation")
 }
 func (p *recoveryProvider) Advance(_ context.Context, snapshot provider.Snapshot, out provider.Output, _ json.RawMessage) (provider.Progress, error) {
 	p.calls++
@@ -204,7 +207,7 @@ func recoveryHarness(t *testing.T) (*Keeper, *recoveryStore, *recoveryPlanner, *
 	planner := &recoveryPlanner{}
 	sender := &recoverySender{}
 	pr := &recoveryProvider{done: true}
-	strategy := Strategy{Config: Config{Name: "cow", Executor: "0x0000000000000000000000000000000000000010", Account: "0x0000000000000000000000000000000000000020", Tree: "approved.json", Interval: time.Hour}, Providers: []provider.Provider{pr}}
+	strategy := Strategy{Config: Config{Name: "cow", Executor: "0x0000000000000000000000000000000000000010", Account: "0x0000000000000000000000000000000000000020", Tree: "approved.json", Interval: time.Hour}, Providers: []Provider{pr}}
 	k := &Keeper{Store: store, Planner: planner, Sender: sender, Strategies: []Strategy{strategy}, Mode: "send", OperationTimeout: time.Second, Log: logr.Discard()}
 	return k, store, planner, sender, pr
 }
@@ -290,7 +293,7 @@ func TestRecoveryProviderPersistenceFailureReusesDeterministicOutput(t *testing.
 		t.Fatal("injected provider persistence failure ignored")
 	}
 	job := loadRecoveryJob(t, store, "cow")
-	if job.Phase != "authorized" || job.Progress[0].Done {
+	if job.Phase != "authorized" || job.Progress[0][0].Done {
 		t.Fatal("failed save committed completion")
 	}
 	restarted := *k
@@ -315,7 +318,7 @@ func TestRecoveryReorgCannotCommitProviderCompletion(t *testing.T) {
 		t.Fatal("provider snapshot reorg ignored")
 	}
 	job := loadRecoveryJob(t, store, "cow")
-	if job.Phase != "authorized" || job.Progress[0].Done {
+	if job.Phase != "authorized" || job.Progress[0][0].Done {
 		t.Fatal("reorganized provider result was committed")
 	}
 }
@@ -400,9 +403,12 @@ func TestRecoveryUnsignedPreparedDataIsRefreshedBeforeSigning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old.Calldata = []byte{9, 9, 9}
-	job := Job{ID: "expired-unsigned-order", ConfigHash: strategy.Config.Fingerprint(), Phase: "prepared", Plan: old, Progress: make([]provider.Progress, len(strategy.Providers))}
-	if err := store.Save(key(strategy.Config.Name), job); err != nil {
+	old.Calldata = executor.NewRecipeExecutor().PackExecute(nil, nil, []*big.Int{big.NewInt(42)}, nil)
+	job, err := newExecution(ExecutionPlan{To: old.Snapshot.Executor, Members: []PlanMember{{Name: strategy.Config.Name, Plan: old}}}, k.Strategies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ExecutionKey, job); err != nil {
 		t.Fatal(err)
 	}
 	if err := k.Tick(context.Background()); err != nil {
@@ -504,6 +510,52 @@ func TestConfirmedSnapshotRejectsHeadReorgAndMalformedHeaders(t *testing.T) {
 			p := &Planner{Chain: c, Confirmations: 2}
 			if _, err := p.ConfirmedSnapshot(context.Background(), provider.Snapshot{}); err == nil {
 				t.Fatal("invalid confirmation snapshot accepted")
+			}
+		})
+	}
+}
+
+func TestRecoveryResumesEachProviderOutputIndependently(t *testing.T) {
+	k, store, planner, sender, runtime := recoveryHarness(t)
+	strategy := k.Strategies[0]
+	plan, err := planner.Prepare(t.Context(), strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Outputs[0] = []provider.Output{{Data: json.RawMessage(`{"claim":"first"}`)}, {Data: json.RawMessage(`{"claim":"second"}`)}}
+	job := Job{ID: "batch-claims", ConfigHash: strategy.Config.Fingerprint(), Phase: "authorized", Plan: plan, Progress: [][]provider.Progress{{{Done: true, Reference: "first"}, {}}}}
+	if err := store.Save(key(strategy.Config.Name), job); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.advanceStrategy(t.Context(), strategy); err != nil {
+		t.Fatal(err)
+	}
+	saved := loadRecoveryJob(t, store, strategy.Config.Name)
+	if runtime.calls != 1 || !bytes.Equal(runtime.outputs[0], plan.Outputs[0][1].Data) || saved.Phase != "settled" || !saved.Progress[0][1].Done || saved.Progress[0][0].Reference != "first" || sender.broadcasts != 0 {
+		t.Fatal("recovery repeated completed work or lost per-execution progress")
+	}
+}
+
+func TestRecoveryRejectsStandalonePreparedJobs(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unsigned", true: "signed"}[pending], func(t *testing.T) {
+			k, store, _, sender, runtime := recoveryHarness(t)
+			job := Job{ID: "unsupported-job", ConfigHash: k.Strategies[0].Config.Fingerprint(), Phase: "prepared"}
+			if err := store.Save(key(k.Strategies[0].Config.Name), job); err != nil {
+				t.Fatal(err)
+			}
+			if pending {
+				sender.pending = job.ID
+			}
+			if err := k.Tick(t.Context()); err == nil || !strings.Contains(err.Error(), "invalid durable job phase") {
+				t.Fatalf("unsupported journal accepted: %v", err)
+			}
+			if len(sender.requests) != 0 || runtime.calls != 0 || sender.pending != map[bool]string{true: job.ID}[pending] {
+				t.Fatal("unsupported state was submitted, reconciled or released")
+			}
+			retained := loadRecoveryJob(t, store, k.Strategies[0].Config.Name)
+			if retained.Phase != job.Phase || retained.ID != job.ID {
+				t.Fatal("unsupported state was rewritten")
 			}
 		})
 	}

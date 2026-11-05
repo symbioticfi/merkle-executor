@@ -13,7 +13,7 @@ current adapters Foundry artifact. `anvil/Fixture.sol` contains local-only accou
 and token test doubles. The account fixture verifies leaf hashes, sorted proofs
 and executor roles. `anvil/sources-sha256.json` records the relevant source snapshot.
 Regenerate these artifacts with `python3 internal/recipes/testdata/anvil/generate.py`
-after rebuilding adapters; this requires cached Solidity 0.8.37 and Foundry.
+after rebuilding adapters; this requires cached Solidity 0.8.38 and Foundry.
 
 Run the independent local chain tests with:
 

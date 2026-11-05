@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // Copyright (c) 2026 Symbiotic
-pragma solidity 0.8.37;
+pragma solidity 0.8.38;
 
 interface IPrefixAccount {
     struct Action { address target; uint96 value; bytes data; bytes dataMask; bytes32[] proof; }
