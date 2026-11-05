@@ -136,7 +136,11 @@ func TestCurrentFrontendVariableProof(t *testing.T) {
 			})
 			p := &Automatic{deps: provider.Deps{Chain: chain, HTTP: h}}
 			snapshot := provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: fixture.Account, Timestamp: 1000}
-			out, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+			outputs, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+			var out provider.Output
+			if len(outputs) == 1 {
+				out = outputs[0]
+			}
 			if length > 64 || locked {
 				if err == nil {
 					t.Fatal("oversized proof or pinned word mutation accepted")

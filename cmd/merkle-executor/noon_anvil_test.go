@@ -215,9 +215,11 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 		if !exists || len(response.Plan.Members) != 1 || plan.Snapshot.Account != account || plan.Snapshot.Caller != caller || len(plan.Outputs) != 5 || plan.Results[0] != amount.String() || plan.Results[2] != amount.String() || lenses.Load()-before != 1 {
 			t.Fatalf("recipe host lost address identity/input derivation/lens budget: %+v", plan.Results)
 		}
-		for _, output := range plan.Outputs {
-			if len(output.Inputs) != 0 || len(output.Actions) != 0 || len(output.SkipSteps) != 0 {
-				t.Fatal("on-chain issuer recipe acquired provider-owned runtime values")
+		for _, group := range plan.Outputs {
+			for _, output := range group {
+				if len(output.Inputs) != 0 || len(output.Actions) != 0 || len(output.SkipSteps) != 0 {
+					t.Fatal("on-chain issuer recipe acquired provider-owned runtime values")
+				}
 			}
 		}
 		return plan, nil
@@ -385,7 +387,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 		t.Fatal(err)
 	}
 	var job keeper.Job
-	if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); e != nil || !found || job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || len(job.Progress) != 5 || !job.Progress[4].Done {
+	if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); e != nil || !found || job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || len(job.Progress) != 5 || !job.Progress[4][0].Done {
 		t.Fatalf("native canonical address job did not settle: %+v %v", job.Result, e)
 	}
 	if found, e := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); e != nil || found {

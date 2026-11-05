@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix="merkle-recipe-lens-") as temporary:
     (root / "src").mkdir()
     for name in ("RecipePrefixLens.sol", "LensProbe.sol", "BatchSimulation.sol"):
         (root / "src" / name).write_bytes((HERE / name).read_bytes())
-    (root / "foundry.toml").write_text('[profile.default]\nsolc = "0.8.37"\nevm_version = "cancun"\noptimizer = true\noptimizer_runs = 200\nvia_ir = true\nbytecode_hash = "none"\n')
+    (root / "foundry.toml").write_text('[profile.default]\nsolc = "0.8.38"\nevm_version = "cancun"\noptimizer = true\noptimizer_runs = 200\nvia_ir = true\nbytecode_hash = "none"\n')
     # Foundry verifies/downloads the pinned compiler on a fresh CI host.
     subprocess.run(["forge", "build", "--skip", "test", "--root", temporary], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for contract, source, output in (("BatchSimulation", "BatchSimulation.sol", "BatchSimulation.json"), ("RecipePrefixLens", "RecipePrefixLens.sol", "bytecode.json"), ("LensProbe", "LensProbe.sol", "LensProbe.json"), ("ZeroApprovalToken", "LensProbe.sol", "ZeroApprovalToken.json"), ("FixtureAutomaticRewards", "LensProbe.sol", "FixtureAutomaticRewards.json")):

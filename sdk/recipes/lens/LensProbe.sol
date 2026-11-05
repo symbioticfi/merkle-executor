@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.37;
+pragma solidity 0.8.38;
 // Local EVM fixtures; never deployed outside ephemeral Anvil.
 contract LensProbe {
  address public immutable executor; address public immutable caller;

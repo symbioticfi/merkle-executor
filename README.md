@@ -38,7 +38,7 @@ one serialized transaction sender. [Design and comparison](docs/DESIGN.md).
 | CoW Swap | Quote, build account ERC-1271 authorization, wait for its confirmed transaction, submit/reconcile deterministic order UID, verify full fill on-chain. |
 | Liquid Lane RFQ | Acquire an HTTP quote, authorize the committed Request, publish idempotently and reconcile canonical Reactor settlement. |
 | Merkl reward claims | Read V4 rewards, use cumulative amounts, verify effective distributor root/proof and recipient, encode an approved bounded claim. |
-| Deterministic runtime Inputs | `keeper.NewRecipeInputs()` resolves exact recipe constraints through the shared numerical lens. Unknown or unresolved Inputs fail closed. |
+| Deterministic runtime Inputs | the planner resolves exact recipe constraints through the shared numerical lens. Unknown or unresolved Inputs fail closed. |
 
 The transaction engine supports the current Solidity interpreter's operations;
 automatic preparation rejects recipes whose runtime data cannot be determined from

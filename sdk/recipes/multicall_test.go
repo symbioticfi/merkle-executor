@@ -180,3 +180,32 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 		t.Fatalf("non-progressing recipe must execute once: %v", err)
 	}
 }
+
+func TestMulticallChecksEveryNumericalWitness(t *testing.T) {
+	steps := [][]byte{step(Add, pack(t, binaryArgs, input(0), literal(1)))}
+	first, _ := executorABI.TryPackExecute(nil, steps, []*big.Int{big.NewInt(2)}, nil)
+	second, _ := executorABI.TryPackExecute(nil, steps, []*big.Int{big.NewInt(3)}, nil)
+	batch, err := Multicall([][]byte{first, second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := func(value int64) []byte {
+		return pack(t, executorABI.GetABI().Methods["execute"].Outputs, []*big.Int{big.NewInt(value)})
+	}
+	for _, tc := range []struct {
+		name   string
+		values [][]byte
+		want   string
+	}{
+		{"matching", [][]byte{reply(3), reply(3)}, ""},
+		{"later witness changed", [][]byte{reply(3), reply(4)}, "differs from signed"},
+		{"missing reply", [][]byte{reply(3)}, "result count mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := VerifyResults(batch, pack(t, batchArguments, tc.values), map[uint]string{0: "3"})
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatal(err)
+			}
+		})
+	}
+}

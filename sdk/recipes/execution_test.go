@@ -138,7 +138,7 @@ func TestPrepareExecutionChecksEveryRoleAcrossChunks(t *testing.T) {
 					leaves = append(leaves, leaves[0])
 				}
 				builds := 0
-				err := PrepareExecution(t.Context(), batch, r.executor, r.account, r.caller, func(s Snapshot, recipe Recipe) ([]byte, []common.Hash, error) {
+				err := PrepareExecution(t.Context(), batch, r.executor, r.account, r.caller, PreparationOptions{}, func(s Snapshot, recipe Recipe) ([]byte, []common.Hash, error) {
 					builds++
 					if s.BlockNumber != 10 || s.Account != r.account || s.Root != r.root || len(recipe.Steps) != 0 {
 						t.Fatal("unverified build identity")
@@ -204,7 +204,7 @@ func TestPrepareExecutionClosesBothPinsAndPreservesErrorOrder(t *testing.T) {
 				if batched {
 					reader = &executionBatchReader{executionReader: r}
 				}
-				err := PrepareExecution(t.Context(), reader, r.executor, r.account, r.caller, func(Snapshot, Recipe) ([]byte, []common.Hash, error) {
+				err := PrepareExecution(t.Context(), reader, r.executor, r.account, r.caller, PreparationOptions{}, func(Snapshot, Recipe) ([]byte, []common.Hash, error) {
 					r.validating = true
 					if tc.advanced {
 						r.head = 11
@@ -223,7 +223,7 @@ func TestPrepareExecutionRejectsMetadataDriftAtUnchangedHead(t *testing.T) {
 		t.Run(field, func(t *testing.T) {
 			r := newExecutionReader(t)
 			batch := &executionBatchReader{executionReader: r}
-			err := PrepareExecution(t.Context(), batch, r.executor, r.account, r.caller, func(Snapshot, Recipe) ([]byte, []common.Hash, error) {
+			err := PrepareExecution(t.Context(), batch, r.executor, r.account, r.caller, PreparationOptions{}, func(Snapshot, Recipe) ([]byte, []common.Hash, error) {
 				r.validating = true
 				switch field {
 				case "account":
@@ -291,7 +291,7 @@ func TestPrepareExecutionChecksIdentityBeforeBuild(t *testing.T) {
 				caller = common.HexToAddress("0x4444")
 			}
 			builds := 0
-			err := PrepareExecution(t.Context(), &executionBatchReader{executionReader: r}, r.executor, account, caller, func(Snapshot, Recipe) ([]byte, []common.Hash, error) { builds++; return nil, nil, nil })
+			err := PrepareExecution(t.Context(), &executionBatchReader{executionReader: r}, r.executor, account, caller, PreparationOptions{}, func(Snapshot, Recipe) ([]byte, []common.Hash, error) { builds++; return nil, nil, nil })
 			if err == nil || builds != 0 {
 				t.Fatalf("untrusted identity reached build: %v builds%d", err, builds)
 			}
@@ -306,7 +306,7 @@ func TestPrepareExecutionSingleAndBatchReturnSameBuild(t *testing.T) {
 		if batched {
 			reader = &executionBatchReader{executionReader: r}
 		}
-		err := PrepareExecution(t.Context(), reader, r.executor, r.account, r.caller, func(s Snapshot, _ Recipe) ([]byte, []common.Hash, error) {
+		err := PrepareExecution(t.Context(), reader, r.executor, r.account, r.caller, PreparationOptions{}, func(s Snapshot, _ Recipe) ([]byte, []common.Hash, error) {
 			snapshots = append(snapshots, s)
 			r.validating = true
 			r.head = 11

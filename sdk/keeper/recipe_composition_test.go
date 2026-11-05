@@ -26,10 +26,6 @@ type exclusiveRecipeProvider struct {
 	results map[uint]string
 }
 
-func (p *exclusiveRecipeProvider) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	p.calls++
-	return provider.Output{}, nil
-}
 func (p *exclusiveRecipeProvider) RecipeRequirements(provider.Snapshot, recipes.Recipe, *recipes.Tree) (RecipeRequirements, error) {
 	req := RecipeRequirements{Actions: []string{"0:0"}, Values: p.values, ExclusiveTargets: map[string]common.Address{"0:0": p.target}}
 	if len(p.values) > 0 {
@@ -37,9 +33,9 @@ func (p *exclusiveRecipeProvider) RecipeRequirements(provider.Snapshot, recipes.
 	}
 	return req, nil
 }
-func (p *exclusiveRecipeProvider) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) (provider.Output, error) {
+func (p *exclusiveRecipeProvider) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) ([]provider.Output, error) {
 	p.calls++
-	return provider.Output{Results: p.results}, nil
+	return []provider.Output{{Results: p.results}}, nil
 }
 func (*exclusiveRecipeProvider) Advance(context.Context, provider.Snapshot, provider.Output, json.RawMessage) (provider.Progress, error) {
 	return provider.Progress{Done: true}, nil
@@ -137,7 +133,7 @@ func TestPlannerExclusiveRecipePreflightBeforeProviderIO(t *testing.T) {
 			if mode == "invalid witness index" {
 				pr.results = map[uint]string{2: "42"}
 			}
-			plan, err := planner.Prepare(t.Context(), Strategy{Config: Config{Account: snapshot.Account.Hex(), Executor: snapshot.Executor.Hex()}, Providers: []provider.Provider{pr}})
+			plan, err := planner.Prepare(t.Context(), Strategy{Config: Config{Account: snapshot.Account.Hex(), Executor: snapshot.Executor.Hex()}, Providers: []Provider{pr}})
 			if mode == "valid" || mode == "early witness" || mode == "late witness" {
 				if err != nil || pr.calls != 1 {
 					t.Fatalf("valid claimed action failed: %v calls=%d", err, pr.calls)

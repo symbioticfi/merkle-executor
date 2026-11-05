@@ -118,6 +118,26 @@ func VerifyResults(calldata, returned []byte, witness map[uint]string) error {
 	if len(witness) == 0 {
 		return nil
 	}
+	if isMulticall(calldata) {
+		calls, err := batchCalls(calldata)
+		if err != nil {
+			return err
+		}
+		values, err := batchArguments.Unpack(returned)
+		if err != nil {
+			return errors.New("invalid batch simulation result")
+		}
+		results := values[0].([][]byte)
+		if len(calls) != len(results) {
+			return errors.New("batch simulation result count mismatch")
+		}
+		for i, call := range calls {
+			if err := VerifyResults(call, results[i], witness); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	method := executorABI.GetABI().Methods["execute"]
 	if len(calldata) < 4 || !equalBytes(calldata[:4], method.ID) {
 		return errors.New("recipe witness has invalid execution bytes")

@@ -165,32 +165,6 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	return p.prepare(ctx, s, func() ([]multicall.Multicall3Result, error) { return p.readBatch(ctx, s) })
 }
 
-// PlanPreparation only encodes configured reads. The strict aggregate stays an
-// isolated eth_call; it must not be nested inside the host's safe-getter aggregate.
-func (p *Provider) PlanPreparation(pin protocolio.PreparationPin) (protocolio.PreparationPlan, error) {
-	if err := pin.Validate(); err != nil {
-		return protocolio.PreparationPlan{}, err
-	}
-	payload, err := p.batchPayload(pin.Account)
-	if err != nil {
-		return protocolio.PreparationPlan{}, err
-	}
-	return protocolio.PreparationPlan{
-		Requests: []protocolio.ReadRequest{protocolio.ContractRead(p.multicall, payload, new(big.Int).SetUint64(pin.BlockNumber), false)},
-		Resolve: func(ctx context.Context, s provider.Snapshot, read protocolio.ReadAccessor) (provider.Output, error) {
-			if !pin.Matches(s) {
-				return provider.Output{}, errors.New("Merkl staged identity mismatch")
-			}
-			return p.prepare(ctx, s, func() ([]multicall.Multicall3Result, error) {
-				raw, err := read(0).CallData()
-				if err != nil {
-					return nil, err
-				}
-				return p.decodeBatch(raw)
-			})
-		},
-	}, nil
-}
 func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, read func() ([]multicall.Multicall3Result, error)) (provider.Output, error) {
 	if e := protocolio.Snapshot(s); e != nil {
 		return provider.Output{}, e

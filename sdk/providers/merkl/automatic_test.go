@@ -192,7 +192,11 @@ func TestAutomaticPreparesAllFrontendClaimsWithOneRewardsFetch(t *testing.T) {
 				return method.Outputs.Pack(results)
 			})
 			p := &Automatic{deps: provider.Deps{Chain: chain, HTTP: httpClient}}
-			out, err := p.PrepareRecipe(t.Context(), s, r, tree, nil)
+			outputs, err := p.PrepareRecipe(t.Context(), s, r, tree, nil)
+			var out provider.Output
+			if len(outputs) == 1 {
+				out = outputs[0]
+			}
 			if tc.want != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.want) {
 					t.Fatalf("want %q, got %v", tc.want, err)

@@ -139,6 +139,11 @@ func validateExecutionComposition(batch ExecutionPlan, strategies []Strategy) er
 		if len(strategy.Providers) != len(member.Plan.Outputs) {
 			return errors.New("provider output count differs from prepared plan")
 		}
+		for _, group := range member.Plan.Outputs {
+			if len(group) == 0 {
+				return errors.New("provider returned no execution outputs")
+			}
+		}
 		prefix := strconv.Itoa(i) + "/"
 		for j, p := range strategy.Providers {
 			exclusive, err := exclusiveTargets(p, member.Plan.Outputs, j)
@@ -159,22 +164,13 @@ func validateExecutionComposition(batch ExecutionPlan, strategies []Strategy) er
 		return nil
 	}
 	for i, member := range batch.Members {
-		calls, err := recipes.Executions(member.Plan.Calldata)
+		managed, err := recipes.ManagedTargets(member.Plan.Calldata)
 		if err != nil {
 			return err
 		}
-		for j, call := range calls {
-			managed, err := recipes.ManagedTargets(call)
-			if err != nil {
-				return err
-			}
-			prefix := strconv.Itoa(i) + "/"
-			if len(calls) > 1 {
-				prefix += "cycle" + strconv.Itoa(j) + "/"
-			}
-			for key, target := range managed {
-				targets[prefix+key] = target
-			}
+		prefix := strconv.Itoa(i) + "/"
+		for key, target := range managed {
+			targets[prefix+key] = target
 		}
 	}
 	return validateTargetClaims(targets, owners, claims)

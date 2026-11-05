@@ -24,22 +24,22 @@ type Envelope struct {
 	Matched bool            `json:"matched"`
 }
 
-func Encode(policy string, cfg any, inner provider.Output, matched bool) (provider.Output, error) {
+func Encode(policy string, cfg any, inner provider.Output, matched bool) ([]provider.Output, error) {
 	var raw json.RawMessage
 	var err error
 	if matched {
 		raw, err = json.Marshal(cfg)
 		if err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 	}
 	data, err := json.Marshal(Envelope{Version: 1, Policy: policy, Config: raw, Output: inner, Matched: matched})
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	outer := inner
 	outer.Data = data
-	return outer, nil
+	return []provider.Output{outer}, nil
 }
 
 func Decode(policy string, out provider.Output, cfg any) (provider.Output, bool, error) {
@@ -222,6 +222,6 @@ func BindOutput(template SignTemplate, payload []byte, results map[uint]*big.Int
 	return nil
 }
 
-func Empty(policy string) (provider.Output, error) {
+func Empty(policy string) ([]provider.Output, error) {
 	return Encode(policy, nil, provider.Output{}, false)
 }

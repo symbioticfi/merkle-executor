@@ -5,7 +5,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
@@ -42,8 +41,16 @@ func TestConfiguredPrioritySurvivesPendingRecovery(t *testing.T) {
 			if pending {
 				s := k.Strategies[len(k.Strategies)-1]
 				sender.pending = "in-flight"
-				job := Job{ID: sender.pending, ConfigHash: s.Config.Fingerprint(), Phase: "prepared", Plan: Plan{Snapshot: provider.Snapshot{Account: common.HexToAddress(s.Config.Account)}, Outputs: []provider.Output{{}}}, Progress: []provider.Progress{{}}}
-				if err := store.Save(key(s.Config.Name), job); err != nil {
+				plan, err := base.Prepare(t.Context(), s)
+				if err != nil {
+					t.Fatal(err)
+				}
+				batch, err := newExecution(ExecutionPlan{To: plan.Snapshot.Executor, Members: []PlanMember{{Name: s.Config.Name, Plan: plan}}}, k.Strategies)
+				if err != nil {
+					t.Fatal(err)
+				}
+				batch.ID = sender.pending
+				if err := store.Save(ExecutionKey, batch); err != nil {
 					t.Fatal(err)
 				}
 				// Simulation preserves configured order and does not recover signed work.
