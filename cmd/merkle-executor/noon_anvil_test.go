@@ -201,15 +201,18 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	prepare := func() (keeper.Plan, error) {
 		before := lenses.Load()
 		var output bytes.Buffer
-		if e := runBot(ctx, path, true, true, &output); e != nil {
+		if e := planBot(ctx, path, &output); e != nil {
 			return keeper.Plan{}, e
 		}
-		var plans map[string]keeper.Plan
-		if e := json.Unmarshal(output.Bytes(), &plans); e != nil {
+		var response struct {
+			Plan keeper.ExecutionPlan `json:"plan"`
+		}
+		if e := json.Unmarshal(output.Bytes(), &response); e != nil {
 			return keeper.Plan{}, e
 		}
-		plan, exists := plans[cfg.Strategies[0]]
-		if !exists || len(plans) != 1 || plan.Snapshot.Account != account || plan.Snapshot.Caller != caller || len(plan.Outputs) != 5 || plan.Results[0] != amount.String() || plan.Results[2] != amount.String() || lenses.Load()-before != 1 {
+		plan := response.Plan.Members[0].Plan
+		exists := response.Plan.Members[0].Name == cfg.Strategies[0]
+		if !exists || len(response.Plan.Members) != 1 || plan.Snapshot.Account != account || plan.Snapshot.Caller != caller || len(plan.Outputs) != 5 || plan.Results[0] != amount.String() || plan.Results[2] != amount.String() || lenses.Load()-before != 1 {
 			t.Fatalf("recipe host lost address identity/input derivation/lens budget: %+v", plan.Results)
 		}
 		for _, output := range plan.Outputs {
@@ -336,7 +339,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := runBot(ctx, path, true, false, new(bytes.Buffer)); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
+			if err := runBot(ctx, path, true); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
 				t.Fatalf("send admission accepted failing issuer recipe: %v", err)
 			}
 			if afterNonce, err := client.NonceAt(ctx, caller, nil); err != nil || afterNonce != beforeNonce {
@@ -378,7 +381,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	path = writeCLIConfig(t, t.TempDir(), cfg)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
-	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
+	if err = runBot(ctx, path, true); err != nil {
 		t.Fatal(err)
 	}
 	var job keeper.Job
@@ -398,7 +401,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
+	if err = runBot(ctx, path, true); err != nil {
 		t.Fatal(err)
 	}
 	if after, e := client.NonceAt(ctx, caller, nil); e != nil || after != nonce {

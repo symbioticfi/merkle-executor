@@ -15,7 +15,9 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
+	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 	txmanager "github.com/symbioticfi/merkle-executor/sdk/submission"
 )
@@ -41,15 +43,32 @@ func (s *recoveryStore) Save(key string, value any) error {
 }
 
 type recoveryPlanner struct {
-	prepared, validated, verified int
-	verifyErr                     error
+	prepared, verified int
+	verifyErr          error
 }
 
 func (p *recoveryPlanner) Prepare(_ context.Context, s Strategy) (Plan, error) {
 	p.prepared++
-	return Plan{Snapshot: provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(10), BlockHash: common.HexToHash("0x10"), Timestamp: 100, Account: common.HexToAddress(s.Config.Account), Executor: common.HexToAddress(s.Config.Executor), Caller: common.HexToAddress("0x30")}, Calldata: []byte{1, 2, 3}, Outputs: []provider.Output{{Data: json.RawMessage(`{"uid":"stable-order"}`)}}}, nil
+	return Plan{Snapshot: provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(10), BlockHash: common.HexToHash("0x10"), Timestamp: 100, Account: common.HexToAddress(s.Config.Account), Executor: common.HexToAddress(s.Config.Executor), Caller: common.HexToAddress("0x30")}, Recipe: recipes.Snapshot{Account: common.HexToAddress(s.Config.Account), Executor: common.HexToAddress(s.Config.Executor), Caller: common.HexToAddress("0x30")}, Calldata: executor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil), Outputs: []provider.Output{{Data: json.RawMessage(`{"uid":"stable-order"}`)}}}, nil
 }
-func (p *recoveryPlanner) Validate(context.Context, Plan) error { p.validated++; return nil }
+func (p *recoveryPlanner) PrepareExecution(ctx context.Context, strategies []Strategy) (ExecutionPlan, error) {
+	return prepareFixture(ctx, strategies, p.Prepare)
+}
+
+func prepareFixture(ctx context.Context, strategies []Strategy, prepare func(context.Context, Strategy) (Plan, error)) (ExecutionPlan, error) {
+	for _, s := range strategies {
+		plan, err := prepare(ctx, s)
+		if errors.Is(err, provider.ErrNotReady) {
+			continue
+		}
+		if err != nil {
+			return ExecutionPlan{}, err
+		}
+		return ExecutionPlan{To: plan.Snapshot.Executor, Members: []PlanMember{{Name: s.Config.Name, Plan: plan}}}, nil
+	}
+	return ExecutionPlan{}, provider.ErrNotReady
+}
+
 func (p *recoveryPlanner) ConfirmedSnapshot(_ context.Context, s provider.Snapshot) (provider.Snapshot, error) {
 	return s, nil
 }
@@ -208,9 +227,12 @@ func TestRecoveryFailedAuthorizationSaveRetainsExactTransaction(t *testing.T) {
 	if err := k.Tick(context.Background()); err == nil {
 		t.Fatal("injected authorization persistence failure ignored")
 	}
-	job := loadRecoveryJob(t, store, "cow")
-	if job.Phase != "prepared" || sender.PendingID() != job.ID || pr.calls != 0 {
-		t.Fatalf("unsafe failure boundary: %+v calls=%d", job, pr.calls)
+	var execution ExecutionJob
+	if found, err := store.Load(ExecutionKey, &execution); err != nil || !found {
+		t.Fatal("missing durable transaction", err)
+	}
+	if execution.Phase != "authorized" || sender.PendingID() != execution.ID || pr.calls != 0 {
+		t.Fatal("authorization evidence was lost")
 	}
 	restarted := *k
 	if err := restarted.CheckRecovery(); err != nil {
@@ -219,10 +241,10 @@ func TestRecoveryFailedAuthorizationSaveRetainsExactTransaction(t *testing.T) {
 	if err := restarted.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(sender.requests) != 2 || sender.broadcasts != 1 || sender.requests[0].ID != sender.requests[1].ID || !bytes.Equal(sender.requests[0].Data, sender.requests[1].Data) {
+	if len(sender.requests) != 1 || sender.broadcasts != 1 || !bytes.Equal(execution.Data, sender.requests[0].Data) {
 		t.Fatal("restart replaced already confirmed transaction")
 	}
-	if planner.prepared != 1 || planner.validated != 1 || pr.calls != 1 || loadRecoveryJob(t, store, "cow").Phase != "settled" {
+	if planner.prepared != 1 || pr.calls != 1 || loadRecoveryJob(t, store, "cow").Phase != "settled" {
 		t.Fatal("restart did not resume retained job")
 	}
 }

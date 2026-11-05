@@ -4,6 +4,56 @@ Module: `github.com/symbioticfi/merkle-executor/sdk`. It is independently versio
 release tags use `sdk/vX.Y.Z`. Consumers pin an immutable module version. The
 standalone daemon and vault-solver consume this same implementation.
 
+`recipes.DelegatedMulticall` combines calls to different executors in an atomic
+ERC-7579 batch, sent from the EIP-7702 keeper to itself. Only zero-value recipe
+execution calls are accepted. `SupportsDelegatedBatch` checks the installed
+delegation's mode support; it never changes delegation. `SimulateExecutors`
+checks the exact envelope and reads each result after its predecessors using a
+temporary caller-code override. No production helper contract is needed.
+
+`keeper.Planner.PrepareExecution` produces one `ExecutionPlan` for either a direct
+executor call or a delegated batch. It detects the caller's delegation and keeps
+configuration order. Preparation authenticates every member and simulates the
+complete transaction. Calls with conflicting receipt ownership, changed numerical
+witnesses or an unexecutable prefix are deferred. Earlier proceeds can activate
+later recipe gates.
+
+One `ExecutionJob` journal persists the selected transaction and member plans.
+Submission uses those bytes directly, without another simulation. After a restart,
+unsigned work is rebuilt from current state and inputs. Signed work is recovered
+unchanged. Every member receives the same durable receipt before sender
+acknowledgement; asynchronous settlement still reserves its account.
+
+`recipes.Multicall` batches ordered executions of the same committed recipe on
+its executor. The contract preserves the original caller and reverts every call
+if any call fails. `SimulateBatch` returns per-execution results from temporary
+EVM state and separately checks the exact batch against the unchanged executor.
+The simulation helper is used only through RPC code overrides; it is never
+deployed. RPC code-override support is required for batched result validation.
+
+`recipes.BatchExecution` automatically extends a self-contained recipe while
+its live actions make progress. Each execution reads the state left by the
+previous one, including its final supply step. Runtime-input recipes remain a
+single execution; the planner also keeps recipes with external provider work
+single, so quotes, proofs and result witnesses are never reused. Providers that
+do not participate can retain their empty durable envelopes without blocking
+native batching. Constant action sets run once without extra probes. No protocol
+name or per-executor switch selects this behavior.
+
+Approval maintenance alone does not trigger another cycle. No cycle count is
+imposed. The caller supplies the transaction gas budget and deadline. Idle gates,
+identical result vectors, a reverted extension or the gas limit end the batch at
+the last successfully simulated prefix. RPC/decoding failures fail preparation.
+The complete selected batch is validated during preparation. Unsigned work is
+rebuilt on recovery; a signed batch is never rebuilt or partially resent. Hosts without
+code-override support retain ordinary single-execution preparation.
+
+The keeper visits strategies in configured order. A pending nonce owner is
+recovered first without reordering the remaining strategies. Confirmed effects
+are available to later preparations, but an active asynchronous provider reserves
+its account until settlement. Ordering does not earmark funds: recipe gates and
+amount rules must reserve pending withdrawals and control spending priorities.
+
 - `recipes`: committed recipe discovery, permission-tree decoding/proof validation,
   bounded runtime assembly and role/root/snapshot checks.
 - `keeper`: preparation, full simulation, immutable plan validation, durable workflow
@@ -119,13 +169,13 @@ the head hash is unchanged.
 `keeper.Planner` admits work only after successful full simulation, a valid result
 vector and both canonical closing guards. Recipes with every `Manage` gate closed
 and no `Call` or `Approve` return `provider.ErrNotReady`; zero-valued calls and
-approvals remain executable work. Unsigned admission repeats this check against
-latest state. Signed recovery keeps its original bytes and ownership.
+approvals remain executable work. Unsigned saved work is prepared again against current state before admission.
+Fresh plans proceed directly to submission; signed recovery keeps its original bytes and ownership.
 
 `recipes.ValidateExecution` groups current metadata with an isolated nil/latest
 simulation and closes both block guards afterward. Metadata errors take priority over
-simulation errors. `keeper.Planner.Validate` rejects inconsistent discovery and send
-executors before any reads. Full simulations can share a JSON array with getters but
+simulation errors. The execution plan validates discovery and send identities
+before persistence. Full simulations can share a JSON array with getters but
 never share Multicall execution or temporary EVM state. The later closing header phase
 can batch both original and current headers. Submission batches initial owned-attempt
 receipts and opening confirmation evidence while retaining nonce ownership and durable
@@ -173,7 +223,7 @@ Raw transport errors and custom cancellation causes remain redacted. HTTP status
 response bounds, redirect refusal and timeout policy remain unchanged.
 The callback runs only during new preparation, before providers, and cannot replace
 closing role/simulation/canonical guards. Saved
-submission recovery, presend validation and provider advancement do not fetch a new
+signed submission recovery and provider advancement do not fetch a new
 tree. Hosts without a source load the local `keeper.Config.Tree`.
 Hosts must include source configuration and derived identities in their revision
 fingerprint. Recovery must preserve the identity of active jobs.

@@ -61,6 +61,7 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 	}
 	var preparation *protocolio.Preparation
 	var returned []byte
+	selfContained := false
 	options := recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache, Stage: func(pin protocolio.PreparationPin) []protocolio.ReadRequest {
 		preparation = protocolio.PlanPreparation(strategy.Providers, pin)
 		return preparation.Requests()
@@ -88,6 +89,14 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 		if tree.Account != nil && *tree.Account != snap.Account {
 			return nil, nil, errors.New("permission tree account mismatch")
 		}
+		// Constant action sets cannot adapt another execution to changed state.
+		// Leave them as one call without probing an identical second execution.
+		for _, step := range recipe.Steps {
+			if step[0] == recipes.Read || step[0] == recipes.Call {
+				selfContained = true
+				break
+			}
+		}
 		plan.Recipe = snap
 		plan.Snapshot = provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snap.BlockNumber), BlockHash: snap.BlockHash, Timestamp: snap.Timestamp, Executor: snap.Executor, Account: snap.Account, Caller: snap.Caller, RecipeHash: snap.RecipeHash, Root: snap.Root}
 		inputs := make(map[uint]string)
@@ -108,6 +117,9 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 				if err != nil {
 					return nil, nil, errors.Errorf("invalid authenticated recipe: %w", err)
 				}
+				if len(requirements[i].Inputs)+len(requirements[i].Actions)+len(requirements[i].Values)+len(requirements[i].ExclusiveTargets) != 0 {
+					selfContained = false
+				}
 				expressions = append(expressions, requirements[i].Values...)
 				for _, index := range requirements[i].Inputs {
 					if owned[index] {
@@ -127,6 +139,9 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 						prefix.BlockedActions[key] = true
 					}
 				}
+			} else {
+				// Opaque providers have no replay contract; prepare them once.
+				selfContained = false
 			}
 		}
 		anchors := map[uint]recipes.EconomicValue{}
@@ -228,6 +243,34 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 	if !work {
 		return plan, provider.ErrNotReady
 	}
+	if !selfContained || len(plan.Results) != 0 {
+		return plan, nil
+	}
+	for _, output := range plan.Outputs {
+		if len(output.Results)+len(output.Inputs)+len(output.Actions)+len(output.SkipSteps) != 0 {
+			return plan, nil
+		}
+	}
+	backend, ok := p.Chain.(recipes.BatchReader)
+	if !ok {
+		return plan, nil
+	}
+	header, err := p.Chain.HeaderByNumber(ctx, new(big.Int).SetUint64(plan.Recipe.BlockNumber))
+	if err != nil {
+		return plan, err
+	}
+	if err = validHeader(header, new(big.Int).SetUint64(plan.Recipe.BlockNumber)); err != nil {
+		return plan, err
+	}
+	plan.Calldata, err = recipes.BatchExecution(ctx, backend, plan.Recipe, plan.Calldata, header.GasLimit)
+	if err != nil {
+		return plan, err
+	}
+	// Close metadata and canonical guards after the entire stateful preparation.
+	if err = recipes.ValidateSnapshot(ctx, p.Chain, plan.Recipe, p.Caller); err != nil {
+		return plan, err
+	}
+
 	return plan, nil
 }
 
@@ -268,21 +311,6 @@ func merge(inputs map[uint]string, actions map[string]hexutil.Bytes, skips *[]ui
 			}
 		}
 		*skips = append(*skips, step)
-	}
-	return nil
-}
-
-// Validate re-simulates immutable prepared bytes at current state before admission.
-func (p *Planner) Validate(ctx context.Context, plan Plan) error {
-	if plan.Snapshot.Executor != plan.Recipe.Executor {
-		return errors.New("prepared plan executor mismatch")
-	}
-	work, err := recipes.ExecutionHasWork(ctx, p.Chain, plan.Recipe, p.Caller, plan.Calldata, plan.Results)
-	if err != nil {
-		return err
-	}
-	if !work {
-		return provider.ErrNotReady
 	}
 	return nil
 }

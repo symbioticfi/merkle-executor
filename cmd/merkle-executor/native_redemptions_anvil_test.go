@@ -37,7 +37,7 @@ func TestNativeRedemptionProcess(t *testing.T) {
 	if path == "" {
 		t.Skip("subprocess helper")
 	}
-	if err := runBot(t.Context(), path, true, false, os.Stdout); err != nil {
+	if err := runBot(t.Context(), path, true); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -288,7 +288,7 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	failedRecipe := recipes.CloneRecipe(recipe)
 	failedRecipe.Steps[10] = issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, big.NewInt(81), result(9))
 	serviceSeedTransaction(t, ctx, client, owner, &executor, executors.PackSetRecipe(failedRecipe.Queries, failedRecipe.Steps))
-	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
+	if err = runBot(ctx, path, true); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
 		t.Fatal("daemon did not reject the final output guard during simulation", err)
 	}
 	for _, key := range []string{"txmanager.active.v1", "strategy." + cfg.Strategies[0] + ".v1"} {
@@ -317,14 +317,16 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &executor, executors.PackSetRecipe(recipe.Queries, recipe.Steps))
 	var output bytes.Buffer
-	if err = runBot(ctx, path, true, true, &output); err != nil {
+	if err = planBot(ctx, path, &output); err != nil {
 		t.Fatal("mixed native recipe failed preparation", err)
 	}
-	var plans map[string]keeper.Plan
-	if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
+	var response struct {
+		Plan keeper.ExecutionPlan `json:"plan"`
+	}
+	if err = json.Unmarshal(output.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	plan := plans[cfg.Strategies[0]]
+	plan := response.Plan.Members[0].Plan
 	if len(plan.Outputs) != 5 || len(plan.Calldata) == 0 {
 		t.Fatal("mixed native plan missing automatic providers or execution")
 	}
@@ -400,8 +402,8 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	if err = command.Wait(); err == nil {
 		t.Fatal("daemon exited before forced interruption", logs.String())
 	}
-	var prepared keeper.Job
-	if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &prepared); e != nil || !found || prepared.Phase != "prepared" || prepared.ID != journal.ID || !bytes.Equal(signed.Data(), plan.Calldata) {
+	var prepared keeper.ExecutionJob
+	if found, e := state.Read(cfg.StateDir, keeper.ExecutionKey, &prepared); e != nil || !found || prepared.Phase != "prepared" || prepared.ID != journal.ID || !bytes.Equal(signed.Data(), prepared.Data) || !bytes.Equal(prepared.Data, plan.Calldata) {
 		t.Fatal("process interruption lost exact job and signed bytes", e)
 	}
 	if err = client.Client().CallContext(ctx, nil, "evm_mine"); err != nil {
@@ -480,7 +482,7 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &executor, executors.PackSetRecipe(zeroRecipe.Queries, zeroRecipe.Steps))
 	curatorUnavailable.Store(false)
-	if err = runBot(ctx, path, true, true, new(bytes.Buffer)); !errors.Is(err, provider.ErrNotReady) {
+	if err = planBot(ctx, path, new(bytes.Buffer)); !errors.Is(err, provider.ErrNotReady) {
 		t.Fatal("zero native actions did not become idle", err)
 	}
 }

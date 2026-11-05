@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"math/big"
-	"strings"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -79,26 +78,14 @@ func (r *validationReader) CallContract(_ context.Context, msg ethereum.CallMsg,
 	}
 	return method.Outputs.Pack(value)
 }
-func TestPlannerValidateRejectsDifferentDiscoveryAndSendExecutors(t *testing.T) {
-	for _, different := range []bool{false, true} {
-		t.Run(map[bool]string{false: "same", true: "different"}[different], func(t *testing.T) {
-			header := &types.Header{Number: big.NewInt(12)}
-			snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: common.HexToHash("0x04"), Root: common.HexToHash("0x05"), RecipeBlock: 11}
-			payload, returned := validationWork(t, true)
-			r := &validationReader{t: t, snapshot: snapshot, header: header, payload: payload, returned: returned}
-			plan := Plan{Recipe: snapshot, Snapshot: provider.Snapshot{Executor: snapshot.Executor}, Calldata: r.payload}
-			if different {
-				plan.Snapshot.Executor = common.HexToAddress("0x99")
-			}
-			planner := Planner{Chain: r, Caller: snapshot.Caller}
-			err := planner.Validate(t.Context(), plan)
-			if different {
-				if err == nil || !strings.Contains(err.Error(), "executor") || r.reads != 0 {
-					t.Fatalf("inconsistent destination reached RPC: %v reads%d", err, r.reads)
-				}
-			} else if err != nil || r.simulations != 1 {
-				t.Fatalf("legitimate plan rejected: %v simulations%d", err, r.simulations)
-			}
-		})
+func TestPlanMemberRejectsDifferentDiscoveryAndSendExecutors(t *testing.T) {
+	strategy := Strategy{Config: Config{Account: common.Address{2}.Hex(), Executor: common.Address{1}.Hex()}}
+	plan := Plan{Snapshot: provider.Snapshot{Executor: common.Address{1}, Account: common.Address{2}, Caller: common.Address{3}}, Recipe: recipes.Snapshot{Executor: common.Address{1}, Account: common.Address{2}, Caller: common.Address{3}}}
+	if err := validatePlanMember(plan, strategy); err != nil {
+		t.Fatal(err)
+	}
+	plan.Snapshot.Executor = common.Address{99}
+	if err := validatePlanMember(plan, strategy); err == nil {
+		t.Fatal("mismatched send target accepted")
 	}
 }

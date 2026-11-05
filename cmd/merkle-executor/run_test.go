@@ -309,7 +309,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		invalid.Strategies = append([]string(nil), cfg.Strategies...)
 		mutate(&invalid)
 		invalidPath := writeCLIConfig(t, directory, invalid)
-		if err = runBot(ctx, invalidPath, true, true, new(bytes.Buffer)); err == nil {
+		if err = planBot(ctx, invalidPath, new(bytes.Buffer)); err == nil {
 			t.Fatalf("plan accepted wrong %s identity", name)
 		}
 	}
@@ -318,14 +318,17 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	for _, invalidKey := range []string{"invalid-test-key-that-plan-must-ignore", ""} {
 		t.Setenv(cfg.Signer.KeyEnv, invalidKey)
 		var output bytes.Buffer
-		if err = runBot(ctx, path, true, true, &output); err != nil {
+		if err = planBot(ctx, path, &output); err != nil {
 			t.Fatalf("plan read signer or failed: %v", err)
 		}
-		var plans map[string]keeper.Plan
-		if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
+		var response struct {
+			Plan keeper.ExecutionPlan `json:"plan"`
+		}
+		if err = json.Unmarshal(output.Bytes(), &response); err != nil {
 			t.Fatal(err)
 		}
-		plan, exists := plans[cfg.Strategies[0]]
+		plan := response.Plan.Members[0].Plan
+		exists := response.Plan.Members[0].Name == cfg.Strategies[0]
 		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 5 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
 			t.Fatal("plan lost configuration, provider output or transaction")
 		}
@@ -342,7 +345,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(mismatchedKey)))
-	if err := runBot(ctx, path, true, false, new(bytes.Buffer)); err == nil {
+	if err := runBot(ctx, path, true); err == nil {
 		t.Fatal("send accepted a key that is not executor caller")
 	}
 	if _, err := os.Stat(cfg.StateDir); !os.IsNotExist(err) {
@@ -357,7 +360,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		curatorUnavailable.Store(failure == "HTTP503")
 		wrongPermissionChain.Store(failure == "wrong chain")
 		changeRootDuringHTTP.Store(failure == "root during HTTP")
-		if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err == nil {
+		if err = runBot(ctx, path, true); err == nil {
 			t.Fatalf("send accepted curator failure %s", failure)
 		}
 		if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
@@ -383,7 +386,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	// the real transaction manager confirms and acknowledges the signed transaction.
 	startServiceConfirmationMining(t, ctx, client, caller)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
-	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
+	if err = runBot(ctx, path, true); err != nil {
 		t.Fatalf("send-once failed: %v", err)
 	}
 	var job keeper.Job
@@ -421,7 +424,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	}
 	permissionRequests := curatorCalls.Load()
 	curatorUnavailable.Store(true)
-	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
+	if err = runBot(ctx, path, true); err != nil {
 		t.Fatalf("restart failed: %v", err)
 	}
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || curatorCalls.Load() != permissionRequests {

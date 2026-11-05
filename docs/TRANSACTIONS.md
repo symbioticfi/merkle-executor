@@ -1,5 +1,14 @@
 # Transaction processing
 
+For an EIP-7702 keeper supporting atomic ERC-7579 batches, one self-transaction
+can execute several committed executors in configuration order. A complete
+`executor-batch.v1` execution journal is persisted before sender admission. Its confirmed
+receipt is copied to every member's strategy journal before acknowledgement;
+recovery completes that fan-out before any provider advances. A failed inner
+call reverts the entire transaction and marks every member failed. Status shows
+the batch's member jobs, and reset refuses an active batch. No delegation change,
+new on-chain contract or independent nonce owner is introduced.
+
 The SDK exposes `txengine` for transaction mechanics and `txmanager` for durable
 recipe ownership. Hosts explicitly construct and start these components, supplying
 RPC connections, signing credentials and telemetry. Logging/tracing helpers live
@@ -34,3 +43,9 @@ submission redirects, so signed payloads stay on the configured endpoint.
 Read RPC handles simulation, fee history, receipts and confirmation headers. Write RPC handles nonce admission and broadcast. RPC error text is redacted but preserves a finite allowlist of nonce, fee/rejection and execution-revert classifications; original typed causes remain available for invalid-params fallback and revert decoding. No endpoint credentials or provider response text appear in lifecycle logs.
 
 The engine has no solver identity or protocol-obsolescence callback. Receipt confirmation and restoring the confirmed nonce floor are ordinary engine APIs. Merkle owns recovery after tracking ends: it polls stored variants directly, without a second passive observer, hash cache, deduplication ledger or receipt callback. Engine gas/fee metrics account receipts found during active tracking; recovered terminal receipts are reported by journal logs and keeper outcomes, without passive-observer cost counters.
+
+Freshly prepared transactions go directly to sender admission without a second
+execution simulation. Gas estimation remains part of fee/gas preparation. An
+unsigned saved execution is discarded and prepared again using current inputs;
+signed or broadcast transactions retain their exact payload and nonce ownership.
+Direct and delegated transactions use the same execution journal and recovery path.

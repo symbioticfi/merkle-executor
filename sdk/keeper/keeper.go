@@ -3,8 +3,6 @@ package keeper
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"slices"
 	"time"
 
@@ -27,8 +25,7 @@ type Sender interface {
 	PendingID() string
 }
 type Planning interface {
-	Prepare(context.Context, Strategy) (Plan, error)
-	Validate(context.Context, Plan) error
+	PrepareExecution(context.Context, []Strategy) (ExecutionPlan, error)
 	ConfirmedSnapshot(context.Context, provider.Snapshot) (provider.Snapshot, error)
 	VerifyConfirmedSnapshot(context.Context, provider.Snapshot) error
 }
@@ -79,6 +76,16 @@ func (k *Keeper) checkRecovery() (map[string]common.Address, error) {
 		pending = k.Sender.PendingID()
 	}
 	matched := pending == ""
+	batchOwners, batchID, err := k.checkExecutionRecovery(configured)
+	if err != nil {
+		return nil, err
+	}
+	for name, account := range batchOwners {
+		owners[name] = account
+	}
+	if pending != "" && batchID == pending {
+		matched = true
+	}
 	for _, name := range names {
 		var job Job
 		found, err := k.Store.Load(key(name), &job)
@@ -164,167 +171,52 @@ func (k *Keeper) Tick(ctx context.Context) error {
 	if err != nil {
 		return k.globalFailure(err)
 	}
-	// Recover the occupied nonce first, independently of configuration ordering.
-	ordered := append([]Strategy(nil), k.Strategies...)
-	if k.Sender != nil && k.Sender.PendingID() != "" {
-		for i, s := range ordered {
-			var job Job
-			found, err := k.Store.Load(key(s.Config.Name), &job)
-			if err != nil {
-				return k.globalFailure(err)
-			}
-			if found && job.ID == k.Sender.PendingID() {
-				ordered[0], ordered[i] = ordered[i], ordered[0]
-				break
-			}
-		}
+	var execution ExecutionJob
+	found, err := k.Store.Load(ExecutionKey, &execution)
+	if err != nil {
+		return k.globalFailure(err)
 	}
-	var failures []error
-	for _, s := range ordered {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		operation, cancel := context.WithTimeout(ctx, k.OperationTimeout)
-		err := k.tickStrategy(operation, s, owners)
-		cancel()
-		if k.Mode != "simulate" {
-			// A write error can occur after rename. Reload the durable result
-			// before another strategy can use this account; unreadable state stops the tick.
-			var job Job
-			found, loadErr := k.Store.Load(key(s.Config.Name), &job)
-			if loadErr != nil {
-				return k.globalFailure(loadErr)
-			}
-			delete(owners, s.Config.Name)
-			if found && (job.Phase == "prepared" || job.Phase == "authorized") {
-				owners[s.Config.Name] = job.Plan.Snapshot.Account
-			}
-		}
-		outcome := "ok"
-		if errors.Is(err, provider.ErrNotReady) {
-			outcome = "idle"
-			k.Log.V(1).Info("strategy waiting", "strategy", s.Config.Name)
-		} else if err != nil {
-			outcome = "error"
-			failures = append(failures, errors.Errorf("strategy %s: %w", s.Config.Name, err))
-			k.Log.Error(err, "strategy iteration failed", "strategy", s.Config.Name)
-		}
-		if k.Observe != nil {
-			k.Observe(s.Config.Name, outcome)
-		}
-	}
-	return errors.Join(failures...)
+	return k.tickExecution(ctx, owners, execution, found)
 }
 
-func (k *Keeper) tickStrategy(ctx context.Context, s Strategy, owners map[string]common.Address) error {
-	if k.Mode == "simulate" {
-		_, err := k.Planner.Prepare(ctx, s)
-		if err == nil {
-			k.Log.Info("recipe simulation succeeded", "strategy", s.Config.Name)
-		}
-		return err
-	}
-	if k.Sender == nil {
-		return errors.New("send mode requires transaction manager")
-	}
+// advanceStrategy only reconciles durable work; new transactions use ExecutionJob.
+func (k *Keeper) advanceStrategy(ctx context.Context, s Strategy) error {
 	var job Job
 	found, err := k.Store.Load(key(s.Config.Name), &job)
-	if err != nil {
+	if err != nil || !found {
 		return err
 	}
-	if found {
-		if err := validateJob(job, s); err != nil {
+	if job.Phase == "prepared" {
+		if k.Sender.PendingID() == "" {
+			// An unsigned plan may contain expired inputs. Rebuild it this tick.
+			return k.Store.Delete(key(s.Config.Name))
+		}
+		if k.Sender.PendingID() != job.ID {
+			return nil
+		}
+		// Recover an already signed individual transaction through the same journal.
+		execution := ExecutionJob{ID: job.ID, Phase: "prepared", To: job.Plan.Snapshot.Executor,
+			Data: job.Plan.Calldata, Members: []ExecutionMember{{Name: s.Config.Name, Job: job}}}
+		if err := k.Store.Save(ExecutionKey, execution); err != nil {
 			return err
 		}
-	}
-	// No journal means these bytes were never broadcast. Refresh expiring quotes
-	// after restart or a failed pre-admission attempt, even if sign() still simulates.
-	if found && job.Phase == "prepared" && k.Sender.PendingID() == "" {
-		if err := k.Store.Delete(key(s.Config.Name)); err != nil {
+		if err := k.submitExecution(ctx, &execution); err != nil {
 			return err
 		}
-		found = false
+		job.Result, job.Phase = execution.Result, execution.Phase
 	}
-	if found && (job.Phase == "settled" || job.Phase == "failed") {
+	if job.Phase == "settled" || job.Phase == "failed" {
 		if k.Sender.PendingID() == job.ID {
 			if err := k.Sender.Acknowledge(ctx, job.ID); err != nil {
 				return err
 			}
 		}
-		// Failed work is sticky: an operator must inspect it before removing the job.
 		if job.Phase == "failed" {
 			return errors.New("strategy halted on a confirmed reverted transaction; inspect durable job")
 		}
-		if time.Since(job.FinishedAt) < s.Config.Interval {
-			return nil
-		}
-		found = false
+		return nil
 	}
-	if !found {
-		if k.Sender.PendingID() != "" {
-			return nil
-		}
-		for name, account := range owners {
-			if name != s.Config.Name && account == common.HexToAddress(s.Config.Account) {
-				return nil
-			}
-		}
-		plan, err := k.Planner.Prepare(ctx, s)
-		if err != nil {
-			return err
-		}
-		if err := ValidatePlanComposition(plan.Calldata, s.Providers, plan.Outputs); err != nil {
-			return err
-		}
-		var random [16]byte
-		if _, err := rand.Read(random[:]); err != nil {
-			return errors.New("generate job identity failed")
-		}
-		job = Job{ID: s.Config.Name + "-" + hex.EncodeToString(random[:]), ConfigHash: s.Config.Fingerprint(), Phase: "prepared", Plan: plan, Progress: make([]provider.Progress, len(s.Providers))}
-		if err := k.Store.Save(key(s.Config.Name), job); err != nil {
-			return err
-		}
-	}
-	if job.Phase == "prepared" {
-		if k.Sender.PendingID() != "" && k.Sender.PendingID() != job.ID {
-			return nil
-		}
-		// Once signed, resume exact bytes even if the recipe changed. Resimulation
-		// cannot tell whether an already broadcast transaction landed.
-		if k.Sender.PendingID() == "" {
-			if err := k.Planner.Validate(ctx, job.Plan); err != nil {
-				if deleteErr := k.Store.Delete(key(s.Config.Name)); deleteErr != nil {
-					return deleteErr
-				}
-				return err
-			}
-		}
-		result, err := k.Sender.Send(ctx, txmanager.Request{ID: job.ID, To: job.Plan.Snapshot.Executor, Data: job.Plan.Calldata})
-		if err != nil {
-			if result.Pending && errors.Is(err, context.DeadlineExceeded) {
-				return provider.ErrNotReady
-			}
-			return err
-		}
-		if !result.Confirmed && !result.Reverted {
-			return nil
-		}
-		job.Result = result
-		job.Phase = "authorized"
-		if result.Reverted {
-			job.Phase = "failed"
-			job.FinishedAt = time.Now().UTC()
-		}
-		if err := k.Store.Save(key(s.Config.Name), job); err != nil {
-			return err
-		}
-		if err := k.Sender.Acknowledge(ctx, job.ID); err != nil {
-			return err
-		}
-		if result.Reverted {
-			return errors.New("recipe transaction reverted")
-		}
-	}
+
 	if job.Phase == "authorized" {
 		if k.Sender.PendingID() == job.ID {
 			if err := k.Sender.Acknowledge(ctx, job.ID); err != nil {

@@ -232,14 +232,16 @@ func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
 	apiHTTP := &http.Client{Transport: serviceRewriteTransport{host: "swap.symbiotic.fi", target: fixtureURL}, Timeout: 15 * time.Second}
 	path := writeCLIConfig(t, directory, cfg)
 	var planOutput bytes.Buffer
-	if err = runBotWithHTTP(ctx, path, true, true, &planOutput, apiHTTP); err != nil {
+	if err = planBotWithHTTP(ctx, path, &planOutput, apiHTTP); err != nil {
 		t.Fatal(err)
 	}
-	var plans map[string]keeper.Plan
-	if err = json.Unmarshal(planOutput.Bytes(), &plans); err != nil {
+	var response struct {
+		Plan keeper.ExecutionPlan `json:"plan"`
+	}
+	if err = json.Unmarshal(planOutput.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	plan := plans[cfg.Strategies[0]]
+	plan := response.Plan.Members[0].Plan
 	if len(plan.Outputs) != 5 || !bytes.Equal(plan.Outputs[2].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
 		t.Fatal("plan did not preserve exact sign or published early")
 	}
@@ -249,7 +251,7 @@ func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
 	deadlineGuard := recipe.Steps[len(recipe.Steps)-1]
 	recipe.Steps[len(recipe.Steps)-1] = issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, inputOperand(1), new(big.Int).SetUint64(deadline-1))
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
-	if e := runBotWithHTTP(ctx, path, true, true, new(bytes.Buffer), apiHTTP); e == nil || !strings.Contains(e.Error(), "full recipe simulation failed") {
+	if e := planBotWithHTTP(ctx, path, new(bytes.Buffer), apiHTTP); e == nil || !strings.Contains(e.Error(), "full recipe simulation failed") {
 		t.Fatal("recipe deadline cap was not enforced", e)
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 || posts.Load() != 0 || quotes.Load() != 2 {
@@ -260,7 +262,7 @@ func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
 	run := func() {
-		if e := runBotWithHTTP(ctx, path, true, false, new(bytes.Buffer), apiHTTP); e != nil {
+		if e := runBotWithHTTP(ctx, path, true, apiHTTP); e != nil {
 			t.Fatal(e)
 		}
 	}
