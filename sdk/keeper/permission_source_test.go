@@ -165,12 +165,8 @@ func TestPlannerValidationDoesNotFetchPermissions(t *testing.T) {
 	snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: common.HexToHash("0x04"), Root: common.HexToHash("0x05"), RecipeBlock: 11}
 	payload, returned := validationWork(t, true)
 	r := &validationReader{t: t, snapshot: snapshot, header: header, payload: payload, returned: returned}
-	planner := Planner{Chain: r, Caller: snapshot.Caller, PermissionSource: permissionSourceFunc(func(context.Context, *big.Int, recipes.Snapshot) ([]byte, error) {
-		t.Fatal("validation contacted unavailable permission source")
-		return nil, errors.New("source unavailable")
-	})}
 	plan := Plan{Recipe: snapshot, Snapshot: provider.Snapshot{Executor: snapshot.Executor}, Calldata: r.payload}
-	if err := planner.Validate(t.Context(), plan); err != nil || r.simulations != 1 {
+	if err := recipes.ValidateExecutionWithResults(t.Context(), r, plan.Recipe, snapshot.Caller, plan.Calldata, nil); err != nil || r.simulations != 1 {
 		t.Fatalf("existing plan validation failed: %v simulations%d", err, r.simulations)
 	}
 }

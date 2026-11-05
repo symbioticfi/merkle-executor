@@ -24,18 +24,9 @@ func validateComposition(calldata []byte, providers []provider.Provider, outputs
 	owners := make(map[common.Address]int)
 	claims := make(map[string]common.Address)
 	for i, p := range providers {
-		var targets map[string]common.Address
-		if exclusive, ok := p.(provider.ExclusiveOutputTargetProvider); ok {
-			if outputs == nil {
-				return errors.New("derived exclusive targets require persisted provider outputs")
-			}
-			var err error
-			targets, err = exclusive.ExclusiveOutputTargets(outputs[i])
-			if err != nil {
-				return err
-			}
-		} else if exclusive, ok := p.(provider.ExclusiveTargetProvider); ok {
-			targets = exclusive.ExclusiveTargets()
+		targets, err := exclusiveTargets(p, outputs, i)
+		if err != nil {
+			return err
 		}
 		if err := addTargetClaims(targets, i, owners, claims); err != nil {
 			return err
@@ -49,6 +40,19 @@ func validateComposition(calldata []byte, providers []provider.Provider, outputs
 		return err
 	}
 	return validateTargetClaims(targets, owners, claims)
+}
+
+func exclusiveTargets(p provider.Provider, outputs []provider.Output, i int) (map[string]common.Address, error) {
+	if exclusive, ok := p.(provider.ExclusiveOutputTargetProvider); ok {
+		if i >= len(outputs) {
+			return nil, errors.New("derived exclusive targets require persisted provider outputs")
+		}
+		return exclusive.ExclusiveOutputTargets(outputs[i])
+	}
+	if exclusive, ok := p.(provider.ExclusiveTargetProvider); ok {
+		return exclusive.ExclusiveTargets(), nil
+	}
+	return nil, nil
 }
 
 // ValidateRecipeComposition checks pure authenticated target ownership before

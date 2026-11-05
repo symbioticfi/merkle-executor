@@ -10,10 +10,17 @@ recipes repeat in one atomic multicall while further executions remain useful
 and executable. External quotes/proofs are never reused; those recipes retain
 fresh preparation and settlement handling. See [SDK batching](sdk/README.md).
 
-`strategies` is processing priority, not a fund reservation. Later executors read
-confirmed on-chain changes from earlier ones. Pending transaction recovery runs
-first; unsettled asynchronous work reserves its account. Withdrawal obligations
-must be protected by the spending recipes themselves.
+With a compatible EIP-7702 keeper (including MetaMask's smart account), executors
+run in configured order in one atomic ERC-7579 batch. The transaction targets the
+keeper itself, so each executor still sees its authorized caller. Later recipes
+can consume earlier proceeds. No delegation is installed or changed by the daemon.
+Ordinary EOAs continue to send separate transactions.
+
+`strategies` is processing priority, not a fund reservation. Pending transaction
+recovery runs first; unsettled asynchronous work reserves its account. Withdrawal
+obligations must be protected by the spending recipes themselves. A later call
+that needs fresh state-bound off-chain data or does not fit the batch gas budget
+is deferred to the next transaction.
 
 Recipes use opcode-prefixed `bytes[]` steps and packed operands/bindings from
 the current `IRecipes` schema. Literal values and indices fit `uint216`;

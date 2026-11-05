@@ -70,7 +70,7 @@ At startup it pins a valid head, batches deduplicated account and caller getters
 rejects any invalid member,
 and closes the same-number/hash guard before publishing the complete account map.
 The configured executor's account is immutable in the supported contract, but the SDK
-still rereads and compares it during every preparation and presend validation.
+still rereads and compares it during preparation. Submission uses the validated bytes without another simulation.
 
 The daemon supplies `keeper.PermissionSource` using the configured curator HTTP
 client. The SDK passes a copied chain ID and authenticated snapshot; the source returns

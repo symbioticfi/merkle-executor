@@ -44,7 +44,7 @@ Unchanged masked preimages are trusted curator data and do not require an automa
 provider owner. Actual replacements still preserve the permission's pinned bytes,
 targets, masks and proofs. Merkl preparation locates claim amount/proof fields
 without proving one canonical guard program. Complete original execution simulation
-checks the committed contract behavior before sending. Inputs remain bounded to
+checks the committed contract behavior during preparation. Inputs remain bounded to
 0..4095, and unknown runtime values still require a source.
 
 ## Aave V3 capacity
@@ -103,7 +103,7 @@ context follow the pinned Recipes implementation.
 The full original executor then simulates the complete immutable transaction. Its
 returned numeric values must equal the persisted witness for every dependency used
 by signed economics or the supporting prefix. This detects override-code
-introspection or other divergence. Preparation and presend verify this witness.
+introspection or other divergence. Preparation verifies this witness against the complete transaction.
 Recovery of an already signed attempt keeps the exact saved bytes and reconciles
 canonical receipt/execution evidence; it does not rerun economic preparation,
 acquire a fresh quote or rewrite signed values. The lens targets Cancun and is reproducibly generated with pinned solc 0.8.37.
@@ -137,7 +137,7 @@ original full simulation remain necessary separate stages. The 16 MiB recipe cac
 retains only canonical event bodies, never balances, roots, roles or quotes.
 
 SDK fixture counts in `batch_count_test.go` and `batch_anvil_test.go` measure
-explicitly configured providers: 6 cold / 5 warm preparation requests and 3 presend
+explicitly configured providers: 6 cold / 5 warm preparation requests and 3 explicit revalidation
 requests for their small recipes. They are not counts for the normal automatic
 daemon. `TestAnvilAutomaticMerklClaimFeedsRecipeBalance` verifies the normal daemon
 uses one shared lens and one rewards HTTP fetch for a claim followed by balance
@@ -239,7 +239,7 @@ output and policy version, even for unmatched adapters. Startup adapter ordering
 the runtime-policy fingerprint are durable identity. Recovery requires that
 identity to match; it never rewrites a fingerprint, UID, nonce or provider index. Recovery validates envelopes, bounds and target ownership before
 network mutation. Already signed attempts retain their exact saved bytes and use canonical receipt
-and execution reconciliation; they do not repeat preparation/presend numerical
+and execution reconciliation; they do not repeat preparation numerical
 simulation. Recovery fetches neither curator permissions nor new quotes for
 existing work.
 

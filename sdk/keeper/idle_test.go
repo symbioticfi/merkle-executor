@@ -13,7 +13,9 @@ type waitingPlanner struct {
 	err error
 }
 
-func (p waitingPlanner) Prepare(context.Context, Strategy) (Plan, error) { return Plan{}, p.err }
+func (p waitingPlanner) PrepareExecution(context.Context, []Strategy) (ExecutionPlan, error) {
+	return ExecutionPlan{}, p.err
+}
 
 func TestNormalIdleDoesNotSendOrReportFailure(t *testing.T) {
 	k, _, p, sender, _ := recoveryHarness(t)

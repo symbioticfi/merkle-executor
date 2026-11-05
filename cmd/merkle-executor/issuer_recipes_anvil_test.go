@@ -183,7 +183,7 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 
 	startServiceConfirmationMining(t, ctx, client, caller)
 	run := func() {
-		if err := runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
+		if err := runBot(ctx, path, true); err != nil {
 			t.Fatal(err)
 		}
 	}

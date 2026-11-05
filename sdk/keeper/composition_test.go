@@ -136,6 +136,10 @@ type compositionPlanner struct {
 	plan Plan
 }
 
+func (p *compositionPlanner) PrepareExecution(ctx context.Context, strategies []Strategy) (ExecutionPlan, error) {
+	return prepareFixture(ctx, strategies, p.Prepare)
+}
+
 func (p *compositionPlanner) Prepare(context.Context, Strategy) (Plan, error) { return p.plan, nil }
 func TestFreshCompositionFailsBeforeSigning(t *testing.T) {
 	k, store, _, sender, _ := recoveryHarness(t)

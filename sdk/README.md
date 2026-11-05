@@ -4,6 +4,26 @@ Module: `github.com/symbioticfi/merkle-executor/sdk`. It is independently versio
 release tags use `sdk/vX.Y.Z`. Consumers pin an immutable module version. The
 standalone daemon and vault-solver consume this same implementation.
 
+`recipes.DelegatedMulticall` combines calls to different executors in an atomic
+ERC-7579 batch, sent from the EIP-7702 keeper to itself. Only zero-value recipe
+execution calls are accepted. `SupportsDelegatedBatch` checks the installed
+delegation's mode support; it never changes delegation. `SimulateExecutors`
+checks the exact envelope and reads each result after its predecessors using a
+temporary caller-code override. No production helper contract is needed.
+
+`keeper.Planner.PrepareExecution` produces one `ExecutionPlan` for either a direct
+executor call or a delegated batch. It detects the caller's delegation and keeps
+configuration order. Preparation authenticates every member and simulates the
+complete transaction. Calls with conflicting receipt ownership, changed numerical
+witnesses or an unexecutable prefix are deferred. Earlier proceeds can activate
+later recipe gates.
+
+One `ExecutionJob` journal persists the selected transaction and member plans.
+Submission uses those bytes directly, without another simulation. After a restart,
+unsigned work is rebuilt from current state and inputs. Signed work is recovered
+unchanged. Every member receives the same durable receipt before sender
+acknowledgement; asynchronous settlement still reserves its account.
+
 `recipes.Multicall` batches ordered executions of the same committed recipe on
 its executor. The contract preserves the original caller and reverts every call
 if any call fails. `SimulateBatch` returns per-execution results from temporary
@@ -24,8 +44,8 @@ Approval maintenance alone does not trigger another cycle. No cycle count is
 imposed. The caller supplies the transaction gas budget and deadline. Idle gates,
 identical result vectors, a reverted extension or the gas limit end the batch at
 the last successfully simulated prefix. RPC/decoding failures fail preparation.
-The complete selected batch is validated before submission and revalidated on
-recovery; a signed batch is never rebuilt or partially resent. Hosts without
+The complete selected batch is validated during preparation. Unsigned work is
+rebuilt on recovery; a signed batch is never rebuilt or partially resent. Hosts without
 code-override support retain ordinary single-execution preparation.
 
 The keeper visits strategies in configured order. A pending nonce owner is
@@ -149,13 +169,13 @@ the head hash is unchanged.
 `keeper.Planner` admits work only after successful full simulation, a valid result
 vector and both canonical closing guards. Recipes with every `Manage` gate closed
 and no `Call` or `Approve` return `provider.ErrNotReady`; zero-valued calls and
-approvals remain executable work. Unsigned admission repeats this check against
-latest state. Signed recovery keeps its original bytes and ownership.
+approvals remain executable work. Unsigned saved work is prepared again against current state before admission.
+Fresh plans proceed directly to submission; signed recovery keeps its original bytes and ownership.
 
 `recipes.ValidateExecution` groups current metadata with an isolated nil/latest
 simulation and closes both block guards afterward. Metadata errors take priority over
-simulation errors. `keeper.Planner.Validate` rejects inconsistent discovery and send
-executors before any reads. Full simulations can share a JSON array with getters but
+simulation errors. The execution plan validates discovery and send identities
+before persistence. Full simulations can share a JSON array with getters but
 never share Multicall execution or temporary EVM state. The later closing header phase
 can batch both original and current headers. Submission batches initial owned-attempt
 receipts and opening confirmation evidence while retaining nonce ownership and durable
@@ -203,7 +223,7 @@ Raw transport errors and custom cancellation causes remain redacted. HTTP status
 response bounds, redirect refusal and timeout policy remain unchanged.
 The callback runs only during new preparation, before providers, and cannot replace
 closing role/simulation/canonical guards. Saved
-submission recovery, presend validation and provider advancement do not fetch a new
+signed submission recovery and provider advancement do not fetch a new
 tree. Hosts without a source load the local `keeper.Config.Tree`.
 Hosts must include source configuration and derived identities in their revision
 fingerprint. Recovery must preserve the identity of active jobs.

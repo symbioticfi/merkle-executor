@@ -23,5 +23,12 @@ the active permission root through `root()`.
 The CoW, Liquid Lane RFQ and Merkl providers also use the protocol ABI subsets in
 this directory, including their Multicall3 transport. Sources and deliberate
 subset limits are documented in [schema provenance](../schemas/PROVENANCE.md).
+
+`DelegatedAccount.json` is the ERC-7579 `execute(bytes32,bytes)` and
+`supportsExecutionMode(bytes32)` subset used by MetaMask's
+[EIP7702DeleGatorCore v1.3.0](https://github.com/MetaMask/delegation-framework/blob/v1.3.0/src/EIP7702/EIP7702DeleGatorCore.sol).
+Batch mode is `0x01` followed by 31 zero bytes: ordered CALLs, default atomic
+execution. The local Anvil fixture `recipes/testdata/anvil/MetaMaskDelegator.json`
+records that deployment's runtime, address, capture block and Keccak hash.
 Native protocol calls and reads are encoded in committed recipes; issuer artifacts
 used by local integration tests live under `cmd/merkle-executor/testdata/issuers`.

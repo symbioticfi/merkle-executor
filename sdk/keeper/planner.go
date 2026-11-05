@@ -267,7 +267,7 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 		return plan, err
 	}
 	// Close metadata and canonical guards after the entire stateful preparation.
-	if err = p.Validate(ctx, plan); err != nil {
+	if err = recipes.ValidateSnapshot(ctx, p.Chain, plan.Recipe, p.Caller); err != nil {
 		return plan, err
 	}
 
@@ -311,21 +311,6 @@ func merge(inputs map[uint]string, actions map[string]hexutil.Bytes, skips *[]ui
 			}
 		}
 		*skips = append(*skips, step)
-	}
-	return nil
-}
-
-// Validate re-simulates immutable prepared bytes at current state before admission.
-func (p *Planner) Validate(ctx context.Context, plan Plan) error {
-	if plan.Snapshot.Executor != plan.Recipe.Executor {
-		return errors.New("prepared plan executor mismatch")
-	}
-	work, err := recipes.ExecutionHasWork(ctx, p.Chain, plan.Recipe, p.Caller, plan.Calldata, plan.Results)
-	if err != nil {
-		return err
-	}
-	if !work {
-		return provider.ErrNotReady
 	}
 	return nil
 }

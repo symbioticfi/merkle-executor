@@ -40,7 +40,7 @@ func validationWork(t *testing.T, ready bool) ([]byte, []byte) {
 	return calldata, returned
 }
 
-func TestPlannerValidateWorkAfterCanonicalGuards(t *testing.T) {
+func TestReadinessAfterCanonicalGuards(t *testing.T) {
 	for _, mode := range []string{"ready", "idle", "idle reorg", "idle simulation failure", "malformed results"} {
 		t.Run(mode, func(t *testing.T) {
 			header := &types.Header{Number: big.NewInt(12)}
@@ -53,8 +53,10 @@ func TestPlannerValidateWorkAfterCanonicalGuards(t *testing.T) {
 			if mode == "malformed results" {
 				r.returned = nil
 			}
-			planner := Planner{Chain: r, Caller: snapshot.Caller}
-			err := planner.Validate(t.Context(), Plan{Recipe: snapshot, Snapshot: provider.Snapshot{Executor: snapshot.Executor}, Calldata: payload})
+			work, err := recipes.ExecutionHasWork(t.Context(), r, snapshot, snapshot.Caller, payload, nil)
+			if err == nil && !work {
+				err = provider.ErrNotReady
+			}
 			if mode == "ready" {
 				if err != nil {
 					t.Fatal(err)

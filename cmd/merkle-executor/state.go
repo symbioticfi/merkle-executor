@@ -35,6 +35,19 @@ func stateCommands() []*cobra.Command {
 				names = append(names, s)
 			}
 		}
+		var batch keeper.ExecutionJob
+		if _, err := load(keeper.ExecutionKey, &batch); err != nil {
+			return err
+		}
+		members := make(map[string]keeper.Job, len(batch.Members))
+		for _, member := range batch.Members {
+			job := member.Job
+			job.Phase, job.Result = batch.Phase, batch.Result
+			members[member.Name] = job
+			if !slices.Contains(names, member.Name) {
+				names = append(names, member.Name)
+			}
+		}
 		type row struct {
 			Identifier, ID, Phase, Transaction string
 			Outcomes                           []string
@@ -49,6 +62,9 @@ func stateCommands() []*cobra.Command {
 			found, err := load("strategy."+name+".v1", &job)
 			if err != nil {
 				return err
+			}
+			if member, ok := members[name]; ok {
+				job, found = member, true
 			}
 			if !found {
 				continue
@@ -91,6 +107,11 @@ func stateCommands() []*cobra.Command {
 		}
 		if found {
 			return errors.New("transaction journal still occupied; resume and acknowledge before resetting")
+		}
+		if found, err := store.Load(keeper.ExecutionKey, new(keeper.ExecutionJob)); err != nil {
+			return err
+		} else if found {
+			return errors.New("execution still active; resume before resetting")
 		}
 		var names []string
 		if _, err := store.Load("strategies.v1", &names); err != nil {
