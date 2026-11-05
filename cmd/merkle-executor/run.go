@@ -121,7 +121,7 @@ func openEnvironment(ctx context.Context, path string, httpClient *http.Client) 
 		s := keeper.Strategy{Config: keeper.Config{Name: sc, Executor: sc, Account: accounts[common.HexToAddress(sc)].Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(sc, accounts[common.HexToAddress(sc)], caller)}}
 		for _, registration := range []struct {
 			name string
-			new  func(provider.Deps) (provider.Provider, error)
+			new  func(provider.Deps) (keeper.Provider, error)
 		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}} {
 			p, err := registration.new(provider.Deps{Chain: client, HTTP: httpClient, LookupSecret: os.Getenv})
 			if err != nil {
@@ -137,7 +137,7 @@ func openEnvironment(ctx context.Context, path string, httpClient *http.Client) 
 		if err != nil {
 			return nil, errors.Errorf("configure 3F claims: %w", err)
 		}
-		s.Providers = append(s.Providers, capacity, keeper.NewRecipeInputs(), claims)
+		s.Providers = append(s.Providers, capacity, claims)
 		strategies = append(strategies, s)
 	}
 	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}

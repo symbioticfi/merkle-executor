@@ -41,8 +41,7 @@ func stateCommands() []*cobra.Command {
 		}
 		members := make(map[string]keeper.Job, len(batch.Members))
 		for _, member := range batch.Members {
-			job := member.Job
-			job.Phase, job.Result = batch.Phase, batch.Result
+			job := keeper.Job{ID: batch.ID, Phase: batch.Phase, Result: batch.Result}
 			members[member.Name] = job
 			if !slices.Contains(names, member.Name) {
 				names = append(names, member.Name)

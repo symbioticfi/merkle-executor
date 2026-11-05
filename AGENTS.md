@@ -13,7 +13,7 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
   Merkl and 3F standalone claim providers discover eligible rewards/requests and
   fill one authorized claim per execution; the SDK batches those executions.
   Native claim validity remains enforced by the distributor/request contracts;
-  `keeper.NewRecipeInputs()` handles exact recipe constraints.
+  the planner handles exact recipe constraints.
   Liquid Lane connector acquisition and calldata construction belong to vault-solver's
   Merkle extension. External signed terms come from RFQ/backend integrations and
   are validated by contracts; the daemon does not size connector swaps or verify

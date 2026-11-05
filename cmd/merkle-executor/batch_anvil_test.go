@@ -267,7 +267,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 	}}
 	serviceSeedTransaction(t, ctx, client, owner, &target, executorABI.PackSetRecipe(dynamic.Queries, dynamic.Steps))
 	strategy := keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: treePath}}
-	for _, newProvider := range []func(provider.Deps) (provider.Provider, error){cowswap.NewAutomatic, merkl.NewAutomatic, liquidlanerfq.NewAutomatic, threef.NewAutomatic} {
+	for _, newProvider := range []func(provider.Deps) (keeper.Provider, error){cowswap.NewAutomatic, merkl.NewAutomatic, liquidlanerfq.NewAutomatic, threef.NewAutomatic} {
 		p, err := newProvider(provider.Deps{Chain: batched})
 		if err != nil {
 			t.Fatal(err)
@@ -278,7 +278,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	strategy.Providers = append(strategy.Providers, capacity, keeper.NewRecipeInputs())
+	strategy.Providers = append(strategy.Providers, capacity)
 	current, err := planner.Prepare(ctx, strategy)
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +291,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 	if err != nil || len(args[0].([][]byte)) != 2 {
 		t.Fatalf("expected two complete executions: %v", err)
 	}
-	if len(current.Outputs) != 6 || len(current.Outputs[0][0].Data) == 0 {
+	if len(current.Outputs) != 5 || len(current.Outputs[0][0].Data) == 0 {
 		t.Fatal("test must retain the daemon's unmatched provider envelopes")
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &target, current.Calldata)

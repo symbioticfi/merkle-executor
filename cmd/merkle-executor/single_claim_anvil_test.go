@@ -109,7 +109,7 @@ func TestAnvilSingleThreeFClaimBatchesReadyRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	strategy := keeper.Strategy{Config: keeper.Config{Account: fixture.Account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []provider.Provider{claimProvider, keeper.NewRecipeInputs()}}
+	strategy := keeper.Strategy{Config: keeper.Config{Account: fixture.Account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []keeper.Provider{claimProvider}}
 	backend, err := chain.Dial(ctx, endpoint, "", big.NewInt(31337))
 	if err != nil {
 		t.Fatal(err)

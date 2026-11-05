@@ -271,7 +271,7 @@ func TestStatusAndResetWhileBatchOwnsMembers(t *testing.T) {
 	cfg := testCLIConfig(directory)
 	path := writeCLIConfig(t, directory, cfg)
 	store := seedCLIState(t, cfg, keeper.Job{ID: "previous", Phase: "settled"}, false)
-	batch := keeper.ExecutionJob{ID: "batch-1", Phase: "prepared", Members: []keeper.ExecutionMember{{Name: cfg.Strategies[0], Job: keeper.Job{ID: "batch-1", Phase: "prepared"}}}}
+	batch := keeper.ExecutionJob{ID: "batch-1", Phase: "prepared", Members: []keeper.ExecutionMember{{Name: cfg.Strategies[0]}}}
 	if err := store.Save(keeper.ExecutionKey, batch); err != nil {
 		t.Fatal(err)
 	}
