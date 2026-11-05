@@ -247,7 +247,7 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 					if advanced {
 						wantMethods = 6
 					}
-					if err := planner.Validate(t.Context(), plan); err != nil || requests != 3 || arrays != 3 || methods != wantMethods {
+					if err := recipes.ValidateExecutionWithResults(t.Context(), planner.Chain, plan.Recipe, planner.Caller, plan.Calldata, plan.Results); err != nil || requests != 3 || arrays != 3 || methods != wantMethods {
 						t.Fatalf("Validate requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
 					}
 				})

@@ -35,8 +35,8 @@ func stateCommands() []*cobra.Command {
 				names = append(names, s)
 			}
 		}
-		var batch keeper.BatchJob
-		if _, err := load(keeper.BatchKey, &batch); err != nil {
+		var batch keeper.ExecutionJob
+		if _, err := load(keeper.ExecutionKey, &batch); err != nil {
 			return err
 		}
 		members := make(map[string]keeper.Job, len(batch.Members))
@@ -108,10 +108,10 @@ func stateCommands() []*cobra.Command {
 		if found {
 			return errors.New("transaction journal still occupied; resume and acknowledge before resetting")
 		}
-		if found, err := store.Load(keeper.BatchKey, new(keeper.BatchJob)); err != nil {
+		if found, err := store.Load(keeper.ExecutionKey, new(keeper.ExecutionJob)); err != nil {
 			return err
 		} else if found {
-			return errors.New("executor batch still active; resume before resetting")
+			return errors.New("execution still active; resume before resetting")
 		}
 		var names []string
 		if _, err := store.Load("strategies.v1", &names); err != nil {

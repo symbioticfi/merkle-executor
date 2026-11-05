@@ -27,14 +27,14 @@ func root() *cobra.Command {
 	var runPath string
 	var once bool
 	run := &cobra.Command{Use: "run", Short: "Run configured strategies", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return runBot(cmd.Context(), runPath, once, false, cmd.OutOrStdout())
+		return runBot(cmd.Context(), runPath, once)
 	}}
 	run.Flags().StringVar(&runPath, "config", "", "YAML configuration path")
 	run.Flags().BoolVar(&once, "once", false, "process one iteration")
 	_ = run.MarkFlagRequired("config")
 	var planPath string
 	plan := &cobra.Command{Use: "plan", Short: "Discover, assemble and simulate without signing or submitting", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return runBot(cmd.Context(), planPath, true, true, cmd.OutOrStdout())
+		return planBot(cmd.Context(), planPath, cmd.OutOrStdout())
 	}}
 	plan.Flags().StringVar(&planPath, "config", "", "YAML configuration path")
 	_ = plan.MarkFlagRequired("config")

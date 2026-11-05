@@ -208,7 +208,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 			mu.Unlock()
 			reset()
 			// This phase must simulate nil/latest and retain both closing pins.
-			if err := planner.Validate(ctx, current); err != nil {
+			if err := recipes.ValidateExecutionWithResults(ctx, planner.Chain, current.Recipe, planner.Caller, current.Calldata, current.Results); err != nil {
 				t.Fatal(err)
 			}
 			wantMethods = 5

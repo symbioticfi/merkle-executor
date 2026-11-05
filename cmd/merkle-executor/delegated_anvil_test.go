@@ -119,13 +119,13 @@ func TestAnvilServiceDelegatedBatch(t *testing.T) {
 	cfg.Curator.URL = server.URL + "/api/v1"
 	path := writeCLIConfig(t, t.TempDir(), cfg)
 	var output bytes.Buffer
-	if err := runBot(ctx, path, true, true, &output); err != nil {
+	if err := planBot(ctx, path, &output); err != nil {
 		t.Fatal(err)
 	}
 	var plan struct {
 		To   common.Address
 		Data hexutil.Bytes
-		Plan keeper.BatchPlan
+		Plan keeper.ExecutionPlan
 	}
 	if err := json.Unmarshal(output.Bytes(), &plan); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestAnvilServiceDelegatedBatch(t *testing.T) {
 	}
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
-	if err := runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
+	if err := runBot(ctx, path, true); err != nil {
 		t.Fatal(err)
 	}
 	var hash common.Hash

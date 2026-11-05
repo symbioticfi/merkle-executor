@@ -271,8 +271,8 @@ func TestStatusAndResetWhileBatchOwnsMembers(t *testing.T) {
 	cfg := testCLIConfig(directory)
 	path := writeCLIConfig(t, directory, cfg)
 	store := seedCLIState(t, cfg, keeper.Job{ID: "previous", Phase: "settled"}, false)
-	batch := keeper.BatchJob{ID: "batch-1", Phase: "prepared", Members: []keeper.BatchJobMember{{Name: cfg.Strategies[0], Job: keeper.Job{ID: "batch-1", Phase: "prepared"}}}}
-	if err := store.Save(keeper.BatchKey, batch); err != nil {
+	batch := keeper.ExecutionJob{ID: "batch-1", Phase: "prepared", Members: []keeper.ExecutionMember{{Name: cfg.Strategies[0], Job: keeper.Job{ID: "batch-1", Phase: "prepared"}}}}
+	if err := store.Save(keeper.ExecutionKey, batch); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -289,7 +289,7 @@ func TestStatusAndResetWhileBatchOwnsMembers(t *testing.T) {
 	if len(rows) != 1 || rows[0].ID != batch.ID || rows[0].Phase != "prepared" {
 		t.Fatalf("pending batch hidden behind prior job: %s", output)
 	}
-	if _, err := executeCLI(t, "reset-strategy", "--config", path, "--executor", cfg.Strategies[0]); err == nil || !strings.Contains(err.Error(), "batch still active") {
+	if _, err := executeCLI(t, "reset-strategy", "--config", path, "--executor", cfg.Strategies[0]); err == nil || !strings.Contains(err.Error(), "execution still active") {
 		t.Fatalf("pending batch could be reset: %v", err)
 	}
 }
