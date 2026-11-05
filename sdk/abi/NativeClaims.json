@@ -1,0 +1,690 @@
+[
+  {
+    "type": "function",
+    "name": "getUserNextRequestId",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "withdrawPeriod",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "getWithdrawalRequest",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "name": "requestId",
+        "type": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "request",
+        "type": "tuple",
+        "components": [
+          {
+            "name": "amount",
+            "type": "uint256"
+          },
+          {
+            "name": "timestamp",
+            "type": "uint256"
+          },
+          {
+            "name": "claimed",
+            "type": "bool"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "claimWithdrawal",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      }
+    ],
+    "outputs": []
+  },
+  {
+    "type": "function",
+    "name": "strategy",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "address"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "epochNumber",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "userDepositsEpochs",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "userWithdrawalsEpochs",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "name": "epoch",
+        "type": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "epochPrice",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "epochPendingDeposits",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "epochPrefundedDeposits",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "epochWithdrawPrice",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "epochPendingClaims",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "claimDepositRequest",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      }
+    ],
+    "outputs": []
+  },
+  {
+    "type": "function",
+    "name": "claimWithdrawRequest",
+    "stateMutability": "nonpayable",
+    "inputs": [],
+    "outputs": []
+  },
+  {
+    "type": "function",
+    "name": "claimWithdrawRequest",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      }
+    ],
+    "outputs": []
+  },
+  {
+    "type": "function",
+    "name": "claimInstantWithdrawRequest",
+    "stateMutability": "nonpayable",
+    "inputs": [],
+    "outputs": []
+  },
+  {
+    "type": "function",
+    "name": "withdrawsRequests",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "instantWithdrawsRequests",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "apr0Users",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      },
+      {
+        "name": "value1",
+        "type": "uint256"
+      },
+      {
+        "name": "value2",
+        "type": "uint256"
+      },
+      {
+        "name": "value3",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "claimDepositEscrow",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": []
+  },
+  {
+    "type": "function",
+    "name": "depositEscrowBalance",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "claimRedeemEscrow",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": []
+  },
+  {
+    "type": "function",
+    "name": "redeemEscrowBalance",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "deposit",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "mint",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "withdraw",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "redeem",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "maxDeposit",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "maxMint",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "maxWithdraw",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "maxRedeem",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "claimableDepositRequest",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "claimableRedeemRequest",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "claimCancelDepositRequest",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "claimCancelRedeemRequest",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "claimableCancelDepositRequest",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "claimableCancelRedeemRequest",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "requestId",
+        "type": "uint256"
+      },
+      {
+        "name": "account",
+        "type": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "value0",
+        "type": "uint256"
+      }
+    ]
+  }
+]

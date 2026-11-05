@@ -32,3 +32,8 @@ execution. The local Anvil fixture `recipes/testdata/anvil/MetaMaskDelegator.jso
 records that deployment's runtime, address, capture block and Keccak hash.
 Native protocol calls and reads are encoded in committed recipes; issuer artifacts
 used by local integration tests live under `cmd/merkle-executor/testdata/issuers`.
+
+`NativeClaims.json` is the native issuer-claim discovery subset from adapters
+`INoonWithdrawalHandler`, `IParetoClaimState`, `IParetoDepositQueue`,
+`IParetoWithdrawalQueue`, and the ERC-7540 interfaces. The claim provider uses
+these read/call ABIs directly; it never changes committed recipe instructions.
