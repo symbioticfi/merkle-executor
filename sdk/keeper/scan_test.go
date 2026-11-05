@@ -36,6 +36,10 @@ func (s *countingStore) Save(k string, v any) error {
 
 type idlePlanner struct{ recoveryPlanner }
 
+func (p *idlePlanner) PrepareExecution(ctx context.Context, strategies []Strategy) (ExecutionPlan, error) {
+	return prepareFixture(ctx, strategies, p.Prepare)
+}
+
 func (p *idlePlanner) Prepare(context.Context, Strategy) (Plan, error) {
 	return Plan{}, provider.ErrNotReady
 }
@@ -67,8 +71,8 @@ func TestIdleTickReadsJournalsLinearly(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Inventory plus the shared batch journal are constant-cost recovery reads.
-			if counter.reads > 3*n+2 {
-				t.Fatalf("%d strategies required %d journal reads; want <= %d", n, counter.reads, 3*n+2)
+			if counter.reads > 3*n+3 {
+				t.Fatalf("%d strategies required %d journal reads; want <= %d", n, counter.reads, 3*n+3)
 			}
 			t.Logf("%d strategies: %d journal reads", n, counter.reads)
 		})

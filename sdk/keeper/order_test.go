@@ -14,6 +14,10 @@ type orderPlanner struct {
 	visited []string
 }
 
+func (p *orderPlanner) PrepareExecution(ctx context.Context, strategies []Strategy) (ExecutionPlan, error) {
+	return prepareFixture(ctx, strategies, p.Prepare)
+}
+
 func (p *orderPlanner) Prepare(_ context.Context, s Strategy) (Plan, error) {
 	p.visited = append(p.visited, s.Config.Name)
 	return Plan{}, provider.ErrNotReady
@@ -42,7 +46,7 @@ func TestConfiguredPrioritySurvivesPendingRecovery(t *testing.T) {
 				if err := store.Save(key(s.Config.Name), job); err != nil {
 					t.Fatal(err)
 				}
-				want = append([]string{"ll"}, names[:len(names)-1]...)
+				// Simulation preserves configured order and does not recover signed work.
 			}
 			if err := k.Tick(t.Context()); err != nil {
 				t.Fatal(err)

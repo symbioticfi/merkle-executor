@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"math/big"
 	"testing"
 	"time"
 
@@ -15,12 +17,12 @@ import (
 
 type batchPlannerFixture struct {
 	*recoveryPlanner
-	preparedBatches, validatedBatches int
+	preparedBatches int
 }
 
-func (p *batchPlannerFixture) PrepareBatch(ctx context.Context, strategies []Strategy) (BatchPlan, error) {
+func (p *batchPlannerFixture) PrepareExecution(ctx context.Context, strategies []Strategy) (ExecutionPlan, error) {
 	p.preparedBatches++
-	var batch BatchPlan
+	batch := ExecutionPlan{To: common.HexToAddress("0x30")}
 	for _, strategy := range strategies {
 		plan, err := p.Prepare(ctx, strategy)
 		if err != nil {
@@ -28,20 +30,15 @@ func (p *batchPlannerFixture) PrepareBatch(ctx context.Context, strategies []Str
 		}
 		plan.Calldata = executor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil)
 		plan.Recipe = recipes.Snapshot{Account: plan.Snapshot.Account, Executor: plan.Snapshot.Executor, Caller: plan.Snapshot.Caller}
-		batch.Members = append(batch.Members, BatchMember{Name: strategy.Config.Name, Plan: plan})
+		batch.Members = append(batch.Members, PlanMember{Name: strategy.Config.Name, Plan: plan})
 	}
 	return batch, nil
 }
-func (p *batchPlannerFixture) ValidateBatch(context.Context, BatchPlan) error {
-	p.validatedBatches++
-	return nil
-}
-
 func batchHarness(t *testing.T) (*Keeper, *recoveryStore, *batchPlannerFixture, *recoverySender, []*recoveryProvider) {
 	t.Helper()
 	k, store, planner, sender, first := recoveryHarness(t)
 	p := &batchPlannerFixture{recoveryPlanner: planner}
-	k.Planner, k.Batching = p, true
+	k.Planner = p
 	second := &recoveryProvider{done: true}
 	strategy := k.Strategies[0]
 	strategy.Config.Name, strategy.Config.Executor = "withdraw", common.Address{0x11}.Hex()
@@ -87,7 +84,7 @@ func TestBatchPersistsEveryMemberBeforeAcknowledgement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if sender.broadcasts != 1 || p.preparedBatches != 1 || p.validatedBatches != 1 {
+			if sender.broadcasts != 1 || p.preparedBatches != 1 {
 				t.Fatalf("batch re-prepared or resubmitted: %+v %+v", sender, p)
 			}
 			if len(sender.requests) != 1 || sender.requests[0].To != common.HexToAddress("0x30") {
@@ -162,8 +159,8 @@ func TestBatchSimulationPreservesPendingWork(t *testing.T) {
 	if err := k.Tick(t.Context()); err == nil {
 		t.Fatal("expected persistence failure")
 	}
-	var before BatchJob
-	if found, err := store.Load(BatchKey, &before); err != nil || !found {
+	var before ExecutionJob
+	if found, err := store.Load(ExecutionKey, &before); err != nil || !found {
 		t.Fatal("missing pending batch", err)
 	}
 	want, _ := json.Marshal(before)
@@ -171,8 +168,8 @@ func TestBatchSimulationPreservesPendingWork(t *testing.T) {
 	if err := k.Tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	var after BatchJob
-	if found, err := store.Load(BatchKey, &after); err != nil || !found {
+	var after ExecutionJob
+	if found, err := store.Load(ExecutionKey, &after); err != nil || !found {
 		t.Fatal("simulation discarded pending batch", err)
 	}
 	got, _ := json.Marshal(after)
@@ -192,12 +189,12 @@ func TestBatchRejectsMismatchedMemberIdentity(t *testing.T) {
 	if err := k.Tick(t.Context()); err == nil {
 		t.Fatal("expected persistence failure")
 	}
-	var batch BatchJob
-	if _, err := store.Load(BatchKey, &batch); err != nil {
+	var batch ExecutionJob
+	if _, err := store.Load(ExecutionKey, &batch); err != nil {
 		t.Fatal(err)
 	}
 	batch.Members[0].Job.Plan.Recipe.Account = common.Address{42}
-	if err := store.Save(BatchKey, batch); err != nil {
+	if err := store.Save(ExecutionKey, batch); err != nil {
 		t.Fatal(err)
 	}
 	if err := k.CheckRecovery(); err == nil {
@@ -208,18 +205,17 @@ func TestBatchRejectsMismatchedMemberIdentity(t *testing.T) {
 	}
 }
 
-func TestBatchCannotBeAbandonedByDisablingDelegation(t *testing.T) {
-	k, store, _, sender, _ := batchHarness(t)
+func TestSignedBatchRecoveryDoesNotPrepareAgain(t *testing.T) {
+	k, store, p, sender, _ := batchHarness(t)
 	store.failPhase = "authorized"
 	if err := k.Tick(t.Context()); err == nil {
 		t.Fatal("expected persistence failure")
 	}
-	k.Batching = false
-	for _, pending := range []string{sender.pending, ""} {
-		sender.pending = pending
-		if err := k.CheckRecovery(); err == nil {
-			t.Fatal("unfinished batch ignored when delegation disabled")
-		}
+	if err := k.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if p.preparedBatches != 1 || len(sender.requests) != 1 {
+		t.Fatal("recovery prepared or sent a second transaction")
 	}
 }
 
@@ -244,13 +240,72 @@ func TestBatchProtectsTransactionWideReceiptOwnership(t *testing.T) {
 				{Config: Config{Name: "one"}, Providers: []provider.Provider{&exclusiveProvider{claims: map[string]common.Address{"0:0": first}}}},
 				{Config: Config{Name: "two"}, Providers: providers},
 			}
-			batch := BatchPlan{Members: []BatchMember{
+			batch := ExecutionPlan{Members: []PlanMember{
 				{Name: "one", Plan: Plan{Calldata: compositionCalldata(t, first), Outputs: make([]provider.Output, 1)}},
 				{Name: "two", Plan: Plan{Calldata: compositionCalldata(t, tc.target), Outputs: make([]provider.Output, 1)}},
 			}}
-			if err := validateBatchComposition(batch, strategies); (err == nil) != tc.want {
+			if err := validateExecutionComposition(batch, strategies); (err == nil) != tc.want {
 				t.Fatalf("receipt ownership: %v", err)
 			}
 		})
+	}
+}
+
+func TestUnsignedExecutionIsReprepared(t *testing.T) {
+	for _, delegated := range []bool{false, true} {
+		t.Run(map[bool]string{false: "direct", true: "delegated"}[delegated], func(t *testing.T) {
+			k, store, _, sender, _ := batchHarness(t)
+			if !delegated {
+				k.Strategies = k.Strategies[:1]
+				k.Planner = &recoveryPlanner{}
+			}
+			plan, err := k.Planner.PrepareExecution(t.Context(), k.Strategies)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A structurally valid old input must not survive an unsigned restart.
+			plan.Members[0].Plan.Calldata = executor.NewRecipeExecutor().PackExecute(nil, nil, []*big.Int{big.NewInt(99)}, nil)
+			old, err := newExecution(plan, k.Strategies)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Save(ExecutionKey, old); err != nil {
+				t.Fatal(err)
+			}
+			if err := k.Tick(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if len(sender.requests) != 1 || sender.requests[0].ID == old.ID || bytes.Equal(sender.requests[0].Data, old.Data) {
+				t.Fatal("unsigned execution was reused instead of prepared from current inputs")
+			}
+		})
+	}
+}
+
+func TestExecutionCompositionIncludesRepeatedNativeCalls(t *testing.T) {
+	for _, exclusive := range []bool{false, true} {
+		for _, collision := range []bool{false, true} {
+			t.Run(fmt.Sprintf("exclusive=%t/collision=%t", exclusive, collision), func(t *testing.T) {
+				target, native := common.Address{1}, common.Address{2}
+				if collision {
+					native = target
+				}
+				first := &recoveryProvider{}
+				var runtime provider.Provider = first
+				if exclusive {
+					runtime = &exclusiveProvider{claims: map[string]common.Address{"0:0": target}}
+				}
+				strategies := []Strategy{{Config: Config{Name: "claim"}, Providers: []provider.Provider{runtime}}, {Config: Config{Name: "native"}, Providers: []provider.Provider{&recoveryProvider{}}}}
+				repeated, err := recipes.Multicall([][]byte{compositionCalldata(t, native), compositionCalldata(t, native)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				plan := ExecutionPlan{Members: []PlanMember{{Name: "claim", Plan: Plan{Calldata: compositionCalldata(t, target), Outputs: make([]provider.Output, 1)}}, {Name: "native", Plan: Plan{Calldata: repeated, Outputs: make([]provider.Output, 1)}}}}
+				err = validateExecutionComposition(plan, strategies)
+				if (err != nil) != (exclusive && collision) {
+					t.Fatalf("unexpected composition result: %v", err)
+				}
+			})
+		}
 	}
 }

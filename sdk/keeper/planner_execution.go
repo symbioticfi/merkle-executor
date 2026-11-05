@@ -10,13 +10,18 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-// PrepareBatch preserves configuration order. Idle on-chain gates are evaluated
+// PrepareExecution preserves configuration order. Idle on-chain gates are evaluated
 // again after the selected prefix, so earlier proceeds can activate later work.
-func (p *Planner) PrepareBatch(ctx context.Context, strategies []Strategy) (BatchPlan, error) {
-	var batch BatchPlan
-	reader, ok := p.Chain.(recipes.BatchReader)
-	if !ok {
-		return batch, errors.New("executor batching requires code-override support")
+func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (ExecutionPlan, error) {
+	batch := ExecutionPlan{To: p.Caller}
+	reader, supportsBatch := p.Chain.(recipes.BatchReader)
+	delegated := false
+	if supportsBatch {
+		var err error
+		delegated, err = recipes.SupportsDelegatedBatch(ctx, reader, p.Caller, nil)
+		if err != nil {
+			return batch, err
+		}
 	}
 	reserved := map[common.Address]bool{}
 	for _, strategy := range strategies {
@@ -33,8 +38,14 @@ func (p *Planner) PrepareBatch(ctx context.Context, strategies []Strategy) (Batc
 		if len(plan.Calldata) == 0 {
 			continue
 		}
-		candidate := BatchPlan{Members: append(append([]BatchMember(nil), batch.Members...), BatchMember{Name: strategy.Config.Name, Plan: plan})}
-		if err := validateBatchComposition(candidate, strategies); err != nil {
+		if !delegated {
+			if errors.Is(err, provider.ErrNotReady) {
+				continue
+			}
+			return ExecutionPlan{To: plan.Snapshot.Executor, Members: []PlanMember{{Name: strategy.Config.Name, Plan: plan}}}, nil
+		}
+		candidate := ExecutionPlan{To: p.Caller, Members: append(append([]PlanMember(nil), batch.Members...), PlanMember{Name: strategy.Config.Name, Plan: plan})}
+		if err := validateExecutionComposition(candidate, strategies); err != nil {
 			// Keep exclusive receipt evidence in separate transactions.
 			if len(batch.Members) != 0 {
 				continue
@@ -88,13 +99,14 @@ func (p *Planner) PrepareBatch(ctx context.Context, strategies []Strategy) (Batc
 	if len(batch.Members) == 0 {
 		return batch, provider.ErrNotReady
 	}
-	if err := p.ValidateBatch(ctx, batch); err != nil {
-		return BatchPlan{}, err
+	calls, snapshots, witnesses := batch.calls()
+	if err := recipes.ValidateExecutorBatch(ctx, reader, p.Caller, snapshots, calls, witnesses); err != nil {
+		return ExecutionPlan{}, err
 	}
 	return batch, nil
 }
 
-func (b BatchPlan) calls() ([]recipes.ExecutorCall, []recipes.Snapshot, []map[uint]string) {
+func (b ExecutionPlan) calls() ([]recipes.ExecutorCall, []recipes.Snapshot, []map[uint]string) {
 	calls := make([]recipes.ExecutorCall, len(b.Members))
 	snapshots := make([]recipes.Snapshot, len(b.Members))
 	witnesses := make([]map[uint]string, len(b.Members))
@@ -105,18 +117,9 @@ func (b BatchPlan) calls() ([]recipes.ExecutorCall, []recipes.Snapshot, []map[ui
 	return calls, snapshots, witnesses
 }
 
-func (p *Planner) ValidateBatch(ctx context.Context, batch BatchPlan) error {
-	reader, ok := p.Chain.(recipes.BatchReader)
-	if !ok {
-		return errors.New("executor batching requires code-override support")
-	}
-	calls, snapshots, witnesses := batch.calls()
-	return recipes.ValidateExecutorBatch(ctx, reader, p.Caller, snapshots, calls, witnesses)
-}
-
 // Exclusive providers consume the transaction's full receipt. A shared target
 // must not also be called by another batch member, even on a different account.
-func validateBatchComposition(batch BatchPlan, strategies []Strategy) error {
+func validateExecutionComposition(batch ExecutionPlan, strategies []Strategy) error {
 	owners, claims, targets := map[common.Address]int{}, map[string]common.Address{}, map[string]common.Address{}
 	owner := 0
 	for i, member := range batch.Members {
@@ -130,8 +133,11 @@ func validateBatchComposition(batch BatchPlan, strategies []Strategy) error {
 		if strategy == nil {
 			return errors.New("batch contains an unconfigured strategy")
 		}
-		if err := ValidatePlanComposition(member.Plan.Calldata, strategy.Providers, member.Plan.Outputs); err != nil {
+		if err := validatePlanMember(member.Plan, *strategy); err != nil {
 			return err
+		}
+		if len(strategy.Providers) != len(member.Plan.Outputs) {
+			return errors.New("provider output count differs from prepared plan")
 		}
 		prefix := strconv.Itoa(i) + "/"
 		for j, p := range strategy.Providers {
@@ -148,12 +154,27 @@ func validateBatchComposition(batch BatchPlan, strategies []Strategy) error {
 			}
 			owner++
 		}
-		managed, err := recipes.ManagedTargets(member.Plan.Calldata)
+	}
+	if len(claims) == 0 {
+		return nil
+	}
+	for i, member := range batch.Members {
+		calls, err := recipes.Executions(member.Plan.Calldata)
 		if err != nil {
 			return err
 		}
-		for key, target := range managed {
-			targets[prefix+key] = target
+		for j, call := range calls {
+			managed, err := recipes.ManagedTargets(call)
+			if err != nil {
+				return err
+			}
+			prefix := strconv.Itoa(i) + "/"
+			if len(calls) > 1 {
+				prefix += "cycle" + strconv.Itoa(j) + "/"
+			}
+			for key, target := range managed {
+				targets[prefix+key] = target
+			}
 		}
 	}
 	return validateTargetClaims(targets, owners, claims)
