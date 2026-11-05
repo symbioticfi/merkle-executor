@@ -106,7 +106,7 @@ by signed economics or the supporting prefix. This detects override-code
 introspection or other divergence. Preparation verifies this witness against the complete transaction.
 Recovery of an already signed attempt keeps the exact saved bytes and reconciles
 canonical receipt/execution evidence; it does not rerun economic preparation,
-acquire a fresh quote or rewrite signed values. The lens targets Cancun and is reproducibly generated with pinned solc 0.8.37.
+acquire a fresh quote or rewrite signed values. The lens targets Cancun and is reproducibly generated with pinned solc 0.8.38.
 `make generate` regenerates it; `make -C sdk verify-lens` checks exact artifacts.
 
 Some valid compositions are explicitly unsupported: a needed READ following an

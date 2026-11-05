@@ -11,7 +11,7 @@ with tempfile.TemporaryDirectory(prefix="merkl-guarded-fixtures-") as temporary:
     (root/"src").mkdir()
     for path in HERE.glob("*.sol"):
         (root/"src"/path.name).write_bytes(path.read_bytes())
-    (root/"foundry.toml").write_text('[profile.default]\nsolc="0.8.37"\nevm_version="osaka"\noptimizer=true\noptimizer_runs=200\nvia_ir=true\nbytecode_hash="none"\n[profile.default.lint]\nlint_on_build=false\n')
+    (root/"foundry.toml").write_text('[profile.default]\nsolc="0.8.38"\nevm_version="osaka"\noptimizer=true\noptimizer_runs=200\nvia_ir=true\nbytecode_hash="none"\n[profile.default.lint]\nlint_on_build=false\n')
     subprocess.run(["forge","build","--offline","--root",temporary],check=True)
     for name in ("RecipeCapability","FixtureGuardedAccount","FixtureGuardedDistributor", "FixtureThreeFFactory", "FixtureThreeFRequest"):
         source="FixtureThreeF.sol" if name.startswith("FixtureThreeF") else f"{name}.sol"

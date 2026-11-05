@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.37;
+pragma solidity 0.8.38;
 
 interface FixtureMint { function mint(address,uint256) external; }
 // Local stateful distributor fixture: proof, caller, cumulative ledger and payout

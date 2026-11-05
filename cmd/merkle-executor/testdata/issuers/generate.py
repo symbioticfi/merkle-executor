@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix="merkle-issuer-fixtures-") as temporary:
     (project / "src").mkdir()
     (project / "src/Fixture.sol").write_bytes(source.read_bytes())
     (project / "foundry.toml").write_text(
-        '[profile.default]\nsolc = "0.8.37"\nevm_version = "osaka"\n'
+        '[profile.default]\nsolc = "0.8.38"\nevm_version = "osaka"\n'
         'optimizer = true\noptimizer_runs = 200\nbytecode_hash = "none"\n'
     )
     subprocess.run(["forge", "build", "--offline", "--root", temporary], check=True)

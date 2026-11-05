@@ -21,23 +21,17 @@ and protocol wire schemas are owned and regenerated inside the SDK. `make -C sdk
 
 The SDK includes CoW, Merkl, 3F claim discovery and Liquid Lane consumer RFQ providers. Vault-specific
 connector and 3F auction feeds, sizing and calldata construction remain in
-vault-solver, using the SDK's Prepare/Advance provider contracts.
+vault-solver, using the SDK's recipe-aware provider interface.
 
-Private module reads use normal local GitHub credentials with
-`GOPRIVATE=github.com/symbioticfi/merkle-executor`. CI uses this repository's
-read-only GitHub token. Container builds require a read token supplied through
-BuildKit, for example:
+The public SDK downloads through the Go module proxy. Local, CI and container
+builds need no GitHub token:
 
 ```sh
-docker build --secret id=merkle_sdk_read_token,env=MERKLE_SDK_READ_TOKEN \
-  --build-arg VERSION=release --build-arg COMMIT="$(git rev-parse HEAD)" \
+docker build --build-arg VERSION=release --build-arg COMMIT="$(git rev-parse HEAD)" \
   --build-arg DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -f deploy/Dockerfile -t merkle-executor .
 docker run --rm merkle-executor version
 ```
-
-Set MERKLE_SDK_READ_TOKEN in the environment; do not put its value in build
-arguments, image layers or configuration files.
 
 `make build` accepts the same `VERSION`, `COMMIT`, and `DATE` metadata. CI builds
 an image with explicit values and checks its `version` output. The SDK remains

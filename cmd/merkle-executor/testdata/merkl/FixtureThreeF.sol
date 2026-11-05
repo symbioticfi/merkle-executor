@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.37;
+pragma solidity 0.8.38;
 
 interface ClaimToken { function mint(address,uint256) external; }
 // Local claim fixtures; administrative setters intentionally have no access control.
