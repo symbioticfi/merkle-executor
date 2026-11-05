@@ -294,13 +294,13 @@ func runFrontendGuardedMerkl(t *testing.T, native, current, single bool) {
 	if native {
 		wantDeltaB = "0"
 	}
-	if !current && (len(plan.Outputs) != 6 || len(plan.Outputs[1].Actions) != 2 || plan.Outputs[1].Inputs[0] != "100" || plan.Outputs[1].Inputs[1] != "0" || plan.Outputs[1].Inputs[2] != "200" || plan.Outputs[1].Inputs[3] != wantDeltaB || fetches.Load()-before != 1) {
+	if !current && (len(plan.Outputs) != 6 || len(plan.Outputs[1][0].Actions) != 2 || plan.Outputs[1][0].Inputs[0] != "100" || plan.Outputs[1][0].Inputs[1] != "0" || plan.Outputs[1][0].Inputs[2] != "200" || plan.Outputs[1][0].Inputs[3] != wantDeltaB || fetches.Load()-before != 1) {
 		t.Fatalf("partial guarded reward plan: %+v HTTP=%d", plan.Outputs, fetches.Load()-before)
 	}
-	if current && !single && (len(plan.Outputs[1].Actions) != 1 || plan.Outputs[1].Inputs[0] != fixture.Rewards[1].Token.Big().String() || plan.Outputs[1].Inputs[1] != "200" || fetches.Load()-before != 1) {
+	if current && !single && (len(plan.Outputs[1][0].Actions) != 1 || plan.Outputs[1][0].Inputs[0] != fixture.Rewards[1].Token.Big().String() || plan.Outputs[1][0].Inputs[1] != "200" || fetches.Load()-before != 1) {
 		t.Fatalf("current Merkl plan differs: %+v", plan.Outputs)
 	}
-	if single && (len(plan.Outputs[1].Actions) != 1 || len(plan.Outputs[1].Repeats) != 1 || len(plan.Outputs[1].Inputs) != 0) {
+	if single && (len(plan.Outputs[1][0].Actions) != 1 || len(plan.Outputs[1]) != 2 || len(plan.Outputs[1][0].Inputs) != 0) {
 		t.Fatal("single claim recipe not batched")
 	}
 	tokens := erc20.NewERC20()
@@ -379,8 +379,8 @@ func runFrontendGuardedMerkl(t *testing.T, native, current, single bool) {
 	}
 	plan = response.Plan.Members[0].Plan
 	for i, want := range []string{"150", "50", "300", "100"} {
-		if plan.Outputs[1].Inputs[uint(i)] != want {
-			t.Fatalf("later-root cumulative/delta differs: %v", plan.Outputs[1].Inputs)
+		if plan.Outputs[1][0].Inputs[uint(i)] != want {
+			t.Fatalf("later-root cumulative/delta differs: %v", plan.Outputs[1][0].Inputs)
 		}
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &target, plan.Calldata)

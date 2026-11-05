@@ -70,8 +70,10 @@ func stateCommands() []*cobra.Command {
 				continue
 			}
 			r := row{Identifier: name, ID: job.ID, Phase: job.Phase, Transaction: job.Result.Hash.Hex()}
-			for _, p := range job.Progress {
-				r.Outcomes = append(r.Outcomes, p.Outcome)
+			for _, group := range job.Progress {
+				for _, progress := range group {
+					r.Outcomes = append(r.Outcomes, progress.Outcome)
+				}
 			}
 			rows = append(rows, r)
 		}

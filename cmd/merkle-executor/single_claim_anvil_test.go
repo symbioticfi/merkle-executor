@@ -120,7 +120,7 @@ func TestAnvilSingleThreeFClaimBatchesReadyRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Outputs[0].Repeats) != 1 {
+	if len(plan.Outputs[0]) != 2 {
 		t.Fatal("ready requests were not batched")
 	}
 	// A request becoming unavailable invalidates the complete batch. Its first
@@ -165,8 +165,10 @@ func TestAnvilSingleThreeFClaimBatchesReadyRequests(t *testing.T) {
 	}
 	snapshot := plan.Snapshot
 	snapshot.Execution = &provider.Execution{TxHash: receipt.TxHash, BlockNumber: receipt.BlockNumber, BlockHash: header.Hash(), Logs: nil}
-	if _, err = claimProvider.Advance(ctx, snapshot, plan.Outputs[0], nil); err != nil {
-		t.Fatal(err)
+	for _, output := range plan.Outputs[0] {
+		if _, err = claimProvider.Advance(ctx, snapshot, output, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err = planner.Prepare(ctx, strategy); err == nil {
 		t.Fatal("already claimed and pending requests were resubmitted")

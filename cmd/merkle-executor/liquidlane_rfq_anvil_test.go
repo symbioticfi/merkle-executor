@@ -242,7 +242,7 @@ func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
 		t.Fatal(err)
 	}
 	plan := response.Plan.Members[0].Plan
-	if len(plan.Outputs) != 6 || !bytes.Equal(plan.Outputs[2].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
+	if len(plan.Outputs) != 6 || !bytes.Equal(plan.Outputs[2][0].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
 		t.Fatal("plan did not preserve exact sign or published early")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
@@ -275,14 +275,14 @@ func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
 	}
 	run()
 	job := load()
-	if job.Phase != "authorized" || len(job.Progress) != 6 || job.Progress[2].Outcome != "publication-uncertain" || job.Result.Execution == nil || posts.Load() != 1 || quotes.Load() != 3 {
+	if job.Phase != "authorized" || len(job.Progress) != 6 || job.Progress[2][0].Outcome != "publication-uncertain" || job.Result.Execution == nil || posts.Load() != 1 || quotes.Load() != 3 {
 		t.Fatalf("ambiguous publication lost ownership: phase=%s progress=%+v posts=%d quotes=%d", job.Phase, job.Progress, posts.Load(), quotes.Load())
 	}
-	originalData := bytes.Clone(job.Plan.Outputs[2].Data)
+	originalData := bytes.Clone(job.Plan.Outputs[2][0].Data)
 	treeCalls := curatorCalls.Load()
 	run()
 	job = load()
-	if job.Phase != "authorized" || job.Progress[2].Done || job.Progress[2].Reference != orderID || posts.Load() != 1 || quotes.Load() != 3 || curatorCalls.Load() != treeCalls || !bytes.Equal(originalData, job.Plan.Outputs[2].Data) {
+	if job.Phase != "authorized" || job.Progress[2][0].Done || job.Progress[2][0].Reference != orderID || posts.Load() != 1 || quotes.Load() != 3 || curatorCalls.Load() != treeCalls || !bytes.Equal(originalData, job.Plan.Outputs[2][0].Data) {
 		t.Fatal("API-only fill released work or restart changed identity")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 {
@@ -333,7 +333,7 @@ func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
 		wantOutcome = "cancelled"
 		wantBalances = map[common.Address]int64{tokenIn: 1000, tokenOut: 0}
 	}
-	if job.Phase != "settled" || !job.Progress[2].Done || job.Progress[2].Outcome != wantOutcome {
+	if job.Phase != "settled" || !job.Progress[2][0].Done || job.Progress[2][0].Outcome != wantOutcome {
 		t.Fatal("canonical outcome did not complete", job.Phase, job.Progress)
 	}
 	for token, want := range wantBalances {

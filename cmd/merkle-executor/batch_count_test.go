@@ -234,7 +234,7 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 					if warm {
 						wantRequests, wantArrays, wantMethods = 5, 4, wantMethods-1
 					}
-					if err != nil || requests != wantRequests || arrays != wantArrays || methods != wantMethods || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0].Actions["0:0"], claim) {
+					if err != nil || requests != wantRequests || arrays != wantArrays || methods != wantMethods || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0][0].Actions["0:0"], claim) {
 						t.Fatalf("Merkl Prepare requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
 					}
 					if previous != nil && !bytes.Equal(previous, plan.Calldata) {

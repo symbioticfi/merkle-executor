@@ -183,7 +183,7 @@ func TestStatusWhileDaemonOwnsState(t *testing.T) {
 	cfg.Mode = "send"
 	t.Setenv(cfg.Signer.KeyEnv, "invalid-key-that-status-must-not-read")
 	path := writeCLIConfig(t, directory, cfg)
-	job := keeper.Job{ID: "funding-1", Phase: "authorized", Result: txmanager.Result{Hash: common.HexToHash("0x1234")}, Progress: []provider.Progress{{Outcome: "waiting"}}, Plan: keeper.Plan{Outputs: []provider.Output{{Data: json.RawMessage(`{"privateDetail":"must-not-be-emitted"}`)}}}}
+	job := keeper.Job{ID: "funding-1", Phase: "authorized", Result: txmanager.Result{Hash: common.HexToHash("0x1234")}, Progress: [][]provider.Progress{{{Outcome: "waiting"}}}, Plan: keeper.Plan{Outputs: [][]provider.Output{{{Data: json.RawMessage(`{"privateDetail":"must-not-be-emitted"}`)}}}}}
 	store := seedCLIState(t, cfg, job, false)
 	// Keep the exclusive daemon lock throughout the status command.
 	output, err := executeCLI(t, "status", "--config", path)

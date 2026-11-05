@@ -291,7 +291,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 	if err != nil || len(args[0].([][]byte)) != 2 {
 		t.Fatalf("expected two complete executions: %v", err)
 	}
-	if len(current.Outputs) != 6 || len(current.Outputs[0].Data) == 0 {
+	if len(current.Outputs) != 6 || len(current.Outputs[0][0].Data) == 0 {
 		t.Fatal("test must retain the daemon's unmatched provider envelopes")
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &target, current.Calldata)

@@ -11,7 +11,7 @@ require (
 	github.com/go-logr/zapr v1.3.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/spf13/cobra v1.10.2
-	github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261105073137-628d880179bb
+	github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261105084536-5d7b6067df8b
 	go.uber.org/zap v1.28.0
 	gopkg.in/yaml.v3 v3.0.1
 )
