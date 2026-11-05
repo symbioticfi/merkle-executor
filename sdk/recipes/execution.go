@@ -124,9 +124,6 @@ func ExecutionHasWork(ctx context.Context, reader Reader, snapshot Snapshot, cal
 
 func validateExecutionResults(ctx context.Context, reader Reader, snapshot Snapshot, caller common.Address, calldata []byte, results map[uint]string) ([]byte, error) {
 	batch := isMulticall(calldata)
-	if batch && len(results) != 0 {
-		return nil, errors.New("batch witnesses must be verified per execution")
-	}
 	current, err := openExecution(ctx, reader, snapshot, caller)
 	if err != nil {
 		return nil, err

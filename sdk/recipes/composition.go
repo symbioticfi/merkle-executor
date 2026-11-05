@@ -15,6 +15,23 @@ import (
 // participate. Explicit empty skipped slots cannot emit a Manage event. Arbitrary
 // Call steps are unsupported: they can invoke account.manage indirectly.
 func ManagedTargets(calldata []byte) (map[string]common.Address, error) {
+	if isMulticall(calldata) {
+		calls, err := batchCalls(calldata)
+		if err != nil {
+			return nil, err
+		}
+		targets := map[string]common.Address{}
+		for i, call := range calls {
+			group, err := ManagedTargets(call)
+			if err != nil {
+				return nil, err
+			}
+			for key, target := range group {
+				targets["cycle"+strconv.Itoa(i)+"/"+key] = target
+			}
+		}
+		return targets, nil
+	}
 	method := executorABI.GetABI().Methods["execute"]
 	if len(calldata) < 4 || !bytes.Equal(calldata[:4], method.ID) {
 		return nil, errors.New("invalid prepared execute calldata")

@@ -31,13 +31,13 @@ type Planning interface {
 }
 
 type Job struct {
-	ID         string              `json:"id"`
-	ConfigHash string              `json:"configHash"`
-	Phase      string              `json:"phase"`
-	Plan       Plan                `json:"plan"`
-	Progress   []provider.Progress `json:"progress"`
-	Result     txmanager.Result    `json:"result"`
-	FinishedAt time.Time           `json:"finishedAt"`
+	ID         string                `json:"id"`
+	ConfigHash string                `json:"configHash"`
+	Phase      string                `json:"phase"`
+	Plan       Plan                  `json:"plan"`
+	Progress   [][]provider.Progress `json:"progress"`
+	Result     txmanager.Result      `json:"result"`
+	FinishedAt time.Time             `json:"finishedAt"`
 }
 
 type Keeper struct {
@@ -162,6 +162,11 @@ func validateJob(job Job, s Strategy) error {
 		if len(job.Plan.Outputs) != len(s.Providers) || len(job.Progress) != len(s.Providers) {
 			return errors.New("durable provider state count mismatch")
 		}
+		for i, outputs := range job.Plan.Outputs {
+			if len(outputs) == 0 || len(outputs) != len(job.Progress[i]) {
+				return errors.New("durable provider execution count mismatch")
+			}
+		}
 	}
 	return nil
 }
@@ -234,21 +239,23 @@ func (k *Keeper) advanceStrategy(ctx context.Context, s Strategy) error {
 		}
 		done := true
 		for i, p := range s.Providers {
-			if job.Progress[i].Done {
-				continue
+			for j, output := range job.Plan.Outputs[i] {
+				if job.Progress[i][j].Done {
+					continue
+				}
+				progress, err := p.Advance(ctx, snapshot, output, job.Progress[i][j].State)
+				if err != nil {
+					return errors.Errorf("reconcile provider %d: %w", i, err)
+				}
+				if err := k.Planner.VerifyConfirmedSnapshot(ctx, snapshot); err != nil {
+					return err
+				}
+				job.Progress[i][j] = progress
+				if err := k.Store.Save(key(s.Config.Name), job); err != nil {
+					return err
+				}
+				done = done && progress.Done
 			}
-			progress, err := p.Advance(ctx, snapshot, job.Plan.Outputs[i], job.Progress[i].State)
-			if err != nil {
-				return errors.Errorf("reconcile provider %d: %w", i, err)
-			}
-			if err := k.Planner.VerifyConfirmedSnapshot(ctx, snapshot); err != nil {
-				return err
-			}
-			job.Progress[i] = progress
-			if err := k.Store.Save(key(s.Config.Name), job); err != nil {
-				return err
-			}
-			done = done && progress.Done
 		}
 		if done {
 			job.Phase = "settled"
@@ -256,9 +263,11 @@ func (k *Keeper) advanceStrategy(ctx context.Context, s Strategy) error {
 			if err := k.Store.Save(key(s.Config.Name), job); err != nil {
 				return err
 			}
-			outcomes := make([]string, len(job.Progress))
-			for i, p := range job.Progress {
-				outcomes[i] = p.Outcome
+			var outcomes []string
+			for _, group := range job.Progress {
+				for _, p := range group {
+					outcomes = append(outcomes, p.Outcome)
+				}
 			}
 			k.Log.Info("strategy cycle finished", "strategy", s.Config.Name, "transaction", job.Result.Hash.Hex(), "outcomes", outcomes)
 		}

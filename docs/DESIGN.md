@@ -111,8 +111,10 @@ for an issuer payout. Calls, reads, amount selection, authorization, claim gates
 and output checks are committed in financial recipes. Standalone Merkl and 3F
 claim recipes delegate claim validity to their native contracts. Their isolated
 providers discover eligible rewards/requests and fill one call per execution;
-`Output.Repeats` supplies distinct authorized payloads for the executor multicall.
-Repeats cannot contain outer reads, bindings, funding steps or other effects.
+Each provider returns ordinary outputs, one per execution, with independently
+validated inputs and calldata. The standard assembler builds every entry and the
+existing executor multicall combines them atomically. The journal tracks each
+output separately for reconciliation.
 Other native protocols require no selector
 or deployment catalogue in Go. Separate request and claim recipes read their own
 current pending/eligible state; a successful request transaction does not establish

@@ -150,13 +150,13 @@ func TestClaimsAllOwnedReadyRequestsAndSkipsPending(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			variants := append([]map[string]hexutil.Bytes{out.Actions}, out.Repeats...)
+			variants := out
 			want := int((count + 3) / 4)
 			if len(variants) != want {
 				t.Fatalf("got %d want %d", len(variants), want)
 			}
 			for i, v := range variants {
-				a := common.BytesToAddress(v[cfg.Key][cfg.Offset : cfg.Offset+32])
+				a := common.BytesToAddress(v.Actions[cfg.Key][cfg.Offset : cfg.Offset+32])
 				if a != requestAt(cfg.Factory, uint64(i*4)) {
 					t.Fatal("missed or repeated request")
 				}

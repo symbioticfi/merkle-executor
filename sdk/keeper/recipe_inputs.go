@@ -23,8 +23,8 @@ func (recipeInputs) Prepare(context.Context, provider.Snapshot) (provider.Output
 func (recipeInputs) RecipeRequirements(provider.Snapshot, recipes.Recipe, *recipes.Tree) (RecipeRequirements, error) {
 	return RecipeRequirements{}, nil
 }
-func (recipeInputs) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) (provider.Output, error) {
-	return provider.Output{}, nil
+func (recipeInputs) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) ([]provider.Output, error) {
+	return []provider.Output{{}}, nil
 }
 func (recipeInputs) Advance(ctx context.Context, s provider.Snapshot, _ provider.Output, _ json.RawMessage) (provider.Progress, error) {
 	if err := ctx.Err(); err != nil {

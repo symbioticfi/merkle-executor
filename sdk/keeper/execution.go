@@ -285,9 +285,13 @@ func newExecution(plan ExecutionPlan, strategies []Strategy) (ExecutionJob, erro
 	for _, member := range plan.Members {
 		for _, strategy := range strategies {
 			if strategy.Config.Name == member.Name {
+				progress := make([][]provider.Progress, len(strategy.Providers))
+				for i, outputs := range member.Plan.Outputs {
+					progress[i] = make([]provider.Progress, len(outputs))
+				}
 				execution.Members = append(execution.Members, ExecutionMember{Name: member.Name, Job: Job{
 					ID: execution.ID, ConfigHash: strategy.Config.Fingerprint(), Phase: "prepared", Plan: member.Plan,
-					Progress: make([]provider.Progress, len(strategy.Providers)),
+					Progress: progress,
 				}})
 				break
 			}

@@ -53,36 +53,36 @@ func (p *Provider) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t *
 	}
 	return keeper.RecipeRequirements{Inputs: []uint{0}}, nil
 }
-func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, _ map[uint]*big.Int) (provider.Output, error) {
+func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, _ map[uint]*big.Int) ([]provider.Output, error) {
 	if err := ctx.Err(); err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	b, err := derive(s, r, t)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	if b == nil {
 		return derived.Empty(policy)
 	}
 	if s.BlockNumber == nil || !s.BlockNumber.IsUint64() {
-		return provider.Output{}, errors.New("Aave capacity requires pinned block")
+		return nil, errors.New("Aave capacity requires pinned block")
 	}
 	var artifact struct{ Runtime hexutil.Bytes }
 	if json.Unmarshal(artifactJSON, &artifact) != nil || len(artifact.Runtime) == 0 {
-		return provider.Output{}, errors.New("invalid Aave capacity artifact")
+		return nil, errors.New("invalid Aave capacity artifact")
 	}
 	args, err := capacityArgs.Pack(b.Pool, b.Asset, s.Account, b.Floor)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	query := append(selector("maxBorrow(address,address,address,uint256)"), args...)
 	raw, witness, err := recipes.ProbePrefix(ctx, p.reader, recipes.Snapshot{BlockNumber: s.BlockNumber.Uint64(), Executor: s.Executor, Account: s.Account, Caller: s.Caller}, r, b.Before, recipes.PrefixRuntime{Tree: t}, artifact.Runtime, query)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	values, err := uintArgs.Unpack(raw)
 	if err != nil || len(values) != 1 {
-		return provider.Output{}, errors.New("invalid Aave capacity reply")
+		return nil, errors.New("invalid Aave capacity reply")
 	}
 	out := provider.Output{Inputs: map[uint]string{0: values[0].(*big.Int).String()}, Results: recipes.ResultsWitness(witness)}
 	return derived.Encode(policy, saved{Input: 0}, out, true)

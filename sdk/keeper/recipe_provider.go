@@ -22,8 +22,9 @@ type RecipeRequirements struct {
 // RecipeProvider derives its configuration from authenticated program bytes.
 // The SDK invokes this only after validating the active root, chain and account.
 // Inputs, results, recipe bytes and permissions are copied for each invocation.
-// Recovery uses the persisted Output and never invokes these methods.
+// Each output supplies one execution's runtime data. Recovery uses the persisted
+// outputs and never invokes these methods.
 type RecipeProvider interface {
 	RecipeRequirements(provider.Snapshot, recipes.Recipe, *recipes.Tree) (RecipeRequirements, error)
-	PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) (provider.Output, error)
+	PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) ([]provider.Output, error)
 }

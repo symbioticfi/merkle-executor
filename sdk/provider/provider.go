@@ -97,14 +97,11 @@ type Snapshot struct {
 // Inputs are decimal uint256 strings. Duplicate assignments are rejected.
 type Output struct {
 	// Results binds replayed prefix reads to the full original execution.
-	Results map[uint]string          `json:"results,omitempty"`
-	Inputs  map[uint]string          `json:"inputs,omitempty"`
-	Actions map[string]hexutil.Bytes `json:"actions,omitempty"`
-	// Repeats runs the same single-call recipe with another set of owned action
-	// bytes. Each variant is mask-checked and the complete multicall is simulated.
-	Repeats   []map[string]hexutil.Bytes `json:"repeats,omitempty"`
-	SkipSteps []uint                     `json:"skipSteps,omitempty"`
-	Data      json.RawMessage            `json:"data,omitempty"`
+	Results   map[uint]string          `json:"results,omitempty"`
+	Inputs    map[uint]string          `json:"inputs,omitempty"`
+	Actions   map[string]hexutil.Bytes `json:"actions,omitempty"`
+	SkipSteps []uint                   `json:"skipSteps,omitempty"`
+	Data      json.RawMessage          `json:"data,omitempty"`
 }
 
 // Progress separates confirmed recipe execution from external settlement.

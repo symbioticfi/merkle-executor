@@ -241,8 +241,8 @@ func TestBatchProtectsTransactionWideReceiptOwnership(t *testing.T) {
 				{Config: Config{Name: "two"}, Providers: providers},
 			}
 			batch := ExecutionPlan{Members: []PlanMember{
-				{Name: "one", Plan: Plan{Calldata: compositionCalldata(t, first), Outputs: make([]provider.Output, 1)}},
-				{Name: "two", Plan: Plan{Calldata: compositionCalldata(t, tc.target), Outputs: make([]provider.Output, 1)}},
+				{Name: "one", Plan: Plan{Calldata: compositionCalldata(t, first), Outputs: [][]provider.Output{{{}}}}},
+				{Name: "two", Plan: Plan{Calldata: compositionCalldata(t, tc.target), Outputs: [][]provider.Output{{{}}}}},
 			}}
 			if err := validateExecutionComposition(batch, strategies); (err == nil) != tc.want {
 				t.Fatalf("receipt ownership: %v", err)
@@ -300,7 +300,7 @@ func TestExecutionCompositionIncludesRepeatedNativeCalls(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				plan := ExecutionPlan{Members: []PlanMember{{Name: "claim", Plan: Plan{Calldata: compositionCalldata(t, target), Outputs: make([]provider.Output, 1)}}, {Name: "native", Plan: Plan{Calldata: repeated, Outputs: make([]provider.Output, 1)}}}}
+				plan := ExecutionPlan{Members: []PlanMember{{Name: "claim", Plan: Plan{Calldata: compositionCalldata(t, target), Outputs: [][]provider.Output{{{}}}}}, {Name: "native", Plan: Plan{Calldata: repeated, Outputs: [][]provider.Output{{{}}}}}}}
 				err = validateExecutionComposition(plan, strategies)
 				if (err != nil) != (exclusive && collision) {
 					t.Fatalf("unexpected composition result: %v", err)

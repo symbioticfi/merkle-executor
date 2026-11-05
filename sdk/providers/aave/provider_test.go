@@ -180,7 +180,11 @@ func TestCapacityProbeErrorsAndAdvance(t *testing.T) {
 	}
 	outer := argTypes("uint256[]", "bytes")
 	reader.raw = pack(t, outer, []*big.Int{big.NewInt(0)}, pack(t, uintArgs, big.NewInt(42)))
-	out, err := p.PrepareRecipe(t.Context(), s, r, tree, nil)
+	outputs, err := p.PrepareRecipe(t.Context(), s, r, tree, nil)
+	var out provider.Output
+	if len(outputs) == 1 {
+		out = outputs[0]
+	}
 	if err != nil || out.Inputs[0] != "42" {
 		t.Fatal(out, err)
 	}

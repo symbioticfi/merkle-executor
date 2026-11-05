@@ -129,27 +129,27 @@ func (p *Automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t 
 	}
 	return req, nil
 }
-func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
+func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) ([]provider.Output, error) {
 	claims, err := p.derive(s, r, t)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	if len(claims) == 0 {
 		return derived.Empty(automaticPolicy)
 	}
 	if err = protocolio.Snapshot(s); err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	if !s.ChainID.IsInt64() {
-		return provider.Output{}, errors.New("Merkl API chain ID exceeds int64")
+		return nil, errors.New("Merkl API chain ID exceeds int64")
 	}
 	client, err := NewClient(rewardHTTP(), p.deps.HTTP, p.deps.LookupSecret)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	entries, err := client.Rewards(ctx, s.Account, s.ChainID)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	if len(r.Queries) == 0 && len(r.Steps) == 1 && len(claims) == 1 && len(claims[0].action.Bindings) == 0 && len(claims[0].layout.tokens) == 1 && claims[0].action.Slot.Gate.Source == recipes.Literal && claims[0].action.Slot.Gate.Value.Cmp(big.NewInt(1)) == 0 {
 		return p.prepareAll(ctx, s, claims[0], entries)
@@ -163,21 +163,21 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		allOptional = allOptional && len(claim.cfg.ClaimableInputs) == 1
 		selected, prepared, err := p.prepareClaim(ctx, s, claim.cfg, entries, used)
 		if err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 		var metadata map[string]string
 		if err = json.Unmarshal(prepared.Data, &metadata); err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 		anyClaimable = anyClaimable || metadata["claimable"] != "0"
 		payload := claim.layout.payload(claim.action.Leaf.Data, prepared.Actions[claim.cfg.Action])
 		prepared.Actions[claim.cfg.Action] = payload
 		if err = derived.BindOutput(derived.SignTemplate{Action: claim.action}, payload, results, &prepared); err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 		for index, value := range prepared.Inputs {
 			if old, ok := out.Inputs[index]; ok && old != value {
-				return provider.Output{}, errors.New("Merkl recipe input has conflicting claim meanings")
+				return nil, errors.New("Merkl recipe input has conflicting claim meanings")
 			}
 			out.Inputs[index] = value
 		}
@@ -188,7 +188,7 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		}
 	}
 	if !anyClaimable && !allOptional {
-		return provider.Output{}, errors.Errorf("%w: Merkl rewards below minClaimable", provider.ErrNotReady)
+		return nil, errors.Errorf("%w: Merkl rewards below minClaimable", provider.ErrNotReady)
 	}
 	return derived.Encode(automaticPolicy, cfg, out, true)
 }
@@ -253,16 +253,13 @@ func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provid
 	if !matched {
 		return provider.Progress{Done: true}, nil
 	}
-	if len(cfg.Claims) == 0 || len(inner.SkipSteps) != 0 || (len(inner.Repeats) == 0 && len(inner.Actions) != len(cfg.Claims)) || (len(inner.Repeats) != 0 && (len(inner.Actions) != 1 || len(cfg.Claims) != 1+len(inner.Repeats) || len(inner.Inputs) != 0 || len(inner.Results) != 0)) {
+	if len(cfg.Claims) == 0 || len(inner.SkipSteps) != 0 || len(inner.Actions) != len(cfg.Claims) {
 		return provider.Progress{}, errors.New("persisted Merkl claim shape differs")
 	}
 	seen := map[string]bool{}
-	for i, claim := range cfg.Claims {
+	for _, claim := range cfg.Claims {
 		actions := inner.Actions
-		if len(inner.Repeats) != 0 && i > 0 {
-			actions = inner.Repeats[i-1]
-		}
-		if !reflect.DeepEqual(claim.HTTP, rewardHTTP()) || claim.Multicall3 != protocolio.StandardMulticall3 || claim.MinClaimable != "1" || claim.SkipIfEmpty || claim.DedicatedClaimGroup || len(claim.AmountInputs) != 0 || !claim.AllowIdle || len(claim.ClaimableInputs) > 1 || (seen[claim.Action] && len(inner.Repeats) == 0) || len(actions) != 1 && len(inner.Repeats) != 0 || len(actions[claim.Action]) == 0 {
+		if !reflect.DeepEqual(claim.HTTP, rewardHTTP()) || claim.Multicall3 != protocolio.StandardMulticall3 || claim.MinClaimable != "1" || claim.SkipIfEmpty || claim.DedicatedClaimGroup || len(claim.AmountInputs) != 0 || !claim.AllowIdle || len(claim.ClaimableInputs) > 1 || seen[claim.Action] || len(actions[claim.Action]) == 0 {
 			return provider.Progress{}, errors.New("persisted Merkl automatic constants differ")
 		}
 		seen[claim.Action] = true

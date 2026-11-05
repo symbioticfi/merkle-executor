@@ -34,7 +34,7 @@ func (s *recoveryStore) Save(key string, value any) error {
 			s.failPhase = ""
 			return errors.New("injected journal write failure")
 		}
-		if s.failDone && len(job.Progress) > 0 && job.Progress[0].Done {
+		if s.failDone && len(job.Progress) > 0 && job.Progress[0][0].Done {
 			s.failDone = false
 			return errors.New("injected progress write failure")
 		}
@@ -49,7 +49,7 @@ type recoveryPlanner struct {
 
 func (p *recoveryPlanner) Prepare(_ context.Context, s Strategy) (Plan, error) {
 	p.prepared++
-	return Plan{Snapshot: provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(10), BlockHash: common.HexToHash("0x10"), Timestamp: 100, Account: common.HexToAddress(s.Config.Account), Executor: common.HexToAddress(s.Config.Executor), Caller: common.HexToAddress("0x30")}, Recipe: recipes.Snapshot{Account: common.HexToAddress(s.Config.Account), Executor: common.HexToAddress(s.Config.Executor), Caller: common.HexToAddress("0x30")}, Calldata: executor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil), Outputs: []provider.Output{{Data: json.RawMessage(`{"uid":"stable-order"}`)}}}, nil
+	return Plan{Snapshot: provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(10), BlockHash: common.HexToHash("0x10"), Timestamp: 100, Account: common.HexToAddress(s.Config.Account), Executor: common.HexToAddress(s.Config.Executor), Caller: common.HexToAddress("0x30")}, Recipe: recipes.Snapshot{Account: common.HexToAddress(s.Config.Account), Executor: common.HexToAddress(s.Config.Executor), Caller: common.HexToAddress("0x30")}, Calldata: executor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil), Outputs: [][]provider.Output{{{Data: json.RawMessage(`{"uid":"stable-order"}`)}}}}, nil
 }
 func (p *recoveryPlanner) PrepareExecution(ctx context.Context, strategies []Strategy) (ExecutionPlan, error) {
 	return prepareFixture(ctx, strategies, p.Prepare)
@@ -290,7 +290,7 @@ func TestRecoveryProviderPersistenceFailureReusesDeterministicOutput(t *testing.
 		t.Fatal("injected provider persistence failure ignored")
 	}
 	job := loadRecoveryJob(t, store, "cow")
-	if job.Phase != "authorized" || job.Progress[0].Done {
+	if job.Phase != "authorized" || job.Progress[0][0].Done {
 		t.Fatal("failed save committed completion")
 	}
 	restarted := *k
@@ -315,7 +315,7 @@ func TestRecoveryReorgCannotCommitProviderCompletion(t *testing.T) {
 		t.Fatal("provider snapshot reorg ignored")
 	}
 	job := loadRecoveryJob(t, store, "cow")
-	if job.Phase != "authorized" || job.Progress[0].Done {
+	if job.Phase != "authorized" || job.Progress[0][0].Done {
 		t.Fatal("reorganized provider result was committed")
 	}
 }
@@ -401,7 +401,7 @@ func TestRecoveryUnsignedPreparedDataIsRefreshedBeforeSigning(t *testing.T) {
 		t.Fatal(err)
 	}
 	old.Calldata = []byte{9, 9, 9}
-	job := Job{ID: "expired-unsigned-order", ConfigHash: strategy.Config.Fingerprint(), Phase: "prepared", Plan: old, Progress: make([]provider.Progress, len(strategy.Providers))}
+	job := Job{ID: "expired-unsigned-order", ConfigHash: strategy.Config.Fingerprint(), Phase: "prepared", Plan: old, Progress: [][]provider.Progress{{{}}}}
 	if err := store.Save(key(strategy.Config.Name), job); err != nil {
 		t.Fatal(err)
 	}
@@ -506,5 +506,26 @@ func TestConfirmedSnapshotRejectsHeadReorgAndMalformedHeaders(t *testing.T) {
 				t.Fatal("invalid confirmation snapshot accepted")
 			}
 		})
+	}
+}
+
+func TestRecoveryResumesEachProviderOutputIndependently(t *testing.T) {
+	k, store, planner, sender, runtime := recoveryHarness(t)
+	strategy := k.Strategies[0]
+	plan, err := planner.Prepare(t.Context(), strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Outputs[0] = []provider.Output{{Data: json.RawMessage(`{"claim":"first"}`)}, {Data: json.RawMessage(`{"claim":"second"}`)}}
+	job := Job{ID: "batch-claims", ConfigHash: strategy.Config.Fingerprint(), Phase: "authorized", Plan: plan, Progress: [][]provider.Progress{{{Done: true, Reference: "first"}, {}}}}
+	if err := store.Save(key(strategy.Config.Name), job); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.advanceStrategy(t.Context(), strategy); err != nil {
+		t.Fatal(err)
+	}
+	saved := loadRecoveryJob(t, store, strategy.Config.Name)
+	if runtime.calls != 1 || !bytes.Equal(runtime.outputs[0], plan.Outputs[0][1].Data) || saved.Phase != "settled" || !saved.Progress[0][1].Done || saved.Progress[0][0].Reference != "first" || sender.broadcasts != 0 {
+		t.Fatal("recovery repeated completed work or lost per-execution progress")
 	}
 }

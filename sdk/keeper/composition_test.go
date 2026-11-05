@@ -10,6 +10,7 @@ import (
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
 type exclusiveProvider struct {
@@ -50,8 +51,8 @@ func TestRecoveryRejectsAmbiguousCompositionBeforeRelease(t *testing.T) {
 			second := &exclusiveProvider{claims: map[string]common.Address{"1:0": target}}
 			k.Strategies[0].Providers = []provider.Provider{first, second}
 			job := Job{ID: "owned", ConfigHash: k.Strategies[0].Config.Fingerprint(), Phase: phase,
-				Plan:     Plan{Calldata: compositionCalldata(t, target, target), Outputs: make([]provider.Output, 2)},
-				Progress: []provider.Progress{{Done: true}, {}}}
+				Plan:     Plan{Calldata: compositionCalldata(t, target, target), Outputs: [][]provider.Output{{{}}, {{}}}},
+				Progress: [][]provider.Progress{{{Done: true}}, {{}}}}
 			if err := store.Save(key("cow"), job); err != nil {
 				t.Fatal(err)
 			}
@@ -66,7 +67,7 @@ func TestRecoveryRejectsAmbiguousCompositionBeforeRelease(t *testing.T) {
 				t.Fatal("ambiguous work submitted, released or advanced")
 			}
 			got := loadRecoveryJob(t, store, "cow")
-			if got.Phase != phase || !got.Progress[0].Done {
+			if got.Phase != phase || !got.Progress[0][0].Done {
 				t.Fatal("durable job mutated")
 			}
 		})
@@ -146,7 +147,7 @@ func TestFreshCompositionFailsBeforeSigning(t *testing.T) {
 	target := common.HexToAddress("0x123")
 	pr := &exclusiveProvider{claims: map[string]common.Address{"0:0": target}}
 	k.Strategies[0].Providers = []provider.Provider{pr}
-	k.Planner = &compositionPlanner{plan: Plan{Calldata: compositionCalldata(t, target, target), Outputs: []provider.Output{{}}}}
+	k.Planner = &compositionPlanner{plan: Plan{Calldata: compositionCalldata(t, target, target), Outputs: [][]provider.Output{{{}}}}}
 	if err := k.Tick(context.Background()); err == nil {
 		t.Fatal("fresh ambiguous composition accepted")
 	}
@@ -156,5 +157,28 @@ func TestFreshCompositionFailsBeforeSigning(t *testing.T) {
 	var job Job
 	if found, err := store.Load(key("cow"), &job); err != nil || found {
 		t.Fatal("invalid composition persisted as executable work")
+	}
+}
+
+func TestCompositionChecksEveryProviderExecution(t *testing.T) {
+	target, other := common.HexToAddress("0x123"), common.HexToAddress("0x456")
+	runtime := &exclusiveRecipeProvider{target: target}
+	for _, tc := range []struct {
+		name   string
+		second common.Address
+		ok     bool
+	}{
+		{"all owned", target, true}, {"later target changed", other, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			batch, err := recipes.Multicall([][]byte{compositionCalldata(t, target), compositionCalldata(t, tc.second)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = ValidatePlanComposition(batch, []provider.Provider{runtime}, [][]provider.Output{{{}, {}}})
+			if (err == nil) != tc.ok {
+				t.Fatal(err)
+			}
+		})
 	}
 }

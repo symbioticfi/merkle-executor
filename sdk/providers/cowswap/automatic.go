@@ -146,40 +146,40 @@ func (p *Automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t 
 	}
 	return order.requirements, nil
 }
-func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
+func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) ([]provider.Output, error) {
 	order, err := p.derive(s, r, t)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	if order == nil {
 		return derived.Empty(automaticPolicy)
 	}
 	amount, err := recipes.EconomicResult(order.budget, results)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	minimum := new(big.Int)
 	for _, floor := range order.floors {
 		value, err := recipes.EconomicResult(floor, results)
 		if err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 		if value.Cmp(minimum) > 0 {
 			minimum = value
 		}
 	}
 	if amount.Sign() == 0 || minimum.Sign() == 0 {
-		return provider.Output{}, provider.ErrNotReady
+		return nil, provider.ErrNotReady
 	}
 	order.cfg.SellAmount = amount.String()
 	order.cfg.MinBuyAmount = minimum.String()
 	runtime, err := New(order.cfg, p.deps)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	out, err := runtime.Prepare(ctx, s)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	payload := out.Actions[order.cfg.Action]
 	for _, floor := range order.floors {
@@ -188,14 +188,14 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		}
 		expected, err := recipes.EconomicResult(floor, results)
 		if err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 		if new(big.Int).SetBytes(payload[order.template.Offset+160:order.template.Offset+192]).Cmp(expected) != 0 {
-			return provider.Output{}, errors.New("CoW dynamic minimum conflicts with exact recipe result binding")
+			return nil, errors.New("CoW dynamic minimum conflicts with exact recipe result binding")
 		}
 	}
 	if err = derived.BindOutput(order.template, payload, results, &out); err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	return derived.Encode(automaticPolicy, order.cfg, out, true)
 }

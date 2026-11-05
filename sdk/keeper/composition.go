@@ -5,6 +5,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"strconv"
 )
 
 // ValidateComposition rejects ambiguous receipt attribution without changing the
@@ -13,14 +14,14 @@ func ValidateComposition(calldata []byte, providers []provider.Provider) error {
 	return validateComposition(calldata, providers, nil)
 }
 
-func ValidatePlanComposition(calldata []byte, providers []provider.Provider, outputs []provider.Output) error {
+func ValidatePlanComposition(calldata []byte, providers []provider.Provider, outputs [][]provider.Output) error {
 	if len(providers) != len(outputs) {
 		return errors.New("provider output count differs from prepared plan")
 	}
 	return validateComposition(calldata, providers, outputs)
 }
 
-func validateComposition(calldata []byte, providers []provider.Provider, outputs []provider.Output) error {
+func validateComposition(calldata []byte, providers []provider.Provider, outputs [][]provider.Output) error {
 	owners := make(map[common.Address]int)
 	claims := make(map[string]common.Address)
 	for i, p := range providers {
@@ -42,12 +43,25 @@ func validateComposition(calldata []byte, providers []provider.Provider, outputs
 	return validateTargetClaims(targets, owners, claims)
 }
 
-func exclusiveTargets(p provider.Provider, outputs []provider.Output, i int) (map[string]common.Address, error) {
+func exclusiveTargets(p provider.Provider, outputs [][]provider.Output, i int) (map[string]common.Address, error) {
 	if exclusive, ok := p.(provider.ExclusiveOutputTargetProvider); ok {
-		if i >= len(outputs) {
+		if i >= len(outputs) || len(outputs[i]) == 0 {
 			return nil, errors.New("derived exclusive targets require persisted provider outputs")
 		}
-		return exclusive.ExclusiveOutputTargets(outputs[i])
+		all := map[string]common.Address{}
+		for j, output := range outputs[i] {
+			targets, err := exclusive.ExclusiveOutputTargets(output)
+			if err != nil {
+				return nil, err
+			}
+			for key, target := range targets {
+				if len(outputs[i]) > 1 {
+					key = "cycle" + strconv.Itoa(j) + "/" + key
+				}
+				all[key] = target
+			}
+		}
+		return all, nil
 	}
 	if exclusive, ok := p.(provider.ExclusiveTargetProvider); ok {
 		return exclusive.ExclusiveTargets(), nil

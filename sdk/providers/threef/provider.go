@@ -61,22 +61,22 @@ func (*Provider) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t *re
 	}
 	return keeper.RecipeRequirements{Actions: []string{c.Key}}, nil
 }
-func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, tree *recipes.Tree, _ map[uint]*big.Int) (provider.Output, error) {
+func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, tree *recipes.Tree, _ map[uint]*big.Int) ([]provider.Output, error) {
 	c, ok, err := derive(s, r, tree)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	if !ok {
 		return derived.Empty(policy)
 	}
 	if err := protocolio.Snapshot(s); err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	count, err := p.count(ctx, s, c.Factory)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
-	var out provider.Output
+	var outputs []provider.Output
 	binding := request.NewThreeFRequest()
 	balanceData, _ := binding.TryPackBalancesOf(s.Account)
 	readyData, _ := binding.TryPackCanWithdraw()
@@ -89,18 +89,18 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 		}
 		balances, err := protocolio.ReadGroup(ctx, p.chain, reads...)
 		if err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 		var owned []common.Address
 		reads = nil
 		for i := start; i < end; i++ {
 			data, err := balances.At(int(i - start)).CallData()
 			if err != nil {
-				return provider.Output{}, err
+				return nil, err
 			}
 			balance, err := binding.UnpackBalancesOf(data)
 			if err != nil {
-				return provider.Output{}, errors.New("invalid 3F balancesOf response")
+				return nil, errors.New("invalid 3F balancesOf response")
 			}
 			if balance.PtShares.Sign() == 0 && balance.YtShares.Sign() == 0 {
 				continue
@@ -111,34 +111,33 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 		}
 		ready, err := protocolio.ReadGroup(ctx, p.chain, reads...)
 		if err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 		for i, address := range owned {
 			data, err := ready.At(i).CallData()
 			if err != nil {
-				return provider.Output{}, err
+				return nil, err
 			}
 			allowed, err := binding.UnpackCanWithdraw(data)
 			if err != nil {
-				return provider.Output{}, errors.New("invalid 3F canWithdraw response")
+				return nil, errors.New("invalid 3F canWithdraw response")
 			}
 			if !allowed {
 				continue
 			}
 			payload := bytes.Clone(c.Template)
 			copy(payload[c.Offset:c.Offset+32], common.LeftPadBytes(address.Bytes(), 32))
-			variant := map[string]hexutil.Bytes{c.Key: payload}
-			if out.Actions == nil {
-				out.Actions = variant
-			} else {
-				out.Repeats = append(out.Repeats, variant)
+			prepared, err := derived.Encode(policy, c, provider.Output{Actions: map[string]hexutil.Bytes{c.Key: payload}}, true)
+			if err != nil {
+				return nil, err
 			}
+			outputs = append(outputs, prepared...)
 		}
 	}
-	if out.Actions == nil {
-		return provider.Output{}, errors.Errorf("%w: no ready 3F requests", provider.ErrNotReady)
+	if len(outputs) == 0 {
+		return nil, errors.Errorf("%w: no ready 3F requests", provider.ErrNotReady)
 	}
-	return derived.Encode(policy, c, out, true)
+	return outputs, nil
 }
 func requestAt(f common.Address, index uint64) common.Address {
 	return crypto.CreateAddress(f, 7+3*index)
@@ -214,22 +213,16 @@ func (*Provider) Advance(_ context.Context, s provider.Snapshot, out provider.Ou
 	if !bytes.Equal(c.Template, expected) || len(inner.Inputs)+len(inner.Results)+len(inner.SkipSteps) != 0 {
 		return provider.Progress{}, errors.New("invalid persisted 3F claim")
 	}
-	variants := append([]map[string]hexutil.Bytes{inner.Actions}, inner.Repeats...)
-	seen := map[common.Address]bool{}
-	for _, variant := range variants {
-		data := variant[c.Key]
-		if len(variant) != 1 || len(data) != len(expected) {
-			return provider.Progress{}, errors.New("invalid persisted 3F action")
-		}
-		address, err := derived.WordAddress(data[offset : offset+32])
-		if err != nil || seen[address] {
-			return provider.Progress{}, errors.New("invalid persisted 3F request")
-		}
-		seen[address] = true
-		copy(expected[offset:offset+32], data[offset:offset+32])
-		if !bytes.Equal(data, expected) {
-			return provider.Progress{}, errors.New("persisted 3F action changed pinned data")
-		}
+	data := inner.Actions[c.Key]
+	if len(inner.Actions) != 1 || len(data) != len(expected) {
+		return provider.Progress{}, errors.New("invalid persisted 3F action")
+	}
+	if _, err := derived.WordAddress(data[offset : offset+32]); err != nil {
+		return provider.Progress{}, errors.New("invalid persisted 3F request")
+	}
+	copy(expected[offset:offset+32], data[offset:offset+32])
+	if !bytes.Equal(data, expected) {
+		return provider.Progress{}, errors.New("persisted 3F action changed pinned data")
 	}
 	return provider.Progress{Done: true}, nil
 }

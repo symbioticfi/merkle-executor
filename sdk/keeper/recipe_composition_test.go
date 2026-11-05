@@ -37,9 +37,9 @@ func (p *exclusiveRecipeProvider) RecipeRequirements(provider.Snapshot, recipes.
 	}
 	return req, nil
 }
-func (p *exclusiveRecipeProvider) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) (provider.Output, error) {
+func (p *exclusiveRecipeProvider) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) ([]provider.Output, error) {
 	p.calls++
-	return provider.Output{Results: p.results}, nil
+	return []provider.Output{{Results: p.results}}, nil
 }
 func (*exclusiveRecipeProvider) Advance(context.Context, provider.Snapshot, provider.Output, json.RawMessage) (provider.Progress, error) {
 	return provider.Progress{Done: true}, nil

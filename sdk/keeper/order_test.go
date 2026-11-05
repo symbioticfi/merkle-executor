@@ -42,7 +42,7 @@ func TestConfiguredPrioritySurvivesPendingRecovery(t *testing.T) {
 			if pending {
 				s := k.Strategies[len(k.Strategies)-1]
 				sender.pending = "in-flight"
-				job := Job{ID: sender.pending, ConfigHash: s.Config.Fingerprint(), Phase: "prepared", Plan: Plan{Snapshot: provider.Snapshot{Account: common.HexToAddress(s.Config.Account)}, Outputs: []provider.Output{{}}}, Progress: []provider.Progress{{}}}
+				job := Job{ID: sender.pending, ConfigHash: s.Config.Fingerprint(), Phase: "prepared", Plan: Plan{Snapshot: provider.Snapshot{Account: common.HexToAddress(s.Config.Account)}, Outputs: [][]provider.Output{{{}}}}, Progress: [][]provider.Progress{{{}}}}
 				if err := store.Save(key(s.Config.Name), job); err != nil {
 					t.Fatal(err)
 				}

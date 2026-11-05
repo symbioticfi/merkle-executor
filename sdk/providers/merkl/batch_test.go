@@ -131,20 +131,20 @@ func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if fetches != 1 || len(out.Inputs) != 0 || len(out.Actions) != 1 {
+			if fetches != 1 || len(out) == 0 || len(out[0].Inputs) != 0 || len(out[0].Actions) != 1 {
 				t.Fatalf("wrong preparation: %+v HTTP %d", out, fetches)
 			}
-			want := 1
+			want := 2
 			if test == "first claimed" {
-				want = 0
+				want = 1
 			}
-			if len(out.Repeats) != want {
+			if len(out) != want {
 				t.Fatal("wrong claim count")
 			}
-			variants := append([]map[string]hexutil.Bytes{out.Actions}, out.Repeats...)
+			variants := out
 			method := binding.NewMerklDistributor().GetABI().Methods["claim"]
 			for i, v := range variants {
-				args, err := method.Inputs.Unpack(v["0:0"][4:])
+				args, err := method.Inputs.Unpack(v.Actions["0:0"][4:])
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -156,8 +156,10 @@ func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {
 					t.Fatal("incorrect reward or dynamic proof length")
 				}
 			}
-			if _, err = p.Advance(t.Context(), snapshot, out, nil); err != nil {
-				t.Fatal(err)
+			for _, execution := range out {
+				if _, err = p.Advance(t.Context(), snapshot, execution, nil); err != nil {
+					t.Fatal(err)
+				}
 			}
 		})
 	}
