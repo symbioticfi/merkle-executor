@@ -150,6 +150,12 @@ from transport errors. Existing backends keep lazy individual reads; a failed re
 batch never falls back to singles. `MulticallSafe` is an explicit assertion of
 caller independence and read-only behavior, not an ABI `view` inference. The host
 chooses the transport and deployment; generic SDK transport code contains no protocol-specific rules.
+The HTTP backend combines compatible pinned getters in Multicall3 and sends the aggregate
+as one ordinary `eth_call`, without a JSON-RPC array. Caller-sensitive, gas-limited,
+or different-block calls retain their exact context in separate RPC objects, with
+at most eight requests in flight. Groups containing non-`eth_call` methods may use
+JSON-RPC arrays; singleton groups always use an object. No gas-estimation round trip
+or retry of a failed aggregate is added.
 Member errors are consumed in validation order, preserving idle/terminal branches
 that do not need speculative results. Missing members invalidate the whole group.
 
