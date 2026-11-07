@@ -224,7 +224,26 @@ func (m *Manager) Poll(ctx context.Context) (*Result, error) {
 				return nil, ErrNonceConsumed
 			}
 		} else {
-			return nil, m.broadcast(ctx)
+			broadcastErr := m.broadcast(ctx)
+			if broadcastErr == nil || !nonceConflict(broadcastErr) {
+				return nil, broadcastErr
+			}
+			// Inclusion can also race the nonce read and rebroadcast. A nonce
+			// rejection is only a hint; terminal evidence still requires our receipt.
+			receipt, err = m.backend.TransactionReceipt(ctx, m.active.Hash())
+			if errors.Is(err, ethereum.NotFound) {
+				nonce, nonceErr = m.backend.NonceAt(ctx, m.signer.Address(), nil)
+				if nonceErr != nil {
+					return nil, errors.Join(broadcastErr, failure("recheck active nonce", nonceErr))
+				}
+				if nonce > m.active.Nonce() {
+					return nil, ErrNonceConsumed
+				}
+				return nil, broadcastErr
+			}
+			if err != nil {
+				return nil, errors.Join(broadcastErr, failure("recheck transaction receipt", err))
+			}
 		}
 	}
 	if err != nil {
@@ -246,6 +265,15 @@ func (m *Manager) Poll(ctx context.Context) (*Result, error) {
 	m.active = nil
 	m.log.Info("transaction confirmed", "hash", result.Hash.Hex(), "reverted", result.Reverted)
 	return result, nil
+}
+
+func nonceConflict(err error) bool {
+	var operation *operationError
+	if errors.As(err, &operation) {
+		err = operation.cause
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "nonce too low") || strings.Contains(message, "nonce is too low") || strings.Contains(message, "nonce has already been used")
 }
 
 func executionFromReceipt(receipt *types.Receipt, hash common.Hash) (*provider.Execution, error) {

@@ -27,6 +27,7 @@ type testBackend struct {
 	sendErr, receiptErr, nonceErr error
 	gas                           uint64
 	afterReceipt                  func()
+	afterSend                     func()
 	receiptMisses                 int
 }
 
@@ -72,6 +73,9 @@ func (b *testBackend) EstimateGas(context.Context, ethereum.CallMsg) (uint64, er
 }
 func (b *testBackend) SendTransaction(_ context.Context, tx *types.Transaction) error {
 	b.sent = append(b.sent, tx)
+	if b.afterSend != nil {
+		b.afterSend()
+	}
 	return b.sendErr
 }
 func (b *testBackend) TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error) {
@@ -220,6 +224,75 @@ func TestReceiptArrivingBeforeAdvancedNonceRetainsOwnedIdentity(t *testing.T) {
 	result, err := m.Poll(t.Context())
 	if err != nil || result == nil || result.Hash != b.sent[0].Hash() || m.Busy() || len(b.sent) != 1 {
 		t.Fatalf("owned inclusion misclassified: result=%+v err=%v busy=%v sends=%d", result, err, m.Busy(), len(b.sent))
+	}
+}
+
+func TestInclusionRacingRebroadcastRequiresOwnedCanonicalReceipt(t *testing.T) {
+	readFailure := errors.New("receipt read unavailable")
+	for _, tc := range []struct {
+		name       string
+		include    func(*testBackend)
+		wantResult bool
+		wantErr    error
+	}{
+		{"confirmed", func(b *testBackend) { include(b, types.ReceiptStatusSuccessful) }, true, nil},
+		{"reverted", func(b *testBackend) { include(b, types.ReceiptStatusFailed) }, true, nil},
+		{"insufficient depth", func(b *testBackend) {
+			include(b, types.ReceiptStatusSuccessful)
+			b.head = 2
+		}, false, nil},
+		{"orphaned", func(b *testBackend) {
+			include(b, types.ReceiptStatusSuccessful)
+			b.receipt.BlockHash = common.HexToHash("0x99")
+			b.receipt.Logs[0].BlockHash = b.receipt.BlockHash
+		}, false, nil},
+		{"foreign transaction", func(b *testBackend) { b.mined++ }, false, ErrNonceConsumed},
+		{"receipt unavailable", func(b *testBackend) { b.receiptErr = readFailure }, false, readFailure},
+		{"nonce unavailable", func(b *testBackend) { b.nonceErr = readFailure }, false, readFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBackend()
+			m := newManager(t, b)
+			if err := m.Submit(t.Context(), testRequest()); err != nil {
+				t.Fatal(err)
+			}
+			b.afterSend = func() {
+				tc.include(b)
+				b.sendErr = errors.New("Transaction rejected: nonce too low")
+			}
+			result, err := m.Poll(t.Context())
+			if (result != nil) != tc.wantResult || (tc.wantErr == nil && err != nil) || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) || m.Busy() == tc.wantResult {
+				t.Fatalf("result=%+v err=%v busy=%v", result, err, m.Busy())
+			}
+			if len(b.sent) != 2 || b.sent[0].Hash() != b.sent[1].Hash() {
+				t.Fatal("rebroadcast changed the owned identity")
+			}
+			if result != nil && (result.Hash != b.sent[0].Hash() || result.Reverted != (tc.name == "reverted")) {
+				t.Fatal("foreign or incorrect execution returned")
+			}
+		})
+	}
+}
+
+func TestRebroadcastErrorsWithoutOwnedEvidenceRetainOwnership(t *testing.T) {
+	for _, message := range []string{"nonce too low", "insufficient funds", "relay timed out"} {
+		t.Run(message, func(t *testing.T) {
+			b := newBackend()
+			m := newManager(t, b)
+			if err := m.Submit(t.Context(), testRequest()); err != nil {
+				t.Fatal(err)
+			}
+			failure := errors.New(message)
+			b.sendErr = failure
+			if message != "nonce too low" {
+				// An unrelated rejection remains visible even when inclusion races it.
+				b.afterSend = func() { include(b, types.ReceiptStatusSuccessful) }
+			}
+			result, err := m.Poll(t.Context())
+			if result != nil || !errors.Is(err, failure) || !m.Busy() || len(b.sent) != 2 {
+				t.Fatalf("unproven rejection cleared or masked: result=%+v err=%v busy=%v", result, err, m.Busy())
+			}
+		})
 	}
 }
 
