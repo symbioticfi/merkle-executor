@@ -62,8 +62,48 @@ func TestBalanceReadRedactsTransportCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	_, err = client.BalanceAt(t.Context(), common.Address{}, nil)
-	if err == nil || strings.Contains(err.Error(), "secret-") {
-		t.Fatalf("balance read leaked credentials: %v", err)
+	for _, read := range []func() (*big.Int, error){
+		func() (*big.Int, error) { return client.BalanceAt(t.Context(), common.Address{}, nil) },
+		func() (*big.Int, error) { return client.TransactionSenderBalanceAt(t.Context(), common.Address{}, nil) },
+	} {
+		_, err = read()
+		if err == nil || strings.Contains(err.Error(), "secret-") {
+			t.Fatalf("balance read leaked credentials: %v", err)
+		}
+	}
+}
+
+func TestTransactionSenderBalanceUsesWriteRPCWithoutFallback(t *testing.T) {
+	read, write := newRPCFixture(t, "0x1"), newRPCFixture(t, "0x1")
+	client, err := Dial(t.Context(), read.server.URL, write.server.URL, big.NewInt(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	account := common.HexToAddress("0x1234")
+	if balance, err := client.BalanceAt(t.Context(), account, big.NewInt(12)); err != nil || balance.Cmp(big.NewInt(100)) != 0 {
+		t.Fatalf("ordinary balance read: %v %v", balance, err)
+	}
+	if balance, err := client.TransactionSenderBalanceAt(t.Context(), account, nil); err != nil || balance.Cmp(big.NewInt(100)) != 0 {
+		t.Fatalf("sender balance read: %v %v", balance, err)
+	}
+	read.mu.Lock()
+	if len(read.requests) != 2 || read.requests[1].Method != "eth_getBalance" || string(read.requests[1].Params[1]) != `"0xc"` {
+		t.Errorf("ordinary balance read left read RPC: %+v", read.requests)
+	}
+	read.mu.Unlock()
+	write.mu.Lock()
+	if len(write.requests) != 2 || write.requests[1].Method != "eth_getBalance" || string(write.requests[1].Params[0]) != `"`+account.Hex()+`"` || string(write.requests[1].Params[1]) != `"latest"` {
+		t.Errorf("sender balance read left write RPC: %+v", write.requests)
+	}
+	write.fail = true
+	write.mu.Unlock()
+	if _, err := client.TransactionSenderBalanceAt(t.Context(), account, nil); err == nil {
+		t.Fatal("failed write-RPC balance read fell back to read RPC")
+	}
+	read.mu.Lock()
+	defer read.mu.Unlock()
+	if len(read.requests) != 2 {
+		t.Fatal("write-RPC failure attempted a read-RPC fallback")
 	}
 }

@@ -54,8 +54,11 @@ lists are packed into a verified prefix; remaining work stays eligible for later
 cycles. Native repetition uses bounded growth probes rather than scanning every
 prefix length.
 
-The sender holds one signed transaction in RAM, estimates gas, applies bounded
-EIP-1559 fees and tracks canonical confirmation. Ambiguous sends retain the nonce
+The sender estimates gas, applies bounded EIP-1559 fees and checks a fresh
+sending-endpoint balance against the final maximum gas cost before signing.
+The sending endpoint must serve `eth_getBalance`; invalid, unavailable or
+insufficient funding leaves no signed transaction or active nonce ownership.
+Signed work is held in RAM until canonical confirmation. Ambiguous sends retain the nonce
 and rebroadcast identical signed bytes. There are no automatic fee replacements.
 An unknown consumed nonce retains ownership until its exact receipt is found. After a
 canonical successful receipt, native work finishes and optional external tasks

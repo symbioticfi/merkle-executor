@@ -20,11 +20,12 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/signer"
 )
 
-// Backend uses the sending endpoint for both nonce methods and SendTransaction.
-// Other reads may use a separate endpoint on the same chain.
+// Backend uses the sending endpoint for nonce methods, TransactionSenderBalanceAt
+// and SendTransaction. Other reads may use a separate endpoint on the same chain.
 type Backend interface {
 	NonceAt(context.Context, common.Address, *big.Int) (uint64, error)
 	PendingNonceAt(context.Context, common.Address) (uint64, error)
+	TransactionSenderBalanceAt(context.Context, common.Address, *big.Int) (*big.Int, error)
 	FeeHistory(context.Context, uint64, *big.Int, []float64) (*ethereum.FeeHistory, error)
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 	HeaderByHash(context.Context, common.Hash) (*types.Header, error)
@@ -120,6 +121,9 @@ func (m *Manager) Submit(ctx context.Context, req Request) error {
 		return errors.New("signer has pending work or inconsistent nonce state")
 	}
 	unsigned := types.NewTx(&types.DynamicFeeTx{ChainID: m.chainID, Nonce: nonce, To: &req.To, Data: req.Data, Gas: gas, GasTipCap: tip, GasFeeCap: fee})
+	if err := m.checkFunding(ctx, unsigned); err != nil {
+		return err
+	}
 	signed, err := m.signer.SignTx(ctx, unsigned, new(big.Int).Set(m.chainID))
 	if err != nil {
 		return failure("sign transaction", err)
@@ -137,6 +141,29 @@ func (m *Manager) Submit(ctx context.Context, req Request) error {
 	m.active = signed
 	m.log.Info("transaction signed", "hash", signed.Hash().Hex(), "nonce", nonce)
 	return m.broadcast(ctx)
+}
+
+func (m *Manager) checkFunding(ctx context.Context, tx *types.Transaction) error {
+	cost := tx.Cost()
+	if cost.Sign() < 0 || cost.BitLen() > 256 {
+		return errors.New("invalid maximum transaction cost")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	balance, err := m.backend.TransactionSenderBalanceAt(ctx, m.signer.Address(), nil)
+	if err != nil {
+		return failure("read transaction sender balance", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return failure("read transaction sender balance", err)
+	}
+	if balance == nil || balance.Sign() < 0 || balance.BitLen() > 256 {
+		return errors.New("invalid transaction sender balance")
+	}
+	if balance.Cmp(cost) < 0 {
+		return errors.Errorf("insufficient transaction funding: balance %s, maximum cost %s", balance, cost)
+	}
+	return nil
 }
 
 func (m *Manager) quote(ctx context.Context, req Request) (uint64, *big.Int, *big.Int, error) {

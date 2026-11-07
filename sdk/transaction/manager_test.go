@@ -25,6 +25,12 @@ type testBackend struct {
 	receipt                       *types.Receipt
 	sent                          []*types.Transaction
 	sendErr, receiptErr, nonceErr error
+	balance                       *big.Int
+	balanceErr                    error
+	balanceAccount                common.Address
+	balanceBlock                  *big.Int
+	balanceReads                  int
+	afterBalance                  func()
 	gas                           uint64
 	afterReceipt                  func()
 	afterSend                     func()
@@ -32,7 +38,7 @@ type testBackend struct {
 }
 
 func newBackend() *testBackend {
-	b := &testBackend{headers: map[uint64]*types.Header{}, gas: 21_000}
+	b := &testBackend{headers: map[uint64]*types.Header{}, gas: 21_000, balance: big.NewInt(1_000_000_000_000_000_000)}
 	for i := range uint64(5) {
 		h := &types.Header{Number: new(big.Int).SetUint64(i), BaseFee: big.NewInt(1_000_000_000), GasLimit: 30_000_000, Time: 100 + i}
 		if i > 0 {
@@ -47,6 +53,14 @@ func (b *testBackend) NonceAt(context.Context, common.Address, *big.Int) (uint64
 }
 func (b *testBackend) PendingNonceAt(context.Context, common.Address) (uint64, error) {
 	return b.pending, b.nonceErr
+}
+func (b *testBackend) TransactionSenderBalanceAt(_ context.Context, account common.Address, block *big.Int) (*big.Int, error) {
+	b.balanceAccount, b.balanceBlock = account, block
+	b.balanceReads++
+	if b.afterBalance != nil {
+		b.afterBalance()
+	}
+	return b.balance, b.balanceErr
 }
 func (b *testBackend) FeeHistory(context.Context, uint64, *big.Int, []float64) (*ethereum.FeeHistory, error) {
 	return &ethereum.FeeHistory{Reward: [][]*big.Int{{big.NewInt(100_000_000)}}}, nil

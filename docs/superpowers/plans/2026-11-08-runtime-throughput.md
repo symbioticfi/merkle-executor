@@ -13,4 +13,12 @@
 
 Publish this SDK revision through PR #39 and pin it in vault-solver PR #277, whose host follow-up tracks repository-wide validation. Independent review resolved the exhausted-fit diagnostics case. Local Anvil also exposed an existing duplicate-broadcast response variant: `already imported` now retains its bounded classification through RPC redaction and follows the pending-owned path. CI's Anvil 1.9 exposed inclusion between a missing receipt/old nonce read and rebroadcast. A nonce-conflict response triggers another exact-owned-hash receipt check; only existing canonical confirmation can release ownership. Unproven failures still return errors and preserve ownership.
 
-Retain signed ownership after an RPC attempt; pre-sign funding admission and a proven-never-broadcast boundary are separate possible improvements. RFQ uses the explicit external-simulation admission API and unchanged complete outer settlement. It supplies no numerical witness and consumes no inner return data; the generic numerical and result-based readiness checks remain in the normal admission path.
+Retain signed ownership after an RPC attempt; a fresh pre-sign funding check rejects insufficient maximum-cost coverage before signing. Only unsigned failures release automatically; no new signed-attempt release or cancellation workflow is introduced. RFQ uses the explicit external-simulation admission API and unchanged complete outer settlement. It supplies no numerical witness and consumes no inner return data; the generic numerical and result-based readiness checks remain in the normal admission path.
+
+## Funding admission follow-up
+
+- [x] Add a fresh sender-balance check against final unsigned maximum cost before each signature. Keep existing ownership after every attempted broadcast.
+- [x] Cover exact coverage, gas headroom, malformed/unavailable balances and no-sign/no-send/no-busy failures. Host checks also include transaction value and replacements without losing prior ownership.
+- [x] Run SDK/daemon `make check` and `make integration` with Anvil 1.9.0; independent source review found no production blockers. The real host bridge funding/retry regression also passes ten race-enabled Anvil runs.
+
+Publish the SDK through existing PR #39; the host plan tracks its final pin, repository-wide gates and PR #277 update. No auto cancellation or additional runtime state.

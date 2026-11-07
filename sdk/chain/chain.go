@@ -173,3 +173,10 @@ func (c *Client) BalanceAt(ctx context.Context, account common.Address, block *b
 	balance, err := c.Client.BalanceAt(ctx, account, block)
 	return balance, rpcFailure("read account balance", err)
 }
+
+// TransactionSenderBalanceAt reads funds from the same endpoint as nonce
+// admission and submission. A failed sending-endpoint read never falls back.
+func (c *Client) TransactionSenderBalanceAt(ctx context.Context, account common.Address, block *big.Int) (*big.Int, error) {
+	balance, err := c.write.BalanceAt(ctx, account, block)
+	return balance, rpcFailure("read transaction sender balance", err)
+}

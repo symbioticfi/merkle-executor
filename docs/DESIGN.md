@@ -90,6 +90,12 @@ and grouped direct-call simulation. Neither path invents execution results.
 
 ## Process-local lifecycle
 
+Before signing, the sender compares a fresh sending-endpoint balance with the
+final unsigned transaction maximum cost, including gas headroom. Invalid or
+insufficient funding fails before any signed ownership or broadcast. This
+preflight reduces avoidable rejections; it does not prove later execution or
+change ownership after a broadcast attempt.
+
 `Keeper.Tick` is the sole lifecycle driver. One immutable active envelope owns
 its sender until a canonical terminal result. Submission ambiguity retains that
 envelope. A successful receipt fans out directly into per-member RAM settlement.

@@ -73,6 +73,8 @@ func newRPCFixture(t *testing.T, chainID string) *rpcFixture {
 			result = "0x5208"
 		case "eth_getTransactionCount":
 			result = "0x7"
+		case "eth_getBalance":
+			result = "0x64"
 		case "eth_sendRawTransaction":
 			result = common.HexToHash("0x123")
 		case "eth_getTransactionReceipt":

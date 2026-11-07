@@ -73,8 +73,11 @@ submitting each executor and advancing each settlement at most once. Idle candid
 can become ready after earlier confirmed effects. Pending work yields after one
 poll. A host may select `Keeper.Wakeup()` alongside its normal timer when its
 sender provides canonical-completion notifications; the SDK starts no worker.
-`transaction.Manager` exposes Submit/Poll/Busy and
-retains signed bytes through ambiguous submission. There are no stores, journals,
+`transaction.Manager` exposes Submit/Poll/Busy. Before signing it requires a fresh
+`Backend.TransactionSenderBalanceAt` balance covering the final maximum gas cost;
+the SDK chain client reads that balance from the sending endpoint. Funding read
+errors, invalid values and insufficient balance leave no signed work or busy lane.
+Signed bytes remain owned through ambiguous submission. There are no stores, journals,
 acknowledgement callbacks, fee replacement engines or restart recovery. Process
 exit loses tracking while live transactions/orders may continue externally.
 
