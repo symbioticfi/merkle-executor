@@ -83,6 +83,7 @@ type Scheduler struct {
 	running, closed bool
 	wake, stop      chan struct{}
 	stopOnce        sync.Once
+	stats           SchedulerStats
 }
 
 func NewScheduler(backend BatchReader, limits Limits) (*Scheduler, error) {
@@ -157,6 +158,8 @@ func (s *Scheduler) BatchRead(ctx context.Context, requests []ReadRequest) ([]Re
 	}
 	s.count += len(requests)
 	s.bytes += job.bytes
+	s.stats.PeakQueuedRequests = max(s.stats.PeakQueuedRequests, s.count)
+	s.stats.PeakQueuedBytes = max(s.stats.PeakQueuedBytes, s.bytes)
 	s.queue = append(s.queue, job)
 	s.mu.Unlock()
 	select {
@@ -220,6 +223,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 				var results []ReadResult
 				err := partitionCtx.Err()
 				if err == nil {
+					s.recordDispatch(p)
 					results, err = s.backend.BatchRead(partitionCtx, p.requests)
 				}
 				done()
@@ -309,6 +313,11 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			s.queue = nil
 			s.mu.Unlock()
 			incoming := s.partition(jobs)
+			if len(incoming) > 0 {
+				s.mu.Lock()
+				s.stats.ReadyWaves++
+				s.mu.Unlock()
+			}
 			// Alternate old and newly ready waves so a large owner cannot monopolize
 			// the endpoint while another owner becomes ready behind an in-flight read.
 			merged := make([]readPartition, 0, len(pending)+len(incoming))
