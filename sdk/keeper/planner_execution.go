@@ -21,16 +21,16 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 		return batch, provider.ErrNotReady
 	}
 	strategies = slices.Clone(strategies)
-	names := make(map[string]bool, len(strategies))
+	names := make(map[string]int, len(strategies))
 	for i := range strategies {
 		if strategies[i].Config.Name == "" {
 			strategies[i].Config.Name = strategies[i].Config.Executor
 		}
 		name := strategies[i].Config.Name
-		if name == "" || names[name] {
+		if _, exists := names[name]; name == "" || exists {
 			return batch, errors.New("planner strategy names must be nonempty and unique")
 		}
-		names[name] = true
+		names[name] = i
 	}
 	failures := map[string]error{}
 	executors, accounts := make([]common.Address, len(strategies)), make([]common.Address, len(strategies))
@@ -87,8 +87,35 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 		if discovered[i].Err != nil {
 			continue
 		}
-		if reserved[accounts[i]] {
-			continue
+		if admitted, blocked := reserved[accounts[i]]; blocked {
+			if admitted {
+				continue
+			}
+			// Admit provisional reservations before they exclude sibling executors.
+			fitted, fitErr := p.fit(ctx, batch, selected, strategies, nil)
+			if fitErr != nil && !errors.Is(fitErr, provider.ErrNotReady) && len(fitted.Failures) == 0 {
+				return ExecutionPlan{}, fitErr
+			}
+			batch = fitted
+			batch.Failures = failures
+			selected = selected[:len(batch.Members)]
+			composition = newExecutionComposition()
+			clear(reserved)
+			for _, member := range batch.Members {
+				if err = composition.add(member.Plan, strategies[names[member.Name]]); err != nil {
+					return ExecutionPlan{}, err
+				}
+				for _, group := range member.Plan.Outputs {
+					for _, out := range group {
+						if out.Task != nil {
+							reserved[member.Plan.Snapshot.Account] = true
+						}
+					}
+				}
+			}
+			if reserved[accounts[i]] {
+				continue
+			}
 		}
 		snap := discovered[i].Prepared.Snapshot
 		key := treeKey{snap.Account, snap.Root, strategy.Config.Tree}
@@ -140,7 +167,7 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 		for _, group := range plan.Outputs {
 			for _, out := range group {
 				if out.Task != nil {
-					reserved[snap.Account] = true
+					reserved[snap.Account] = false
 				}
 			}
 		}
@@ -209,9 +236,6 @@ func (p *Planner) fit(ctx context.Context, batch ExecutionPlan, selected []recip
 		}
 		var member *recipes.MemberError
 		if errors.As(err, &member) && member.Index >= 0 && member.Index < len(batch.Members) {
-			if !errors.Is(err, provider.ErrNotReady) && len(batch.Members) == 1 {
-				return ExecutionPlan{}, err
-			}
 			indices := member.Indices
 			if len(indices) == 0 {
 				indices = []int{member.Index}
@@ -250,7 +274,12 @@ func (p *Planner) fit(ctx context.Context, batch ExecutionPlan, selected []recip
 		plan := &batch.Members[0].Plan
 		entries, e := recipes.Executions(plan.Calldata)
 		if e != nil || len(entries) < 2 {
-			return ExecutionPlan{}, err
+			if batch.Failures == nil {
+				batch.Failures = map[string]error{}
+			}
+			batch.Failures[batch.Members[0].Name] = err
+			batch.Members = nil
+			break
 		}
 		count := len(entries) - 1
 		if count == 1 {

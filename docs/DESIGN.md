@@ -66,6 +66,11 @@ effects through RPC-only code overrides.
 Same-executor calls use the executor's atomic multicall. Cross-executor calls use
 an already installed caller delegation supporting ERC-7579 batches; the runtime
 never installs delegation. Configuration order determines execution order.
+Before a provisional settlement task excludes a later executor on the same
+account, the planner admits the collected prefix through the shared validator.
+It rebuilds composition and reservations from surviving members, so an idle or
+rejected task cannot starve its sibling. Prepared evidence and task identity are
+reused; the final selected envelope still receives full admission.
 Receipt ownership conflicts and stale state-dependent witnesses defer work.
 Oversized call inventories shrink to an executable prefix, leaving the rest for
 later cycles. After an envelope rejection, descending prefixes consider every
