@@ -16,7 +16,6 @@ import (
 	native "github.com/symbioticfi/merkle-executor/api/bindings/noonredeemhandlerv2"
 	"github.com/symbioticfi/merkle-executor/api/bindings/noonwithdrawalhandler"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
@@ -279,7 +278,7 @@ func TestAutomaticIssuerRejectsDurablePolicyAndPayloadChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bundle durableRoutes
+	var bundle fixtureRoutes
 	inner, _, err := decodeTestBundle(out, &bundle)
 	if err != nil {
 		t.Fatal(err)
@@ -287,7 +286,7 @@ func TestAutomaticIssuerRejectsDurablePolicyAndPayloadChanges(t *testing.T) {
 	for _, fault := range []string{"route", "amount", "action", "input", "account"} {
 		t.Run(fault, func(t *testing.T) {
 			encoded, _ := json.Marshal(bundle)
-			var changed durableRoutes
+			var changed fixtureRoutes
 			_ = json.Unmarshal(encoded, &changed)
 			switch fault {
 			case "route":
@@ -311,11 +310,7 @@ func TestAutomaticIssuerRejectsDurablePolicyAndPayloadChanges(t *testing.T) {
 			}
 		})
 	}
-	empty, err := derived.Empty(PolicyVersion)
-	if err != nil {
-		t.Fatal(err)
-	}
-	progress, err := p.Advance(context.Background(), chainio.Snapshot{}, empty, nil)
+	progress, err := p.Advance(context.Background(), chainio.Snapshot{}, provider.Output{}, nil)
 	if err != nil || !progress.Done {
 		t.Fatal("unmatched issuer blocked unrelated recipe")
 	}
@@ -347,7 +342,7 @@ func TestAutomaticIssuerBoundedAmountAndExactClaimIdentity(t *testing.T) {
 	if err != nil || out.Inputs[7] != "80" {
 		t.Fatalf("bounded amount %+v %v", out, err)
 	}
-	var bundle durableRoutes
+	var bundle fixtureRoutes
 	_, _, err = decodeTestBundle(out, &bundle)
 	if err != nil || bundle.Routes[0].Config.Amount != "80" {
 		t.Fatalf("bounded durable amount %+v %v", bundle, err)
@@ -436,7 +431,7 @@ func TestAutomaticIssuerUsesComputedClaimIndex(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var bundle durableRoutes
+			var bundle fixtureRoutes
 			_, _, err = decodeTestBundle(out, &bundle)
 			if err != nil || bundle.Routes[0].Config.Epoch != "7" {
 				t.Fatalf("computed claim identity %+v %v", bundle, err)
@@ -660,7 +655,7 @@ func TestAutomaticNativeNoonBudgetAndPreflight(t *testing.T) {
 			if e != nil || out.Inputs[7] != "80" {
 				t.Fatalf("native maximum bounded amount: %+v %v", out.Inputs, e)
 			}
-			var bundle durableRoutes
+			var bundle fixtureRoutes
 			_, _, e = decodeTestBundle(out, &bundle)
 			if e != nil || bundle.Routes[0].Config.Amount != "80" || bundle.Routes[0].Config.Mode != "redeem-usn" {
 				t.Fatalf("native durable budget differs: %+v %v", bundle, e)
@@ -703,7 +698,7 @@ func TestAutomaticNativeNoonRecoveryPolicyAndEvidence(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			var bundle durableRoutes
+			var bundle fixtureRoutes
 			inner, _, e := decodeTestBundle(out, &bundle)
 			if e != nil {
 				t.Fatal(e)

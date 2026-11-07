@@ -13,7 +13,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -286,7 +285,7 @@ func TestAutomaticSecuritizeRejectsPersistedRouteAndFieldMutation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bundle durableRoutes
+	var bundle fixtureRoutes
 	inner, _, err := decodeTestBundle(out, &bundle)
 	if err != nil {
 		t.Fatal(err)
@@ -294,7 +293,7 @@ func TestAutomaticSecuritizeRejectsPersistedRouteAndFieldMutation(t *testing.T) 
 	for _, fault := range []string{"route", "amount", "decimals", "action", "input", "account", "expected"} {
 		t.Run(fault, func(t *testing.T) {
 			data, _ := json.Marshal(bundle)
-			var changed durableRoutes
+			var changed fixtureRoutes
 			_ = json.Unmarshal(data, &changed)
 			switch fault {
 			case "route":
@@ -327,11 +326,7 @@ func TestAutomaticSecuritizeRejectsPersistedRouteAndFieldMutation(t *testing.T) 
 			}
 		})
 	}
-	empty, err := derived.Empty(PolicyVersion)
-	if err != nil {
-		t.Fatal(err)
-	}
-	progress, err := p.Advance(context.Background(), chainio.Snapshot{}, empty, nil)
+	progress, err := p.Advance(context.Background(), chainio.Snapshot{}, provider.Output{}, nil)
 	if err != nil || !progress.Done {
 		t.Fatal("empty issuer provider blocked unrelated recipe")
 	}
@@ -421,7 +416,7 @@ func TestAutomaticSecuritizeLegacyGuardMinimumInput(t *testing.T) {
 			if err != nil || out.Inputs[7] != "50" || len(out.Actions["4:0"]) != 36 {
 				t.Fatalf("legacy guard output %+v %v", out, err)
 			}
-			var bundle durableRoutes
+			var bundle fixtureRoutes
 			_, _, err = decodeTestBundle(out, &bundle)
 			if err != nil || bundle.Routes[0].Config.MinOutputInput != nil || bundle.Routes[0].Config.GuardMinimumInput == nil || *bundle.Routes[0].Config.GuardMinimumInput != 7 {
 				t.Fatalf("guard durable policy %+v %v", bundle, err)
@@ -467,7 +462,7 @@ func TestAutomaticSecuritizeLegacyCombinesPaymentFloors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var bundle durableRoutes
+	var bundle fixtureRoutes
 	_, _, err = decodeTestBundle(out, &bundle)
 	if err != nil || bundle.Routes[0].Config.MinOutput != "70" {
 		t.Fatalf("combined floors %+v %v", bundle, err)

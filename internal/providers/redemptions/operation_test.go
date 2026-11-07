@@ -11,9 +11,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -96,7 +94,7 @@ func TestIntegrationCompilesStableRouteAndRestoresWithoutRecipe(t *testing.T) {
 	}
 }
 
-func TestAutomaticIndependentRoutesShareSchedulerAndRecoverStableIdentity(t *testing.T) {
+func TestAutomaticIndependentRoutesShareSchedulerAndRestoreStableIdentity(t *testing.T) {
 	initial := &issuerReader{t: t, block: big.NewInt(42), results: map[string][]byte{}}
 	raw, err := NewAutomatic(registry.Deps{Chain: initial})
 	if err != nil {
@@ -178,45 +176,13 @@ func TestAutomaticIndependentRoutesShareSchedulerAndRecoverStableIdentity(t *tes
 	}
 	reordered := integration.(*automatic)
 	slices.Reverse(reordered.assets)
-	bundle := durableRoutes{Account: snapshot.Account}
-	merged := provider.Output{Inputs: map[uint]string{}, Actions: map[string]hexutil.Bytes{}}
+	before := initial.reads
 	for i, operation := range operations {
 		record := provider.Record{Integration: integration.ID(), Policy: integration.Policy(), ID: operation.ID(), Requirements: operation.Requirements(), Output: outputs[i], Progress: provider.Progress{Done: true, Outcome: "requested"}}
-		restored, e := reordered.Restore(record)
-		if e != nil || restored.ID() != operation.ID() {
-			t.Fatalf("reordered restore %v", e)
+		restored, err := reordered.Restore(record)
+		if err != nil || restored.ID() != operation.ID() || !maps.Equal(restored.Requirements().ExclusiveTargets, operation.Requirements().ExclusiveTargets) || initial.reads != before {
+			t.Fatalf("reordered restore changed route identity or reached I/O: %v", err)
 		}
-		var envelope routeEnvelope
-		inner, e := provider.DecodeOperation(integration.Policy(), outputs[i], &envelope)
-		if e != nil {
-			t.Fatal(e)
-		}
-		bundle.Routes = append(bundle.Routes, durableRoute{Config: envelope.Config, Output: inner})
-		maps.Copy(merged.Inputs, inner.Inputs)
-		maps.Copy(merged.Actions, inner.Actions)
-	}
-	legacy, err := derived.Encode(PolicyVersion, bundle, merged, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	before := initial.reads
-	imported, err := ImportLegacy(registry.Deps{Chain: initial}, snapshot, legacy, provider.Progress{Done: true, Outcome: "requested"})
-	if err != nil || len(imported) != 2 || initial.reads != before {
-		t.Fatalf("offline import %+v %v", imported, err)
-	}
-	wrongChain := snapshot
-	wrongChain.ChainID = big.NewInt(42161)
-	if _, err = ImportLegacy(registry.Deps{Chain: initial}, wrongChain, legacy, provider.Progress{}); err == nil || initial.reads != before {
-		t.Fatal("legacy chain mismatch accepted or reached I/O")
-	}
-	for i, record := range imported {
-		if record.ID != operations[i].ID() || !record.Progress.Done || !maps.Equal(record.Requirements.ExclusiveTargets, operations[i].Requirements().ExclusiveTargets) {
-			t.Fatalf("legacy route identity or claims changed: %+v", record)
-		}
-	}
-	legacy.Actions[operations[0].ID()][0] ^= 1
-	if _, err = ImportLegacy(registry.Deps{Chain: initial}, snapshot, legacy, provider.Progress{}); err == nil || initial.reads != before {
-		t.Fatal("legacy aggregate corruption reached I/O")
 	}
 }
 

@@ -6,11 +6,19 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
+
+type fixtureRoute struct {
+	Config Config          `json:"config"`
+	Output provider.Output `json:"output"`
+}
+type fixtureRoutes struct {
+	Account common.Address `json:"account"`
+	Routes  []fixtureRoute `json:"routes"`
+}
 
 // Test adapter keeps behavioral fixtures at the compile/operation boundary.
 type automaticTest struct{ *automatic }
@@ -40,7 +48,7 @@ func (p *automaticTest) PrepareRecipe(ctx context.Context, s chainio.Snapshot, r
 		return provider.Output{}, err
 	}
 	if len(ops) == 0 {
-		return derived.Empty(PolicyVersion)
+		return provider.Output{}, nil
 	}
 	if len(ops) != 1 {
 		panic("fixture must prepare individual routes")
@@ -72,11 +80,8 @@ func (p *automaticTest) ExclusiveOutputTargets(out provider.Output) (map[string]
 	return op.Requirements().ExclusiveTargets, nil
 }
 func (p *automaticTest) Advance(ctx context.Context, s chainio.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
-	var legacy derived.Envelope
-	if json.Unmarshal(out.Data, &legacy) == nil && legacy.Version == 1 && !legacy.Matched {
-		var cfg any
-		_, _, err := derived.Decode(PolicyVersion, out, &cfg)
-		return provider.Progress{Done: err == nil}, err
+	if provider.EqualOutput(out, provider.Output{}) {
+		return provider.Progress{Done: true}, nil
 	}
 	record, err := p.record(out)
 	if err != nil {
@@ -88,17 +93,17 @@ func (p *automaticTest) Advance(ctx context.Context, s chainio.Snapshot, out pro
 	}
 	return op.Advance(ctx, s, out, state)
 }
-func decodeTestBundle(out provider.Output, bundle *durableRoutes) (provider.Output, bool, error) {
+func decodeTestBundle(out provider.Output, bundle *fixtureRoutes) (provider.Output, bool, error) {
 	var envelope routeEnvelope
 	inner, err := provider.DecodeOperation(PolicyVersion+"/operation-v2", out, &envelope)
 	if err != nil {
 		return provider.Output{}, false, err
 	}
 	bundle.Account = envelope.Account
-	bundle.Routes = []durableRoute{{Config: envelope.Config, Output: inner}}
+	bundle.Routes = []fixtureRoute{{Config: envelope.Config, Output: inner}}
 	return inner, true, nil
 }
-func encodeTestBundle(policy string, bundle durableRoutes, inner provider.Output) (provider.Output, error) {
+func encodeTestBundle(policy string, bundle fixtureRoutes, inner provider.Output) (provider.Output, error) {
 	route := bundle.Routes[0]
 	return provider.EncodeOperation(policy+"/operation-v2", routeEnvelope{Config: route.Config, Account: bundle.Account}, route.Output)
 }

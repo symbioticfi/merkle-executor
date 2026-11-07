@@ -12,14 +12,12 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	binding "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
-	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
-	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-func TestAutomaticRestoreValidatesProofAndPreservesLegacyAssignmentsOffline(t *testing.T) {
+func TestAutomaticRestoreValidatesProofAndPreservesAssignmentsOffline(t *testing.T) {
 	deps := registry.Deps{Chain: reader(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 		t.Fatal("restore performed chain I/O")
 		return nil, nil
@@ -37,27 +35,35 @@ func TestAutomaticRestoreValidatesProofAndPreservesLegacyAssignmentsOffline(t *t
 	cfg := Config{HTTP: rewardHTTP(), Multicall3: protocolio.StandardMulticall3, Distributor: addr(4).Hex(), Action: "1:0", CalldataBytes: len(payload), MinClaimable: "1", Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}}
 	evidence, _ := json.Marshal(map[string]string{"root": root.Hex(), "tokens": "1"})
 	inner := provider.Output{Inputs: map[uint]string{7: "100"}, Actions: map[string]hexutil.Bytes{"1:0": payload}, Data: evidence}
-	legacy, err := derived.Encode(automaticPolicy, cfg, inner, true)
+	output, err := provider.EncodeOperation(integration.Policy(), cfg, inner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := ImportLegacy(deps, chainio.Snapshot{ChainID: big.NewInt(1), Account: addr(3)}, legacy, provider.Progress{Done: true})
-	if err != nil || len(records) != 1 || !records[0].Progress.Done || records[0].ID != "1:0" {
-		t.Fatalf("offline import %+v %v", records, err)
+	requirements := provider.OutputRequirements(inner, nil)
+	record := provider.Record{Integration: integration.ID(), Policy: integration.Policy(), ID: provider.OperationID(requirements.Actions), Requirements: requirements, Output: output, Progress: provider.Progress{Done: true}}
+	restored, err := integration.Restore(record)
+	if err != nil || restored.ID() != "1:0" || !restored.(*automaticOperation).saved.Progress.Done || !provider.EqualOutput(restored.(*automaticOperation).saved.Output, output) {
+		t.Fatalf("offline restore changed assignments: %v", err)
 	}
-	if _, err = ImportLegacy(deps, chainio.Snapshot{ChainID: big.NewInt(1), Account: addr(99)}, legacy, provider.Progress{}); err == nil {
-		t.Fatal("legacy account mismatch accepted")
-	}
-	if _, err = integration.Restore(records[0]); err != nil {
+	wrongAccount := inner.Clone()
+	wrongAccount.Actions[cfg.Action], err = binding.NewMerklDistributor().TryPackClaim([]common.Address{addr(99)}, []common.Address{addr(1)}, []*big.Int{big.NewInt(100)}, [][][32]byte{{sibling}})
+	if err != nil {
 		t.Fatal(err)
+	}
+	record.Output, err = provider.EncodeOperation(integration.Policy(), cfg, wrongAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = integration.Restore(record); err == nil {
+		t.Fatal("claim account differing from verified proof accepted")
 	}
 	inner.Inputs[7] = "99"
 	corrupt, err := provider.EncodeOperation(integration.Policy(), cfg, inner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	records[0].Output = corrupt
-	if _, err = integration.Restore(records[0]); err == nil {
+	record.Output = corrupt
+	if _, err = integration.Restore(record); err == nil {
 		t.Fatal("input differing from proved cumulative amount accepted")
 	}
 }
