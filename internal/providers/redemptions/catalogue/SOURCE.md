@@ -24,4 +24,5 @@ All added contract reads remain required. Runtime source failures do not select 
 fallback route. Permission trees, immutable identities, result-derived economics,
 full recipe simulation and canonical receipts retain their original authority.
 The catalogue digest is part of the daemon runtime policy and is checked during
-recovery. The shared Go SDK wire/API and immutable module pin are unchanged.
+live reconciliation of RAM-held records. This catalogue refresh did not change
+the protocol wire format.

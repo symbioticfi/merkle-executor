@@ -44,43 +44,41 @@ chain/executor. A hit still authenticates fresh commitment, event block/hash and
 structure. All mutable metadata, roles, roots and simulations remain fresh. Only
 successfully closed attempts enter the cache; callbacks receive independent copies.
 
-## Durable execution
+## RAM-only execution
 
-`runtime.Runtime` owns one atomic v2 `Workflow` per executor. It contains immutable
-plan/assignments, stable operation identities, external progress and the complete
-transaction reservation and signed variants. Startup validates the whole inventory
-and rebuilds account/signer indexes before admitting work. Tick does not rescan
-historical storage for each strategy. Pending external reconciliation can progress
-while another workflow occupies the signer. Account ownership prevents conflicting
-work; ready selection rotates fairly.
+`runtime.Runtime` owns process-local workflow and account maps plus one sender worker.
+There is no storage interface, state directory, journal, importer or startup recovery.
+Startup validates only the current configuration and initializes empty maps. Snapshots
+are independent copies for in-process observers. Ready selection rotates fairly;
+external reconciliation can progress while an unrelated transaction is pending.
 
-The runtime persists a reservation before admission. The process-owned transaction
-worker outlives an individual Tick timeout. `internal/transaction.Driver` owns one
-signer lane, reads the write endpoint's mined nonce, estimates gas, applies EIP-1559
-horizon fees, persists each verified signed attempt before broadcast and observes all
-same-nonce variants. Ambiguous submission keeps ownership and may rebroadcast exact
-bytes. Replacement preserves intent and nonce. A canonical receipt from any owned
-variant can win; timeout, cancellation, missing receipts and foreign nonce consumption
-cannot prove failure. Signed restart recovery observes saved hashes without signing
-or broadcasting. Workflow progress is durable before lane release.
+The runtime puts an immutable plan and ownership into RAM before starting its worker.
+The worker outlives an individual Tick timeout. `internal/transaction.Driver` reads the
+write endpoint's mined nonce, estimates gas with YAML headroom, verifies exact signer
+output, broadcasts one EIP-1559 attempt and observes its canonical receipt. YAML fixes
+the maximum fee and priority fee. There are no replacements, rebroadcasts or restored
+signed attempts. An ambiguous submission retains the signer lane while the process
+lives. Missing receipts or a consumed nonce cannot authorize a second transaction.
+A canonical revert halts that strategy and frees the lane for unrelated work.
 
-Providers advance only with canonical confirmed execution evidence and fresh snapshots.
-External order IDs, publication state and scan cursors survive retries/restarts. API
-status alone cannot prove a CoW or Liquid Lane fill. Issuer reconciliation matches exact
-managed calls and payment evidence. Exclusive managed-target claims include completed
-operations and reject ambiguous static/interleaved attribution. Request completion is
-`requested`, permitting a later independently configured claim recipe; it is not payout.
-Protocol support limits and wire provenance remain in `docs/PROVIDERS.md` and `api/schemas`.
+Confirmed execution evidence and protocol progress remain in the workflow's RAM.
+Providers advance with fresh canonical snapshots and exact call/payment evidence.
+API status alone cannot prove a CoW or Liquid Lane fill. The prepared external order
+identity is reused through in-process lookup/POST retries; completed operations keep
+exclusive attribution claims. Issuer requests finish as `requested`, allowing a
+separately configured claim recipe when the issuer is ready.
 
-Storage uncertainty poisons further admission until restart/reload. Runtime drain must
-finish before scheduler, RPC and storage close. A failed drain retains process ownership.
-Secrets are environment-variable names in YAML; values and remote payloads never enter
-logs. See [transaction policy](TRANSACTIONS.md) and [migration](MIGRATION.md).
+Process exit discards all transaction, order and workflow knowledge. A new process
+prepares from the current chain/API state and may repeat previously authorized work;
+there is no restart idempotency or cross-process signer/account lock. Keep one process
+per dedicated signer. Shutdown cancels and drains its worker before closing RPC and
+the shared scheduler. Protocol limits and provenance remain in `docs/PROVIDERS.md`
+and `api/schemas`. See [transaction policy](TRANSACTIONS.md) and [migration](MIGRATION.md).
 
 ## SDK and verification
 
 The independently versioned SDK contains neutral chain I/O, recipes, operations,
-planning/coordinator contracts and local state primitives. It creates no host signer
+planning and RAM coordinator contracts. It creates no host signer
 or fee engine. The daemon uses `replace .../sdk => ./sdk`, so local checks and container
 builds use the checked-out source. Published consumers pin immutable SDK releases;
 this rewrite does not alter sibling repositories.

@@ -50,7 +50,7 @@ The exact selected JSON quote is retained and sent as
 the fixed outbound encoding also preserves the backend's quoteId/signature
 idempotency key. Current signature validation precedes the backend's deduplication.
 Requoting may change filler and improve final outputs, so no predicted outer Order
-hash is persisted. The durable identity is chain, Reactor, account, Request digest,
+hash is retained. The in-process identity is chain, Reactor, account, Request digest,
 quoteId and `0x00`.
 
 `GET /orders` uses all-status swapper pagination (`limit=100`), or saved `orderId`.
@@ -92,12 +92,13 @@ Scanning begins at the saved preparation block. The configured range defaults to
 by account. Successful ranges exceeding 1,024 combined events are halved until a
 complete bounded range can checkpoint. A single block exceeding 1,024 relevant
 query results fails explicitly; events are never truncated. RPC errors do not cause
-individual retries or adaptive retries. Canonical range anchors survive restart
+individual retries or adaptive retries. Canonical range anchors stay in RAM across ticks
 and rewind on orphaning. Incomplete scans checkpoint with nil error even when the
 head nonce is used, and prevent both POST and expiry. The automatic provider scans
 at most 10 API pages per tick, with at most 100 orders per page. Cursor, seen order
-IDs/cursors and a possible quote match survive restart, preserving duplicate checks
+IDs/cursors and a possible quote match remain in RAM, preserving duplicate checks
 across tick boundaries. Only a complete scan permits publication. A completed
 lookup is discarded; an ambiguous POST response starts a fresh lookup next tick.
-The fixed automatic bounds cannot be changed through daemon YAML. Recovery
-validates the version `1` checkpoint and preserves its saved order identity.
+The fixed automatic bounds cannot be changed through daemon YAML. Live reconciliation
+validates the version `1` progress record and retains its order identity. Process exit
+discards this record; there is no restart recovery.

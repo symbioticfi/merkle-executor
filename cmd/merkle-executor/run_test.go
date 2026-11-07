@@ -34,7 +34,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	runtime "github.com/symbioticfi/merkle-executor/sdk/runtime"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 type serviceArtifact struct {
@@ -329,7 +328,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 			t.Fatal("plan lost configuration, provider output or transaction")
 		}
 	}
-	if _, err = os.Stat(cfg.StateDir); !os.IsNotExist(err) {
+	if _, err = os.Stat(filepath.Join(directory, "state")); !os.IsNotExist(err) {
 		t.Fatalf("plan created signing state: %v", err)
 	}
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 0 {
@@ -344,12 +343,9 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if err := runBot(ctx, path, true, false, new(bytes.Buffer)); err == nil {
 		t.Fatal("send accepted a key that is not executor caller")
 	}
-	if found, e := state.ReadNamespace(cfg.StateDir, runtime.Namespace, "deployment", new(any)); e != nil || found {
-		t.Fatal("caller mismatch created deployment state", e)
-	}
 
 	// Failed curator acquisition/validation must stop the real send path before
-	// signing or journal ownership. A changed root during HTTP must also fail the
+	// signing or nonce ownership. A changed root during HTTP must also fail the
 	// existing fresh metadata guard; restore only the ephemeral fixture afterward.
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	for _, failure := range []string{"HTTP503", "wrong chain", "root during HTTP"} {
@@ -361,9 +357,6 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		}
 		if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
 			t.Fatalf("source failure submitted nonce%d: %v", nonce, e)
-		}
-		if found, e := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[0]), new(any)); e != nil || found {
-			t.Fatalf("source failure persisted executable work: %v", e)
 		}
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddress, Data: tokenABI.PackBalanceOf(recipient)}, nil)
 		if e != nil || new(big.Int).SetBytes(raw).Sign() != 0 {
@@ -377,26 +370,24 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	wrongPermissionChain.Store(false)
 
 	// Finality requires descendants after inclusion; mine local empty blocks while
-	// the driver confirms and durably releases the signed transaction.
+	// the driver confirms and releases the in-process signer lane.
 	startServiceConfirmationMining(t, ctx, client, caller)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
-	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
+	rows, err := runServiceOnce(ctx, &cfg, nil)
+	if err != nil {
 		t.Fatalf("send-once failed: %v", err)
 	}
-	var job runtime.Workflow
-	if found, err := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[0]), &job); err != nil || !found {
-		t.Fatalf("durable job missing: %v", err)
+	job := workflowNamed(t, rows, cfg.Strategies[0])
+	if job.Phase != "settled" || job.Execution.TxHash == (common.Hash{}) || len(job.Plan.Operations) != 0 || job.FinishedAt.IsZero() {
+		t.Fatalf("job did not settle: %+v", job.Execution)
 	}
-	if job.Phase != "settled" || job.Reserved || job.Transaction.Terminal != "confirmed" || job.Transaction.Execution.TxHash == (common.Hash{}) || len(job.Plan.Operations) != 0 || job.FinishedAt.IsZero() {
-		t.Fatalf("job did not settle: %+v", job.Transaction)
-	}
-	transaction, pending, err := client.TransactionByHash(ctx, job.Transaction.Execution.TxHash)
+	transaction, pending, err := client.TransactionByHash(ctx, job.Execution.TxHash)
 	if err != nil || pending {
 		t.Fatalf("canonical local transaction missing: %v", err)
 	}
 	signedBy, err := types.Sender(types.LatestSignerForChainID(big.NewInt(31337)), transaction)
 	if err != nil || signedBy != caller || transaction.To() == nil || *transaction.To() != executorAddress || !bytes.Equal(transaction.Data(), job.Plan.Calldata) || transaction.Nonce() != 0 {
-		t.Fatalf("sender/transaction differs from durable plan: %v", err)
+		t.Fatalf("sender/transaction differs from RAM plan: %v", err)
 	}
 	for address, expected := range map[common.Address]int64{accountAddress: 983, recipient: 17} {
 		raw, err := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddress, Data: tokenABI.PackBalanceOf(address)}, nil)
@@ -408,13 +399,26 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 			t.Fatalf("post-execution balance expected %d: %v / %v", expected, balance, err)
 		}
 	}
+	// A fresh service has no retained workflow and must prepare again.
 	permissionRequests := curatorCalls.Load()
 	curatorUnavailable.Store(true)
-	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
-		t.Fatalf("restart failed: %v", err)
+	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err == nil {
+		t.Fatal("fresh process unexpectedly retained the previous workflow")
 	}
-	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || curatorCalls.Load() != permissionRequests {
-		t.Fatalf("restart repeated completed work: nonce=%d / %v", nonce, err)
+	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || curatorCalls.Load() <= permissionRequests {
+		t.Fatalf("fresh-process preparation changed nonce or skipped permission acquisition: nonce=%d / %v", nonce, err)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("runtime created files beyond the two input configurations: %v", entries)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || (entry.Name() != "defaults-fixture.yaml" && entry.Name() != "keeper.yaml") {
+			t.Fatalf("runtime created unexpected state artifact %s", entry.Name())
+		}
 	}
 }
 

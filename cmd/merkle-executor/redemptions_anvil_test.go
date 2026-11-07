@@ -37,7 +37,6 @@ import (
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	runtime "github.com/symbioticfi/merkle-executor/sdk/runtime"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func loadIssuerArtifact(t *testing.T, name string) serviceArtifact {
@@ -190,8 +189,9 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 
 	startServiceConfirmationMining(t, ctx, client, caller)
+	worker := newIssuerFixture(t, ctx, path, []redemptions.Config{requestConfig, claimConfig})
 	run := func() {
-		if err := runIssuerFixture(ctx, path, []redemptions.Config{requestConfig, claimConfig}); err != nil {
+		if err := worker.Tick(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -206,32 +206,28 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 		}
 		return values[0].(*big.Int)
 	}
-	load := func(name string) runtime.Workflow {
-		var job runtime.Workflow
-		if found, err := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(name), &job); err != nil || !found {
-			t.Fatalf("load %s lifecycle job: %v", name, err)
-		}
-		return job
-	}
+	load := func(name string) runtime.Workflow { return workflowNamed(t, worker.Snapshot(), name) }
 	run()
 	requested := load(cfg.Strategies[0])
-	if requested.Phase != "settled" || requested.Reserved || len(requested.Plan.Operations) != 1 || !requested.Plan.Operations[0].Progress.Done || requested.Plan.Operations[0].Progress.Outcome != "requested" || requested.Transaction.Execution == nil {
+	if requested.Phase != "settled" || len(requested.Plan.Operations) != 1 || !requested.Plan.Operations[0].Progress.Done || requested.Plan.Operations[0].Progress.Outcome != "requested" || requested.Execution == nil {
 		t.Fatal("confirmed request did not release account ownership with correlated execution evidence")
 	}
 	if read(issuer, issuerArtifact, "pendingShares", account).Int64() != 100 || read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(share, shareArtifact, "allowance", account, issuer).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Sign() != 0 {
 		t.Fatal("request did not consume exact allowance and retain issuer-owned pending shares")
 	}
-	if found, err := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[1]), new(runtime.Workflow)); err != nil || found {
-		t.Fatalf("unready claim became durable work: %v", err)
+	for _, row := range worker.Snapshot() {
+		if row.Name == cfg.Strategies[1] {
+			t.Fatal("unready claim became active RAM work")
+		}
 	}
-	run() // Restart while the issuer is still pending must not submit another request.
+	run() // Another tick while the issuer is still pending must not submit another request.
 	if read(issuer, issuerArtifact, "requestCount").Int64() != 1 {
-		t.Fatal("restart duplicated redemption request")
+		t.Fatal("next tick duplicated redemption request")
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &issuer, servicePack(t, issuerArtifact, "finalize", account))
 	run() // Separate claim strategy may now own the same account and nonce lane.
 	claimed := load(cfg.Strategies[1])
-	if claimed.Phase != "settled" || claimed.Reserved || !claimed.Plan.Operations[0].Progress.Done || claimed.Plan.Operations[0].Progress.Outcome != "claimed" || claimed.Transaction.Execution == nil || claimed.Transaction.Execution.TxHash == requested.Transaction.Execution.TxHash {
+	if claimed.Phase != "settled" || !claimed.Plan.Operations[0].Progress.Done || claimed.Plan.Operations[0].Progress.Outcome != "claimed" || claimed.Execution == nil || claimed.Execution.TxHash == requested.Execution.TxHash {
 		t.Fatal("matured issuer claim did not finish as its own confirmed execution")
 	}
 	if read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Int64() != 200 || read(issuer, issuerArtifact, "claimCount").Int64() != 1 {
@@ -239,74 +235,72 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	}
 	run()
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 2 {
-		t.Fatalf("completed lifecycle repeated across restart: nonce=%d error=%v", nonce, err)
+		t.Fatalf("completed lifecycle repeated within one process: nonce=%d error=%v", nonce, err)
 	}
 }
 
 // The catalogue intentionally contains no local-chain deployments. This fixture
 // constructs reviewed providers directly at the SDK boundary; production YAML
 // continues to reject manual runtime providers and uses authenticated discovery.
-func runIssuerFixture(ctx context.Context, path string, policies []redemptions.Config) error {
+func newIssuerFixture(t *testing.T, ctx context.Context, path string, policies []redemptions.Config) *runtime.Runtime {
+	t.Helper()
 	cfg, err := config.Load(path)
 	if err != nil {
-		return err
+		t.Fatal(err)
 	}
 	chainID := new(big.Int).SetUint64(cfg.Chain.ChainID)
 	client, err := chain.Dial(ctx, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID, common.HexToAddress(cfg.Chain.Multicall3))
 	if err != nil {
-		return err
+		t.Fatal(err)
 	}
-	defer client.Close()
+	t.Cleanup(client.Close)
 	source, err := permissions.New(cfg.Curator.HTTPConfig(), &http.Client{Timeout: cfg.Runtime.HTTPTimeout})
 	if err != nil {
-		return err
+		t.Fatal(err)
 	}
 	targets := make([]common.Address, len(cfg.Strategies))
-	for i, strategy := range cfg.Strategies {
-		targets[i] = common.HexToAddress(strategy)
+	for i, name := range cfg.Strategies {
+		targets[i] = common.HexToAddress(name)
 	}
 	accounts, caller, err := service.DiscoverIdentity(ctx, client, targets)
 	if err != nil {
-		return err
+		t.Fatal(err)
 	}
 	strategies := make([]runtime.Strategy, len(cfg.Strategies))
-	for i, strategy := range cfg.Strategies {
+	for i, name := range cfg.Strategies {
 		helper, err := redemptions.New(policies[i], providerRegistry.Deps{Chain: client})
 		if err != nil {
-			return err
+			t.Fatal(err)
 		}
-		revision, _ := json.Marshal(policies[i])
-		strategies[i] = runtime.Strategy{Config: runtime.Config{Name: strategy, Executor: strategy, Account: accounts[targets[i]].Hex(), Interval: cfg.Runtime.StrategyInterval, Revision: string(revision)}, Integrations: []provider.Integration{&issuerFixtureIntegration{helper: helper, cfg: policies[i]}}}
+		strategies[i] = runtime.Strategy{Config: runtime.Config{Name: name, Executor: name, Account: accounts[targets[i]].Hex(), Interval: cfg.Runtime.StrategyInterval}, Integrations: []provider.Integration{&issuerFixtureIntegration{helper: helper, cfg: policies[i]}}}
 	}
-	store, err := state.Open(cfg.StateDir)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-
 	txSigner, err := signer.FromEnv(cfg.Signer.KeyEnv)
 	if err != nil {
-		return err
+		t.Fatal(err)
 	}
 	driver, err := transaction.New(client, client, txSigner, chainID, cfg.Transaction)
 	if err != nil {
-		return err
+		t.Fatal(err)
 	}
 	reads, err := chainio.NewScheduler(client, cfg.Reads)
 	if err != nil {
-		return err
+		t.Fatal(err)
 	}
 	readCtx, cancelReads := context.WithCancel(ctx)
-	defer cancelReads()
-	go func() { _ = reads.Run(readCtx) }()
-	defer reads.Close()
+	readDone := make(chan error, 1)
+	go func() { readDone <- reads.Run(readCtx) }()
+	t.Cleanup(func() { cancelReads(); _ = reads.Close(); <-readDone })
 	planner := &runtime.Planner{PermissionSource: source, Chain: reads, ChainID: chainID, Caller: caller, Confirmations: cfg.Transaction.Confirmations, MaxConcurrent: cfg.Runtime.MaxPreparations}
-	worker := runtime.Runtime{Store: store, Planner: planner, Driver: driver, Strategies: strategies, Mode: "send", OperationTimeout: cfg.Runtime.OperationTimeout, ShutdownTimeout: cfg.Runtime.ShutdownTimeout, Log: logr.Discard(), ChainID: chainID, Caller: caller}
+	worker := &runtime.Runtime{Planner: planner, Driver: driver, Strategies: strategies, Mode: "send", OperationTimeout: cfg.Runtime.OperationTimeout, ShutdownTimeout: cfg.Runtime.ShutdownTimeout, MaxConcurrent: cfg.Runtime.MaxPreparations, Log: logr.Discard(), ChainID: chainID, Caller: caller}
+	t.Cleanup(func() {
+		if err := worker.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := worker.Start(ctx); err != nil {
-		return err
+		t.Fatal(err)
 	}
-	defer worker.Close()
-	return worker.Tick(ctx)
+	return worker
 }
 
 // The local issuer is outside the production catalogue. This small test-only

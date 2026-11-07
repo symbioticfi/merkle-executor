@@ -31,7 +31,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	runtime "github.com/symbioticfi/merkle-executor/sdk/runtime"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func loadRFQArtifact(t *testing.T, name string) serviceArtifact {
@@ -54,7 +53,7 @@ func loadRFQArtifact(t *testing.T, name string) serviceArtifact {
 	return serviceArtifact{ABI: parsed, Bytecode: v.Bytecode}
 }
 
-func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
+func TestAnvilLiquidLaneRFQConsumerRAMPublicationAndFill(t *testing.T) {
 	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
 		t.Skip("set MERKLE_ANVIL_TEST=1 for local RFQ consumer lifecycle")
 	}
@@ -228,21 +227,13 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	}
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
-	run := func() {
-		if e := runBotWithHTTP(ctx, path, true, false, new(bytes.Buffer), apiHTTP); e != nil {
-			t.Fatal(e)
-		}
-	}
-	load := func() runtime.Workflow {
-		var job runtime.Workflow
-		if found, e := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[0]), &job); e != nil || !found {
-			t.Fatal("job absent", e)
-		}
-		return job
-	}
+	next := startRAMService(t, ctx, &cfg, apiHTTP)
+	var rows []runtime.Workflow
+	run := func() { rows = next() }
+	load := func() runtime.Workflow { return workflowNamed(t, rows, cfg.Strategies[0]) }
 	run()
 	job := load()
-	if job.Phase != "authorized" || len(job.Plan.Operations) != 1 || job.Plan.Operations[0].Progress.Outcome != "publication-uncertain" || job.Transaction.Execution == nil || posts.Load() != 1 || quotes.Load() != 2 {
+	if job.Phase != "authorized" || len(job.Plan.Operations) != 1 || job.Plan.Operations[0].Progress.Outcome != "publication-uncertain" || job.Execution == nil || posts.Load() != 1 || quotes.Load() != 2 {
 		t.Fatalf("ambiguous publication lost ownership: phase=%s progress=%+v posts=%d quotes=%d", job.Phase, job.Plan.Operations, posts.Load(), quotes.Load())
 	}
 	originalData := bytes.Clone(job.Plan.Operations[0].Output.Data)
@@ -250,10 +241,10 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	run()
 	job = load()
 	if job.Phase != "authorized" || job.Plan.Operations[0].Progress.Done || job.Plan.Operations[0].Progress.Reference != orderID || posts.Load() != 1 || quotes.Load() != 2 || curatorCalls.Load() != treeCalls || !bytes.Equal(originalData, job.Plan.Operations[0].Output.Data) {
-		t.Fatal("API-only fill released work or restart changed identity")
+		t.Fatal("API-only fill released work or next tick changed identity")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 {
-		t.Fatal("restart duplicated authorization", nonce, e)
+		t.Fatal("next tick duplicated authorization", nonce, e)
 	}
 	for token, want := range map[common.Address]int64{tokenIn: 1000, tokenOut: 0} {
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: erc20.NewERC20().PackBalanceOf(account)}, nil)
@@ -272,9 +263,14 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	run()
-	job = load()
-	if job.Phase != "settled" || job.Reserved || !job.Plan.Operations[0].Progress.Done || job.Plan.Operations[0].Progress.Outcome != "settled" {
+	for {
+		run()
+		job = load()
+		if job.Phase == "settled" {
+			break
+		}
+	}
+	if job.Phase != "settled" || !job.Plan.Operations[0].Progress.Done || job.Plan.Operations[0].Progress.Outcome != "settled" {
 		t.Fatal("canonical fill did not settle", job.Phase, job.Plan.Operations)
 	}
 	for token, want := range map[common.Address]int64{tokenIn: 0, tokenOut: 950} {
@@ -286,7 +282,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	lookupCalls := gets.Load()
 	run()
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 || posts.Load() != 1 || quotes.Load() != 2 || gets.Load() != lookupCalls || curatorCalls.Load() != treeCalls {
-		t.Fatal("settled restart repeated network mutation", nonce, e)
+		t.Fatal("settled next tick repeated network mutation", nonce, e)
 	}
 }
 

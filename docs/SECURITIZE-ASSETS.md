@@ -58,7 +58,7 @@ The checked-in catalogue is copied exactly into
 `internal/providers/securitize/catalogue/securitize.yaml`, SHA-256
 `4eacabc956d8863fd2373e4f910315d84fc9ab0ed4b5be2969901ee31dbb9669`.
 Tests enforce equality with the reviewed source. Updates require deliberate
-review, copy and policy-version update. Recovery validates stored route, decimals,
+review, copy and policy-version update. Live reconciliation validates the RAM-held route, decimals,
 account, exact calldata, economic inputs and quote identity before I/O. It does
 not fetch the feed or adopt a new route or amount.
 
@@ -136,6 +136,6 @@ retry with a different amount, or widen permissions.
 Local tests exercise exact calldata, all catalog routes, decimal normalization,
 minimum output, configuration mismatch, unavailable routes, paused/illiquid
 ramps, malformed reads, canonical receipt identity, partial payments, mismatched
-events and restart reconciliation. They are ABI and receipt fixtures, not live
+events and live reconciliation. They are ABI and receipt fixtures, not live
 issuer transactions or evidence that a particular account is eligible. No live
 signing key, token transfer, investor registration or redemption was used.

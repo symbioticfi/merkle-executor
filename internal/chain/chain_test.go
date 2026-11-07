@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -190,11 +189,6 @@ func TestRPCFailuresRedactCredentialsAndBodiesButPreserveErrorIdentity(t *testin
 		"receipt":       func(ctx context.Context) error { _, e := client.TransactionReceipt(ctx, common.Hash{}); return e },
 		"nonce":         func(ctx context.Context) error { _, e := client.NonceAt(ctx, a, nil); return e },
 		"send":          func(ctx context.Context) error { return client.SendTransaction(ctx, testTransaction()) },
-		"fee-history":   func(ctx context.Context) error { _, e := client.FeeHistory(ctx, 3, nil, []float64{50}); return e },
-		"next-block-gas": func(ctx context.Context) error {
-			_, e := client.EstimateGasNextBlock(ctx, ethereum.CallMsg{To: &a}, &types.Header{Number: big.NewInt(1)}, time.Second)
-			return e
-		},
 	}
 	for name, operation := range operations {
 		t.Run(name, func(t *testing.T) {

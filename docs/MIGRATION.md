@@ -1,71 +1,45 @@
-# Runtime rewrite migration
+# RAM-only runtime migration
 
-This rewrite changes the Go runtime and YAML contracts. Update configuration before
-starting the new binary, and preserve the entire existing state directory. Stop the
-old process first; the state directory has one exclusive writer. The importer reads
-v1 files locally, validates them completely and activates a staged `v2` namespace.
-Original v1 files remain intact. Do not run an older binary against state after v2
-work has started: it cannot interpret new ownership.
+This runtime deliberately keeps all workflow, transaction and external-order state
+in RAM. The earlier durable v2 design is superseded: there is no state directory,
+journal, importer or restart recovery. Existing state files are not read, modified
+or deleted. A new process cannot resume work described by them.
 
-## YAML
+Before switching an existing deployment, account for outstanding transactions and
+orders with the old runtime. Stopping a process does not cancel an on-chain
+transaction or revoke an external authorization. The new process may prepare the
+same recipe again because it has no knowledge of earlier submissions. Keep one
+process per dedicated signer; there is no cross-process file lock or reservation.
 
-Rename `txManager.maxFeeGwei` to `transaction.maxFeeGwei`. Unknown old fields are
-rejected. Strategies remain a list of full executor addresses. Curator URL, chain ID
-and RPC URLs remain deployment inputs; optional signer address asserts discovered
-caller identity. Credentials remain environment-variable names.
+## YAML and CLI
 
-Runtime and resource policies now live in YAML under `runtime`, `reads`,
-`transaction` and `transaction.horizon`. The complete defaults are embedded from
-[`internal/config/defaults.yaml`](../internal/config/defaults.yaml); a user file
-strictly overlays them. Set only deployment overrides or copy the defaults for an
-explicit deployment profile. Configurable policies include read timeout and queue
-budgets, preparation concurrency, recipe cache bytes, polling, confirmation depth,
-fee horizons and drain timings. `chain.multicall3` selects the deployment explicitly.
-No aliases, anchors or extra YAML documents are accepted. Send mode requires a
-finite positive fee ceiling. `check-config` validates offline without reading keys.
+Remove `stateDir`. Rename old `txManager.maxFeeGwei` to
+`transaction.maxFeeGwei`. Remove `transaction.horizon`, `replacementInterval`,
+`pendingTimeout` and transaction-level `shutdownTimeout`. The sender uses a fixed
+`priorityFeeGwei`, `gasHeadroomBps`, `confirmations`, `pollInterval`,
+`broadcastTimeout`, `readTimeout` and `estimateTimeout`. Send mode requires a
+finite positive maximum fee covering the priority fee.
 
-## SDK contracts
+The strict user file overlays [YAML defaults](../internal/config/defaults.yaml).
+Removed fields are errors. Runtime shutdown timing remains under `runtime`.
+`status` and `reset-strategy` are removed; there is no offline runtime state to
+inspect or reset. `check-config`, `plan` and `run` remain. Use observability
+endpoints or the service's copied `OnSnapshot` callback for current-process state.
 
-| Removed contract | Replacement |
-| --- | --- |
-| `keeper.Keeper`, `keeper.Job`, separate `submission` journal | `runtime.Runtime`, one atomic `runtime.Workflow` |
-| `keeper.Planner`, `keeper.Config`, `keeper.Strategy` | `runtime.Planner`, `runtime.Config`, `runtime.Strategy` |
-| Runtime `Provider` plus optional recipe/staged/numeric/exclusive interfaces | `provider.Integration` compiles to independent `provider.Operation`s with complete `Requirements` |
-| Positional provider output/progress arrays | Stable integration/policy/operation IDs in `provider.Record` |
-| Fake recipe-input provider | Intrinsic anchored-input resolution in the planner |
-| Submission transport, manager acknowledgement and engine lifecycle | Host `runtime.Driver` and `PersistTransaction` callback |
-| Neutral chain types/read groups under provider/protocolio | `chainio` types and shared `chainio.Scheduler` |
+## Go SDK
 
-Protocol helper constructors may remain useful internally; the daemon registers
-only automatic integrations at startup. Implement `Compile(Program)` without I/O;
-return zero operations for an unmatched protocol. Operation IDs must identify a
-stable route/action set. Restore validates saved policy and assignments without
-recompiling or querying current APIs. Registration reorder/addition must preserve
-saved operation identities and completed exclusive ownership claims.
+- `runtime.Runtime` owns RAM maps directly; `Store`, preflight, import/migration,
+  durable deployment identity and `sdk/state` are removed.
+- `runtime.Config` has no recovery revision/fingerprint, and strategies have no
+  legacy configuration identity.
+- `runtime.Driver` has only `Execute(context.Context, Intent) TransactionResult`.
+  Transaction journals, persistence callbacks, Reserve/Release and Resume are removed.
+- `Workflow.Execution` holds canonical evidence directly; there is no serialized
+  transaction or reservation field. Snapshot returns independent copies.
+- Stable integration operations, assignment validation, recipe authorization and
+  shared read scheduling remain. Protocol records are kept in RAM through live
+  reconciliation; their Restore helpers validate those records without disk I/O.
 
-Hosts implement Driver reservation, exact signed-byte persistence before broadcast,
-canonical observation and observation-only signed recovery. Restore the runtime
-before admitting other jobs using the signer. Keep process storage/RPC alive through
-successful drain. Published SDK consumers must migrate their host adapters explicitly;
-this repository does not modify vault-solver or claim compatibility with its old API.
-
-## Existing active state
-
-Conversion checks deployment identity, executor inventory, configuration fingerprint,
-immutable execute bytes, ownership, legacy provider policy and signed variants.
-Active legacy fingerprints retain version 1 and exact raw source provenance. The
-host supplies explicit offline converters for the old provider-slot order. External
-order IDs, publication state, scan cursors, original attempts and receipt evidence
-remain unchanged. Conversion does not call APIs, replan, sign or broadcast.
-
-An orphan signed journal, removed active executor, unknown policy, changed active
-fingerprint, corrupt assignments or unverifiable ownership refuses startup before
-activation. Restore the matching configuration/source version and inspect the saved
-state; removing files or forcing a fresh order would discard ownership. A definitely
-unsigned admission can refresh through the runtime's durable release path. A signed
-attempt remains observation-only even when its receipt is missing.
-
-`status` reads local checkpoints without RPC or key access. `reset-strategy` acquires
-the process lock and clears only a safely terminal, unreserved workflow; active or
-ambiguous transactions must reconcile first. Original v1 files are retained for
-provenance and are not a second active runtime.
+Hosts must keep an admitted sender alive across individual request cancellation.
+Only conclusive canonical evidence or a definitely pre-broadcast failure releases
+its lane during that process. There is no cross-restart guarantee to migrate.

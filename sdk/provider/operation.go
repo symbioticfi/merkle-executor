@@ -25,7 +25,7 @@ type Requirements struct {
 	ExclusiveTargets map[string]common.Address `json:"exclusiveTargets,omitempty"`
 }
 
-// Integration compiles once per authenticated program. IDs and policies identify durable records.
+// Integration compiles once per authenticated program. IDs and policies identify live records.
 type Integration interface {
 	ID() string
 	Policy() string

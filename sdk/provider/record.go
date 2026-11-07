@@ -2,7 +2,7 @@ package provider
 
 import "github.com/ethereum/go-ethereum/common/hexutil"
 
-// Record persists stable identity, complete claims, assignments and protocol progress once.
+// Record holds stable identity, complete claims, assignments and live protocol progress.
 type Record struct {
 	Integration  string       `json:"integration"`
 	Policy       string       `json:"policy"`

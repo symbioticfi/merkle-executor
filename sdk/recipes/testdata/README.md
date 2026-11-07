@@ -25,5 +25,5 @@ The tests launch ephemeral loopback Anvil nodes, discover a committed recipe,
 assemble permissions, simulate and execute twice, check balances and allowance
 reset behavior, and verify Call and zero-gated runtime slots. Packed-value tests
 exercise the maximum `uint216` literal and full `uint256` inputs, numerical
-results and bound writes. The service test covers plan/send/restart. These tests
+results and bound writes. The service test covers plan/send and fresh-process forgetfulness. These tests
 use no external RPC endpoint or live signing credentials.

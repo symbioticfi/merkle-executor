@@ -3,11 +3,9 @@ package chain
 
 import (
 	"context"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"math/big"
 	"net/http"
 	"strings"
-	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -158,33 +156,4 @@ func rpcFailure(operation string, err error) error {
 		return nil
 	}
 	return &rpcError{operation: operation, cause: err}
-}
-
-// FeeHistory uses the read endpoint; sender nonce admission remains on write.
-func (c *Client) FeeHistory(ctx context.Context, count uint64, last *big.Int, percentiles []float64) (*ethereum.FeeHistory, error) {
-	history, err := c.Client.FeeHistory(ctx, count, last, percentiles)
-	return history, rpcFailure("read fee history", err)
-}
-
-// EstimateGasNextBlock simulates the call against the next block, including
-// the fourth-parameter block override. Invalid-params causes stay discoverable
-// through errors.As so the engine applies its latest-state fallback headroom.
-func (c *Client) EstimateGasNextBlock(ctx context.Context, msg ethereum.CallMsg, parent *types.Header, blockTime time.Duration) (uint64, error) {
-	if parent == nil || parent.Number == nil {
-		return 0, errors.New("next-block gas estimate needs a parent header")
-	}
-	overrides := map[string]any{"number": (*hexutil.Big)(new(big.Int).Add(parent.Number, big.NewInt(1))), "time": hexutil.Uint64(parent.Time + uint64(max(blockTime, time.Second)/time.Second))}
-	arg := map[string]any{"from": msg.From, "to": msg.To}
-	if len(msg.Data) > 0 {
-		arg["input"] = hexutil.Bytes(msg.Data)
-	}
-	if msg.Value != nil {
-		arg["value"] = (*hexutil.Big)(msg.Value)
-	}
-	if msg.Gas != 0 {
-		arg["gas"] = hexutil.Uint64(msg.Gas)
-	}
-	var gas hexutil.Uint64
-	err := c.Client.Client().CallContext(ctx, &gas, "eth_estimateGas", arg, "latest", nil, overrides)
-	return uint64(gas), rpcFailure("estimate next-block transaction gas", err)
 }

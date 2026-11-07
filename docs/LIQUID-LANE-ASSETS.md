@@ -76,8 +76,8 @@ The checked-in catalogue is copied exactly into
 `internal/providers/redemptions/catalogue/liquid-lane.yaml`, SHA-256
 `14f5c8979da891a85b913244d9829d93f53d507263413d990d73026ff9139fe6`.
 Tests enforce byte-for-byte equality with the reviewed source. A catalogue update
-requires deliberate review, copy and policy-version update. Recovery validates
-stored configuration, account, action bytes and numerical inputs against this
+requires deliberate review, copy and policy-version update. Live reconciliation validates
+RAM-held configuration, account, action bytes and numerical inputs against this
 embedded policy before I/O; it does not discover a new route or amount.
 
 ## Issuer calls and readiness

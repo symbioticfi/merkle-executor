@@ -75,8 +75,8 @@ func OutputRequirements(out Output, targets map[string]common.Address) Requireme
 	return requirements
 }
 
-// ValidateRecord checks all durable assignment and receipt claims before protocol I/O.
-// Numerical values are retained for audit/recovery; restored work does not rerun its lens.
+// ValidateRecord checks assignment and receipt claims before live protocol I/O.
+// Prepared numerical witnesses are retained without rerunning their lens.
 func ValidateRecord(record Record, integration, policy string, expected Requirements) error {
 	if record.Integration != integration || record.Policy != policy || record.ID == "" || record.ID != OperationID(expected.Actions) {
 		return errors.New("persisted operation identity or policy differs")

@@ -1,38 +1,32 @@
 # Merkle executor
 
-A Go runtime for curator-committed `RecipeExecutor` strategies. It discovers the
-current `SetRecipe`, assembles runtime calldata from the active permission tree,
-resolves protocol data, simulates the complete call and optionally sends it.
+A RAM-only Go service for curator-committed `RecipeExecutor` strategies. It discovers
+the current recipe, authenticates permissions, fills authorized runtime data,
+simulates the complete call and optionally sends it. Protocol integrations share a
+bounded Multicall3/JSON-RPC scheduler and numerical prefix lens.
 
-Recipes use opcode-prefixed `bytes[]` steps and packed operands/bindings from
-the current `IRecipes` schema. Literal values and indices fit `uint216`;
-runtime inputs and computed results retain all 256 bits. [Wire format](docs/DESIGN.md).
-
-The service uses integration-neutral infrastructure,
-isolated protocol packages, strict YAML, generated ABI bindings, Cobra, logr and
-one serialized transaction sender. [Design and comparison](docs/DESIGN.md).
+All workflow, transaction and external-order knowledge is process-local. There is
+no state directory, disk journal, importer or restart recovery. A fresh process
+starts from current chain/API state and can repeat earlier work. Use one process
+per dedicated signer. [Architecture](docs/DESIGN.md) · [migration](docs/MIGRATION.md).
 
 ## Supported execution
 
 | Flow | Implementation |
 | --- | --- |
-| Ordered Morpho/Aave funding, caps and overflow deposits | Execute the committed on-chain recipe. Read-derived values resolve through the shared lens, including authenticated preceding effects. |
-| All 15 documented LL assets plus sUSN and USN | `redemptions` provider prepares Midas, Centrifuge, OpenEden, Figure, Pareto and Noon requests, eligible claims and native USN → USDC redemption. [Catalogue and lifecycle](docs/LIQUID-LANE-ASSETS.md). |
-| Securitize EVM assets | `securitize` provider prepares wallet requests and legacy/modern atomic offramps for all 10 symbols in the public feed. [Deployment coverage and limits](docs/SECURITIZE-ASSETS.md). |
-| CoW Swap | Quote, build account ERC-1271 authorization, wait for its confirmed transaction, submit/reconcile deterministic order UID, verify full fill on-chain. |
-| Merkl reward claims | Read V4 rewards, use cumulative amounts, verify effective distributor root/proof and recipient, encode an approved bounded claim. |
-| 3F reads and other protocols | Recipe reads and arithmetic determine numeric inputs. Additional off-chain protocol data requires an authenticated provider implementation. |
+| Morpho/Aave funding, caps and overflow | Execute the committed recipe with authenticated read-derived amounts. |
+| LL issuer assets, sUSN and native USN → USDC | Automatic Midas, Centrifuge, OpenEden, Figure, Pareto and Noon routes. [Catalogue and limits](docs/LIQUID-LANE-ASSETS.md). |
+| Securitize EVM assets | Wallet requests and reviewed legacy/modern atomic offramps. [Catalogue and limits](docs/SECURITIZE-ASSETS.md). |
+| CoW Swap | Quote, account authorization, publication and canonical full-fill reconciliation. |
+| Liquid Lane RFQ | Exact-input quote, account authorization, publication and canonical Reactor Fill reconciliation. |
+| Merkl | Root/proof/recipient-verified cumulative reward claims. |
+| Generic protocols | Committed reads, arithmetic and authorized calls; additional off-chain data needs an integration. |
 
-The transaction engine supports the current Solidity interpreter's operations;
-automatic preparation rejects recipes whose runtime data cannot be determined from
-authenticated instructions, permission fields and numeric results. Token pairs must
-be pinned, and trade amounts and minimum proceeds must depend on recipe reads.
-One shared same-executor lens resolves numeric dependencies after authenticated
-Manage, Approve and Call effects. Earlier unresolved provider actions, unknown
-Inputs and future/circular dependencies fail with an explicit unsupported error. The service does not infer economic intent or invent
-calldata layouts. Async redemptions need separate request and claim recipes.
-CoW settlement occurs in a later transaction, so subsequent deposit work belongs
-in a later recipe. [Provider configuration and limits](docs/PROVIDERS.md).
+Async issuer requests and claims use independent recipes. CoW fills settle later,
+so follow-up deposits belong in later recipes. Unsupported dependencies, unknown
+input sources and ambiguous settlement attribution fail explicitly. The runtime
+does not infer economic intent or change committed instructions, targets, masks,
+proofs, native value or caller identity. [Provider contracts](docs/PROVIDERS.md).
 
 ## Build and run
 
@@ -44,196 +38,87 @@ bin/merkle-executor run --config config/operator.local.yaml --once
 bin/merkle-executor run --config config/operator.local.yaml
 ```
 
-`simulate` is the default mode and requires no key. `plan` always simulates and
-prints a reviewable transaction package; it never signs, broadcasts or posts an
-order. Curator permissions come from the configured backend deployment. Merkl
-rewards, CoW quotes and automatic CoW slippage use fixed protocol API endpoints.
-Treat plan files and the state directory as operational data: they contain
-calldata, signatures and prepared orders. Logs omit those payloads.
+`simulate` is the default and reads no signing key. `plan` prints the simulated
+transaction package without signing, broadcasting or publishing an order. Plan
+output can contain calldata and prepared order data; logs omit those payloads.
 
-For sending, configure `mode: send`, set `MERKLE_EXECUTOR_PRIVATE_KEY` in the
-process environment and choose a finite positive `transaction.maxFeeGwei` ceiling.
-The key determines the sending address; startup verifies it against every
-executor's authorized caller before transaction admission. Gas is estimated
-for the next block with headroom, and priority fees follow recent block fullness. Grant leaf roles to the **executor
-contract**, set its caller to the sending EOA, publish the recipe and accept the
-permission root through the existing curator workflow. The service manages no
-governance permissions. Use a dedicated sending EOA for repeatable Merkle recipes. The generic engine can
-reconcile same-key nonce races, but independent recipe services have no shared
-business-state reservation and can each execute the same recipe.
+Strategies are full, nonzero executor addresses. Startup discovers their accounts
+and authorized caller at a shared pin, deduplicates reads and closes a canonical
+check. All executors in one process must share one caller. The configured chain ID
+and optional `signer.address` are checked before sending. Every preparation gets
+curator permissions from `/merkle-trees/{acceptedRoot}?chainId=...` and independently
+validates every leaf and proof, including unused leaves.
 
-All relative paths resolve against the configuration file. Strategies specify
-executors; one pinned, deduplicated read group discovers each `account()` and
-`caller()`, followed by a canonical block check. All executors in one process must
-have the same nonzero caller. Planning and simulation use that caller without a
-private key. The required `curator.url` identifies the curator-backend deployment,
-including `/api/v1`; RPC endpoints and the expected chain ID also remain deployment
-inputs. No global endpoint or universal safe fee ceiling can be inferred.
+For sending, set `mode: send`, supply the key in `MERKLE_EXECUTOR_PRIVATE_KEY` (or
+`signer.keyEnv`) and set a finite positive `transaction.maxFeeGwei`. The key must
+match the discovered caller. Protocol endpoints and supported layouts are reviewed
+integration policies; RPC URLs, curator deployment, signer environment-variable
+name and resource/fee policies live in YAML. Secret values never belong in YAML.
 
-`strategies` is a list of full, nonzero executor addresses. Each address is
-normalized to lowercase, including `0x`, and directly identifies durable state,
-logs and metrics. Reordering does not change identity; duplicate addresses are
-rejected, including different checksum spellings. Strategy objects, labels and
-per-strategy options are rejected before network access.
+Strict user YAML overlays [embedded defaults](internal/config/defaults.yaml).
+Unknown fields, duplicate strategies, anchors, aliases and extra YAML documents
+are rejected. Relative permission/configuration paths resolve against the config
+file. `chain.rpcUrl` and `chain.writeRpcUrl` support environment interpolation;
+HTTP redirects are refused. There is no `stateDir`, `status` or `reset-strategy`.
 
-The runtime policy version is `2`. Its recovery fingerprint binds the executor,
-chain, discovered account and caller, curator source, provider policies and sender
-fee ceiling. Active work must match that fingerprint before it can resume.
+## Preparation and batching
 
-Cache, timeout, polling, confirmation, fee-horizon and batching policies live in YAML.
-The complete defaults are in `internal/config/defaults.yaml`; strict user configuration overlays them.
-See [migration](docs/MIGRATION.md) for the Go/YAML changes and offline v1 state conversion.
-Optional `signer.address` is an identity assertion,
-and `signer.keyEnv` may name an alternative key environment variable. Neither is
-required. Offline `check-config`, `status` and `reset-strategy` never read a key or
-contact RPC; state commands check the chain and saved caller identity, plus the
-optional address assertion. Secrets use environment variable names.
-`chain.rpcUrl` and `chain.writeRpcUrl` support environment interpolation. HTTP
-redirects are refused.
+Integrations compile once from each authenticated program and declare complete
+input/action/settlement claims. Independent issuer routes are separate operations.
+Nonnumerical operations prepare first, then one union prefix lens resolves shared
+read dependencies after authorized preceding effects. Dependent operations fill
+their data; assembly and original-executor full simulation verify exact results,
+roles and current metadata before fresh canonical closing checks.
 
-Independent reads use bounded JSON-RPC arrays on the read endpoint. Caller-independent,
-source-verified getters aggregate through the standard Multicall3 address,
-`0xcA11bde05977b3631167028862bE2a173976CA11`. An unavailable or incompatible
-deployment fails the preparation; it never triggers a fallback to individual
-reads. Arbitrary data reads and ERC-1271 checks preserve their original caller
-and separate `eth_call` execution. Full simulations remain isolated EVM calls
-while sharing JSON arrays with getters.
-Dependent reads and the later closing canonical checks remain ordered.
-Automatic Merkl learns its distributor after recipe authentication and submits
-its later read stage through the shared scheduler. Numeric values for all adapters share one prefix lens call. Verified recipe-event bodies can
-be reused after fresh metadata and canonical event-header checks; account state,
-permissions and simulation remain fresh. The retained recipe cache defaults to a configurable
-16777216-byte (16 MiB) budget. Entries are also limited by
-the number of configured strategies and are cleared on restart.
-[Batching scopes and compatibility](docs/PROVIDERS.md#shared-numerical-prefix-and-read-batching);
-[measured automatic-path scale](docs/RUNTIME-BATCHING.md).
+One shared scheduler coalesces ready reads across executors/routes with YAML limits
+for members, wire bytes, calldata, output, gas, outstanding work and concurrency.
+Reviewed caller-independent getters use configurable Multicall3; caller-sensitive
+calls, code overrides and full simulations remain isolated EVM calls in JSON arrays.
+Failed batches do not fall back to singles. Deduplication requires the same complete
+immutable numbered-block context; latest/pending and closing observations stay fresh.
+The indexed RAM recipe cache retains immutable event evidence only.
 
-## Permissions and runtime inputs
+[Measured automatic-path scale](docs/RUNTIME-BATCHING.md) covers 1–1,024 executors,
+including cold/warm caches, slow APIs and failed chunks. These local fixtures do
+not establish production throughput or theoretical optimality.
 
-For every new preparation, the daemon fetches `/merkle-trees/{acceptedRoot}?chainId=...`
-from the configured curator backend. The root comes from the authenticated on-chain
-snapshot. The response must identify the configured chain and exact active root;
-every leaf hash and sorted-pair proof is verified, including unused leaves. Backend
-`adapter`, actions and display metadata do not authorize execution. Strategies contain only executor addresses. The SDK retains its optional local
-permission-file interface for other hosts.
+## Process lifetime
 
-Derived accounts and callers, chain identity, curator settings, the runtime policy
-version and transaction fee policy are part of the recovery fingerprint. Recovery
-validates the saved configuration and never rewrites journal identity. Curator
-access is required for new preparation; saved signed attempts and external
-settlement resume without fetching a new permission tree.
+The runtime holds current workflows, account locks and one sender worker in RAM.
+Individual Tick cancellation does not create another transaction. The sender uses
+the write endpoint's mined nonce, estimated gas with fixed headroom and YAML maximum
+and priority fees. It signs and broadcasts once, then observes canonical receipt
+evidence. There is no fee replacement or rebroadcast engine. Ambiguous or missing
+receipts keep the active lane occupied while the process lives.
 
-`SetRecipe` fixes instructions and runtime slot ordering. Providers output input
-indices and/or replacement calldata keyed by `stepIndex:actionIndex`. Replacement
-bytes must preserve the approved length and all unmasked bits. Targets, masks and
-proofs come from the verified permission package. Duplicate provider assignments
-are errors. Result bindings and arithmetic execute on-chain. An explicit skipped
-Manage step still occupies a runtime slot and must pass full simulation.
+Canonical reverts halt their strategy; unrelated strategies can continue. Confirmed
+external work retains its account until exact protocol settlement evidence completes.
+Order IDs, publication ambiguity and scan cursors remain stable through in-process
+retries. API-only filled status does not prove payout. Request completion means
+`requested`, allowing a later claim strategy; it does not mean issuer payment.
 
-For a claim → Morpho-cap → Aave-overflow recipe, commit the claim and issuer
-operations, balance reads and routing arithmetic in the recipe. Startup registers
-a fixed provider set; authenticated action layouts select the applicable protocols.
-Integrations supply unavailable proofs, request IDs and signatures. Runtime inputs
-use exact recipe-result anchors or the maximum permitted READ-derived bounds;
-unknown sources are rejected.
-SDK hosts implement their own providers through the SDK provider interfaces;
-the daemon does not expose manual provider configuration.
-
-## Lifecycle and recovery
-
-Prepared jobs and signed bytes are atomically persisted and fsynced before
-broadcast, including every replacement. Its local transaction engine provides
-mined-nonce admission, adaptive EIP-1559 horizon fees, next-block gas estimation,
-same-nonce fee replacements, exact rebroadcast of uncertain attempts, canonical
-receipt confirmation, bounded tracking and graceful shutdown. Caller cancellation
-does not stop admitted work; subsequent ticks rejoin it. A receipt from any owned
-variant can complete the job. No cancellation self-transfers are sent.
-
-Restart observes saved hashes without signing or broadcasting. A timeout, missing
-receipt or consumed nonce without an owned receipt retains the workflow reservation
-and blocks signer admission. Generic recipes can execute more than once, so timeout
-alone cannot authorize a retry or provider settlement. Canonical transaction evidence
-and workflow progress are durable before ownership is released.
-
-`transaction.maxFeeGwei` is the required absolute sending fee ceiling. Timings,
-confirmation depth, replacement horizons and gas headroom use explicit YAML policy;
-see [transaction processing](docs/TRANSACTIONS.md). One transaction driver persists
-all signed variants in the same workflow checkpoint before broadcast.
-
-Issuer providers require the account's confirmed `Manage` logs to match their
-prepared calls, so a skipped recipe group cannot count as a request. Request jobs
-finish as `requested` and release the account for later claim recipes. This records
-submission, not issuer payout. Receipt evidence survives restarts. Securitize wallet
-requests additionally require exact token delivery; atomic offramps require payment
-evidence. Native Noon redemption requires the account's separate USN whitelist,
-fresh full-amount quote, remaining block budget, and treasury USDC balance plus
-allowance. Its receipt must prove the exact managed redemption, USN burn and
-account USDC payment before finishing as `redeemed`. Issuer enrollment and
-external settlement remain issuer-controlled.
-
-After authorization confirms, external progress is checkpointed in the workflow.
-CoW API status alone is insufficient to finish a trade. Full on-chain fill or
-confirmed on-chain deadline expiry ends tracking with distinct outcomes. New
-work for the same account waits while another job is unresolved. Changing or
-removing an active strategy is rejected; restore its configuration to reconcile it.
-Unsent prepared jobs are refreshed before signing so old quotes are not reused.
-
-Status reads atomic snapshots while the daemon runs. Stop the daemon before resetting:
-
-```sh
-bin/merkle-executor status --config config/operator.local.yaml
-bin/merkle-executor reset-strategy --config config/operator.local.yaml --executor 0x0000000000000000000000000000000000000002
-```
-
-Use the executor address shown by `status` with `reset-strategy --executor`.
-Invalid or zero addresses fail before state opens.
-
-Reset is permitted only for terminal workflows with no signer reservation.
-Confirmed reverts halt the strategy until inspected/reset. Preserve the state
-volume across deployments. Do not delete unresolved state, change nonce ownership,
-or treat root/role changes as cancellation of an already approved CoW digest.
-Account-owner revocation and settlement-specific invalidation remain explicit
-protocol operations.
+Process exit loses this knowledge without canceling already submitted transactions
+or orders. Restart has no idempotency guarantee. Shutdown cancels/drains the sender
+before closing I/O. [Transaction policy](docs/TRANSACTIONS.md).
 
 `/healthz`, `/readyz` and `/metrics` are available when `observability.addr` is set.
-Readiness reflects the last runtime iteration. Each provider and strategy shares
-the process's single sender; pure data providers never submit transactions.
+Readiness reflects the last iteration. Embedded hosts can observe copied RAM
+workflows through `service.Options.OnSnapshot` or `Runtime.Snapshot`.
 
-## Validation and source generation
+## Verification
 
 ```sh
-make check       # build, race tests with coverage, vet and lint
-make integration # ephemeral loopback Anvil, real RecipeExecutor bytecode
-make generate    # regenerate committed bindings/wire types from vendored artifacts
+make check       # both modules: build, race/coverage tests, vet and lint
+make integration # ephemeral local Anvil and fixture APIs; no external chain
+make generate    # vendored ABI bindings, lens and protocol wire types
 ```
 
-The service uses Go 1.27.1. Generation installs pinned `abigen` 1.17.5 locally in
-`.tools` using Go 1.26.8 because its CLI dependency excludes Go 1.27. Python 3 is
-also required for wire type generation.
+The service uses Go 1.27.1. Generation pins abigen 1.17.5 with toolchain 1.26.8
+because its CLI dependency excludes Go 1.27; Python 3 is also required. Bindings
+are regenerated from vendored interfaces. Source provenance and deliberate schema
+subsets remain under `api/schemas`.
 
-The local integration exercises event discovery, permissions, arithmetic/bindings,
-managed transfers, allowance resets, direct Call, skipped gates and a request →
-issuer fulfillment → independent claim lifecycle with restart recovery. Provider tests
-use HTTP/RPC fixtures and independent digest vectors. They do not certify live
-third-party deployments. Contract/protocol artifacts record their sources;
-refresh them when the on-chain ABI or upstream API changes.
-The [verification record](docs/VERIFICATION.md) separates local checks from live
-integration coverage.
-
-Liquid Lane consumer redemptions use `liquidlane-rfq`: fixed-policy EXACT_INPUT
-quotes, account Sign authorization, idempotent public RFQ publication and canonical
-Fill reconciliation. One ordinary ERC20 output to the derived account is supported;
-[supported recipe shapes and limits](docs/PROVIDERS.md#liquid-lane-rfq-consumer-redemptions)
-are validated before requesting a quote.
-
-Signed Liquid Lane discount acquisition and signatures belong to vault-solver. The
-daemon does not include a signed-swap acquisition provider; the SDK exposes
-protocol-neutral provider interfaces for host integrations. The `redemptions` issuer
-request/claim provider remains registered. The recipe fixes identities, permitted
-layouts and economic constraints; protocol endpoints, expiry limits and preparation
-bounds use fixed policies. CoW uses its own automatic slippage calculation.
-
-The curator route is verified against source and local fixtures; its availability
-on a particular deployment must be checked before rollout. [Wire contract](api/schemas/CURATOR_PERMISSIONS.md).
-
-The shared execution implementation is an independently versioned [Go SDK](sdk/README.md). See [host integration and ownership](docs/MERKLE-SDK.md).
+[Verification evidence](docs/VERIFICATION.md) separates local EVM, HTTP/RPC fixtures
+and deployment checks. Local tests never use live signing credentials.
+The [independent SDK](sdk/README.md) builds from checked-out source in this daemon;
+[host integration](docs/MERKLE-SDK.md) documents its RAM-only ownership contract.

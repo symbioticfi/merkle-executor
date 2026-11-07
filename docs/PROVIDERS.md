@@ -1,26 +1,25 @@
 # Protocol providers
 
 Normal daemon `strategies` entries are full nonzero executor addresses, directly
-used as lowercase state, log and metric identifiers. Duplicate normalized addresses
+used as lowercase RAM-workflow, log and metric identifiers. Duplicate normalized addresses
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
-Runtime policy version `1` binds the current configuration and built-in provider
-policies. The daemon installs automatic CoW, Merkl, Liquid Lane RFQ,
-issuer-redemption, Securitize and recipe-input adapters in a fixed order. Typed
-provider settings are internal recipe and recovery data.
+The daemon registers automatic CoW, Merkl, Liquid Lane RFQ, issuer-redemption and
+Securitize integrations at startup. Each matched route compiles to an independent
+operation; generic numerical inputs resolve intrinsically through the shared lens.
+Typed protocol settings and progress remain process-local data.
 Token pairs, amounts, minimum proceeds, action/input mappings, deployment targets
 and authorization shapes come from the
 authenticated recipe and its permission tree; they are not operator parameters.
-Unmatched adapters produce an empty durable output and finish normally.
+Unmatched integrations compile to zero operations.
 
 The operator supplies the chain RPC endpoint, curator-backend endpoint, executor
 addresses and, for send mode, the environment variable containing one private key.
 Startup derives each executor's account and common caller at a pinned block and
-checks its canonical header. The send key must match that caller before durable
-state is opened. Plan mode reads no private key and creates no signing journal.
-Optional identity assertions must match discovery. Operational policy, standard
-Multicall3, bounded HTTP resources, cache capacity and protocol endpoints are built-in
-constants. [Minimal configuration](../config/example.yaml).
+checks its canonical header. The send key must match that caller before sending. Plan mode reads no private key.
+Runtime workflows and order progress live only in RAM; process exit forgets them.
+Optional identity assertions must match discovery. Runtime, resource, cache and Multicall3 policies use YAML defaults; protocol
+endpoints and authentication layouts are reviewed integration constants. [Minimal configuration](../config/example.yaml).
 
 ## Authenticated recipe policy
 
@@ -44,7 +43,7 @@ maximum of all preceding lower floors, including literal floors when another flo
 is READ-derived. A direct Result or equality-bound floor must exactly match the
 selected signed value. Providers never change bindings to make a quote fit. Pure
 constant numeric Results may supply nonfinancial fields such as expiry/hash/index;
-they still must exactly match the persisted wire bytes. Claim indexes require an
+they still must exactly match the prepared wire bytes. Claim indexes require an
 exact deterministic source, and never select an index from a ceiling.
 
 Examples rejected before protocol HTTP include an unpinned token or recipient,
@@ -68,12 +67,13 @@ reads. Packed uint216 operands, checked arithmetic, division by zero and caller
 context follow the pinned Recipes implementation.
 
 The full original executor then simulates the complete immutable transaction. Its
-returned numeric values must equal the persisted witness for every dependency used
+returned numeric values must equal the prepared witness for every dependency used
 by signed economics or the supporting prefix. This detects override-code
 introspection or other divergence. Preparation and presend verify this witness.
-Recovery of an already signed attempt keeps the exact saved bytes and reconciles
-canonical receipt/execution evidence; it does not rerun economic preparation,
-acquire a fresh quote or rewrite signed values. The lens targets Cancun and is reproducibly generated with pinned solc 0.8.37.
+Once signed, the in-process sender observes that exact attempt and reconciles
+canonical receipt/execution evidence. It does not rerun economic preparation,
+acquire a fresh quote or rewrite signed values. Process exit forgets the attempt.
+The lens targets Cancun and is reproducibly generated with pinned solc 0.8.37.
 `make generate` regenerates it; `make -C sdk verify-lens` checks exact artifacts.
 
 Some valid compositions are explicitly unsupported: a needed READ following an
@@ -121,12 +121,12 @@ ownership or missing candidate information is rejected; no deployment is guessed
 The quote supplies only authorized amount/deadline/nonce/output words. Expiry bounds
 are 60..1800 seconds. Signed discount production remains in vault-solver.
 
-Confirmed account authorization precedes idempotent consumer submission. Durable
-request/quote identity, signatures, usage/settlement progress and cursors survive
-restart. Completion requires canonical matching input/output transfers and Reactor
+Confirmed account authorization precedes idempotent consumer submission.
+Request/quote identity, signatures, usage/settlement progress and cursors stay in RAM
+through in-process retries; they are lost on exit. Completion requires canonical matching input/output transfers and Reactor
 usage evidence. Paginated lookup and bounded event scanning fail closed on missing,
 ambiguous or overly dense evidence. Lookup checkpoints after 10 API pages per tick
-and resumes across restarts, preserving duplicate checks and withholding publication
+and continues on later ticks, preserving duplicate checks and withholding publication
 until the scan completes. No new quote is obtained for an existing job.
 [Consumer wire schema and evidence](../api/schemas/LIQUID_LANE_RFQ.md).
 
@@ -169,7 +169,7 @@ Securitize support is registered automatically for the embedded published EVM
 routes. [Catalogue and lifecycle guide](SECURITIZE-ASSETS.md) records wallet
 transfers, modern `redeem(amount, minOutput)` and legacy `redeem(amount)` offramps.
 Token, wallet/offramp, payment pair and mode must match one committed route.
-Catalogue updates require explicit review; execution and recovery never fetch or
+Catalogue updates require explicit review; preparation and live reconciliation never fetch or
 adopt a new feed. VBILL on BNB has no published redemption route, and non-EVM
 entries are outside RecipeExecutor.
 
@@ -177,8 +177,8 @@ Amounts use the recipe-derived budget policy above. Modern minimums require a
 read-dependent Result or preceding result-based lower/equality guards. Legacy
 redemptions require an explicit payment-token balance-delta floor in the original
 recipe because their calldata has no minimum word. A floor Input is saved as a
-separate guard assignment, filled from the derived minimum and revalidated on
-recovery. Free minimums and circular unresolved dependencies are rejected.
+separate guard assignment, filled from the derived minimum and revalidated during
+live reconciliation. Free minimums and circular unresolved dependencies are rejected.
 
 Wallet completion requires exact token delivery and returns `requested`, recording
 the issuer request. Atomic offramps check decimals, payment topology, quote and
@@ -195,10 +195,10 @@ target, including zero-gated populated actions and providers already complete.
 Arbitrary `Call` instructions are incompatible with these receipt claims because
 they can invoke account `manage` indirectly. Approvals, reads, arithmetic,
 unrelated Manage targets and later payment transfers remain available. The SDK
-checks this composition before provider reads and again on durable recovery.
+checks this composition before provider reads and live reconciliation.
 Saved catalogue policy, account, configuration, action bytes and input semantics
-are checked before network I/O; recovery does not rederive economics or rewrite the
-saved journal. Full original recipe simulation remains required before signing.
+are checked before network I/O; live reconciliation retains the prepared economics
+and exact assignments. Full original recipe simulation remains required before signing.
 
 ## Merkl cumulative account rewards
 
@@ -224,25 +224,24 @@ Order validity is 1800 seconds.
 
 Quotes use CoW's AUTO dynamic slippage policy and volume suggestions, with its
 protocol fallback when suggestions are unavailable. There is no operator slippage
-parameter. Deterministic full appData and its signed hash are persisted with the
+parameter. Deterministic full appData and its signed hash are retained in RAM with the
 selected gross amount, minimum proceeds, quote/order identity and exact sign bytes.
 The recipe's derived minimum remains binding even when AUTO proposes a lower value.
 [CoW AUTO policy and pinned provenance](../api/schemas/COW_AUTO.md).
 
 Advance verifies the exact confirmed account sign call before order POST. Idempotent
-lookup/POST preserves the UID through ambiguity and restart; recovery uses only
-persisted config/order and canonical execution evidence. Partial fills stay owned,
+lookup/POST preserves the UID through in-process ambiguity; reconciliation uses
+the prepared config/order and canonical execution evidence. Exit loses that identity. Partial fills stay owned,
 and terminal completion requires on-chain settlement evidence as well as API state.
 
-## Recovery and provider interfaces
+## RAM records and provider interfaces
 
 Automatic integrations compile once into stable per-route operations. Only matched
-operations have saved records. Identity combines integration ID, policy and action
-keys; registration ordering does not affect recovery. Envelopes bind assignments
-and fully derived protocol configuration. Recovery validates complete ownership,
-including finished operations, and immutable execute permissions before protocol I/O.
-Signed attempts retain exact bytes and recover through canonical receipt observation;
-existing work never fetches replacement curator permissions or fresh quotes.
+operations have records. Identity combines integration ID, policy and action keys.
+Envelopes bind assignments and derived configuration. Live reconciliation validates
+complete ownership, including finished operations, and immutable execute permissions
+before protocol I/O. Existing work does not fetch replacement curator permissions
+or fresh quotes. There is no disk serialization, import or restart recovery path.
 
 Direct typed provider constructors serve recipe derivation, saved output
 validation and focused tests. They are not daemon configuration inputs. Generic static/http/rpc data providers are not included in the daemon; deterministic
@@ -252,8 +251,8 @@ recipe-constrained Inputs resolve intrinsically through the shared lens.
 
 `make check` covers host and SDK race tests, vet and lint. `make integration` uses
 only ephemeral local Anvil, generated fixture credentials and HTTP fixtures.
-Normal automatic fixtures cover Read-derived transfer plan/send/restart, RFQ
-consumer restart/fill, and Merkl claim effects feeding later recipe balances. SDK
+Normal automatic fixtures cover Read-derived transfer plan/send, RFQ
+consumer RAM publication/fill, and Merkl claim effects feeding later recipe balances. SDK
 lens fixtures verify caller/origin, constrained preview Inputs, stateful effects,
 allowance reset/zero short-circuit, overflow/division errors and original-code
 introspection divergence. These are local/API-fixture results; no deployment,

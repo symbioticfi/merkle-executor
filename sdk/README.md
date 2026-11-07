@@ -9,11 +9,9 @@ this checked-out source through an explicit root-module replacement.
 - `recipes`: committed recipe discovery, permission validation, prefix lens,
   authorized runtime assembly, full simulation and immutable event cache.
 - `provider`: authenticated `Program`, `Integration`, independent `Operation`,
-  complete ownership `Requirements`, persisted `Record`, `Output` and `Progress`.
-- `runtime`: multi-executor `Planner`, atomic `Workflow` coordinator, offline v1
-  importer and host-supplied transaction `Driver` contract.
+  complete ownership `Requirements`, RAM `Record`, `Output` and `Progress`.
+- `runtime`: multi-executor `Planner`, RAM `Workflow` coordinator, host-supplied transaction `Driver` contract.
 - `protocolio`: bounded protocol HTTP, ABI helpers and execution-log validation.
-- `state`: exclusively owned atomic JSON checkpoints and staged namespace activation.
 - `abi`, `bindings`: vendored core interfaces and regenerated bindings.
 
 An integration compiles locally once from a copied authenticated program. It emits
@@ -21,8 +19,8 @@ zero or more operations, each with a stable ID and policy independent of registr
 order. Operations declare every input, action and exclusive settlement target they
 own. Preparation receives the shared attempt reader and resolved numeric results.
 External Advance consumes saved assignments/progress and canonical execution evidence.
-Persist deterministic order identity before a POST; reconcile it before retrying.
-Completed operations retain their ownership claims through recovery.
+Keep deterministic order identity in RAM before a POST; reconcile it before retrying.
+Completed operations retain their ownership claims throughout live reconciliation.
 
 The planner performs nonnumeric preparations, one union prefix lens, dependent
 preparations, immutable assembly and full caller-bound simulation. Intrinsic read-derived
@@ -38,27 +36,27 @@ and code overrides remain isolated EVM calls while sharing transport batches. An
 actual batch failure does not fall back to singles. Queue, concurrency, member, gas,
 calldata and wire-byte budgets are enforced; cancellation preserves other live owners.
 
-`runtime.Runtime.Start` validates the full checkpoint inventory and restores ownership
-before host work. `Tick` prepares eligible strategies and reconciles active operations
-with bounded concurrency. One process-owned transaction worker survives a Tick timeout.
-`Close` cancels and drains it; storage and RPC lifetime must extend until successful
-drain. A failed storage write poisons admission until restart/reload. Use `Snapshot`
-for copied current workflows rather than scanning durable history per strategy.
+`runtime.Runtime.Start` validates current configuration and creates empty RAM maps.
+`Tick` prepares eligible strategies and reconciles active operations with bounded
+concurrency. One process-owned sender worker survives an individual Tick timeout.
+`Close` cancels/drains it before RPC closes. `Snapshot` returns copied workflows.
+There is no storage adapter, state package, journal or restart recovery.
 
-The SDK creates no signer, fee engine, metrics server or daemon. A host implements
-`runtime.Driver`: reserve a common signer lane; persist unsigned admission and every
-signed original/replacement before network mutation; retain ownership for ambiguous
-results; prove canonical receipt depth; release only after durable workflow progress.
-Signed Resume is observation-only and must never sign or broadcast. Timeouts, missing
-receipts and foreign nonce consumption do not prove safe retry. All variants must
-retain chain, sender, nonce, destination, value and calldata. The daemon provides its
-implementation in `internal/transaction`.
+Hosts implement `runtime.Driver.Execute(ctx, Intent) TransactionResult`. Sign and
+broadcast one exact authorized intent, observe canonical confirmation and retain
+the active lane after ambiguity. `NotSubmitted` must prove no broadcast was attempted.
+Canonical reverts return evidence with `Reverted` and nil observation error. The
+daemon supplies a fixed-fee sender; no replacement or replay API exists.
+
+Process exit forgets workflows, signed transactions and external orders. A fresh
+instance prepares from current state and can repeat previous work. There is no
+cross-process signer/account lock. Hosts must account for these semantics.
 
 `runtime.Planner.PermissionSource` optionally returns raw permission JSON for an
 authenticated chain/snapshot. SDK validation owns every leaf hash/proof, active root,
 chain and optional account checks. Without a source, `runtime.Config.Tree` loads a
-local file. New preparation fetches permission bytes; recovery never replaces the
-saved program or external identity. Bind host policies to `Config.Revision`.
+local file. New preparation fetches permission bytes; live reconciliation retains the
+prepared program and external identity without fetching new quotes or permissions.
 
 The recipe cache retains only immutable event evidence, indexed by full chain/executor
 and bounded by entries/bytes. Fresh metadata, canonical event header, roots, roles and
@@ -68,4 +66,4 @@ remain committed. Input indices are bounded by `recipes.MaxInputIndex` (4095).
 Run `make check` and `make integration` in this module. Root targets verify both
 modules. Integration uses local Anvil; never use live credentials. Regenerate bindings
 from the pinned ABIs rather than editing generated Go. See [migration](../docs/MIGRATION.md)
-for breaking Go contracts, YAML and offline v1 conversion.
+for breaking Go/YAML contracts and process-lifetime semantics.

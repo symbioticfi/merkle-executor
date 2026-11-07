@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
-**Status:** Implemented on 2026-11-07; all final local gates pass. See `docs/VERIFICATION.md` and `docs/RUNTIME-BATCHING.md`.
+**Follow-up:** The RAM-only request supersedes durable state/recovery tasks; see `2026-11-07-ram-runtime.md` and current architecture docs.
+
+**Historical status:** Implemented on 2026-11-07; all final local gates pass. See `docs/VERIFICATION.md` and `docs/RUNTIME-BATCHING.md`.
 
 **Goal:** Replace the daemon runtime, preparation contracts and transaction lifecycle with one bounded, extensible implementation while retaining supported execution/recovery behavior.
 

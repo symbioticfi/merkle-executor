@@ -48,11 +48,12 @@ func TestAutomaticRestoreRetainsExternalCursorBeforeIO(t *testing.T) {
 	for _, fault := range []string{"account", "chain", "cursor", "reference"} {
 		t.Run(fault, func(t *testing.T) {
 			changed := record.Clone()
-			if fault == "cursor" {
+			switch fault {
+			case "cursor":
 				changed.Progress.State = json.RawMessage(`{"version":1,"nextBlock":0}`)
-			} else if fault == "reference" {
+			case "reference":
 				changed.Progress.Reference = "different-order"
-			} else {
+			default:
 				identity := saved
 				if fault == "account" {
 					identity.Account = addr(99)

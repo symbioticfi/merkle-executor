@@ -1,42 +1,30 @@
-# Transaction processing
+# Transaction sending
 
-`internal/transaction.Driver` implements the SDK `runtime.Driver` contract. One
-runtime-owned worker and one durable workflow replace the former keeper, submission
-journal, transaction manager and transaction engine lifecycle layers.
+`internal/transaction.Driver` implements `runtime.Driver.Execute(ctx, Intent)`.
+It is a single in-process sender, with no disk journal, replacement engine,
+rebroadcast loop, persistence callback or restart recovery API.
 
-The driver reserves one signer lane. It reads the write endpoint's mined nonce,
-ignores pending counts for allocation and retains a floor for canonically confirmed
-owned nonces. Read RPC supplies fee history, estimation, receipts and headers; write
-RPC supplies nonce admission and broadcast. Both HTTP clients refuse redirects.
+The sender reads the write endpoint's mined nonce, estimates gas on the read
+endpoint, adds configured headroom and signs one EIP-1559 transaction. Maximum fee,
+priority fee, headroom, confirmation depth and I/O timings are explicit YAML under
+`transaction`; defaults are in `internal/config/defaults.yaml`. It rejects a fee
+ceiling below the observed base fee plus priority fee. Before broadcasting it
+checks the complete signed payload and sender, and rechecks the mined nonce.
 
-Before broadcasting, the driver validates the signer result against the complete
-quoted transaction, including chain, nonce, destination, value, calldata, gas and fees,
-and calls the workflow persistence callback with the exact signed wire bytes. An
-uncertain write blocks further admission and release until restart/reload. Signed
-originals and replacements remain candidates for confirmation. An older variant may
-win. Ambiguous sends can rebroadcast identical bytes; they never allocate a new nonce.
+Broadcast is attempted once. A send error can mean the endpoint accepted the
+transaction, so the sender still observes the same hash. Canonical confirmation
+proves ancestry, descendant depth and log identity using fresh witnesses. A valid
+receipt releases the in-process lane; a revert halts only its strategy. Errors
+before broadcast permit fresh preparation. Missing receipts, consumed nonces and
+post-broadcast cancellation never prove a safe new submission. There is no fee
+escalation: a transaction can remain pending indefinitely at its configured fees.
 
-Fee policy uses exact EIP-1559 base-fee growth, recent block fullness and bounded tips.
-Gas estimation targets the next block; unsupported overrides use latest-state
-estimation with explicit fallback headroom. Congestion, new-block validity and stall
-evidence can trigger same-nonce replacements. The driver never sends cancellation
-self-transfers. All limits, timings, horizon and fee values live in YAML under
-`transaction`; defaults are in `internal/config/defaults.yaml`. Send mode requires a
-finite positive `transaction.maxFeeGwei` ceiling.
+The runtime owns the worker context. Tick cancellation stops waiting without
+starting another sender. Shutdown cancels and drains the worker before closing
+RPC. A stopped ambiguous operation remains fenced if the same sender instance is
+reused. Runtime outcome metrics and logs omit signed bytes and remote payloads.
 
-Receipt confirmation proves canonical ancestry and descendant depth, closes with
-fresh numbered witnesses and validates log identity. Terminal evidence is persisted
-before the runtime durably changes phase and releases ownership. External settlement
-uses that exact transaction evidence. A reverted recipe halts its workflow for
-inspection. Missing receipts, foreign nonce consumption, timeouts and cancellation
-retain the reservation because a generic recipe may execute more than once.
-
-Restored signed workflows are observation-only: no signing, rebroadcast or replay of
-saved calldata. Definitely unsigned admission may refresh only after its safe state
-is persisted and the lane released. Process-owned observation survives a caller Tick
-timeout. Shutdown cancels/drains this worker before releasing RPC or state resources;
-a drain failure leaves ownership intact.
-
-RPC errors preserve typed causes for cancellation/revert handling but redact endpoint
-credentials and unbounded remote text from logs. Runtime outcome metrics use bounded
-strategy/outcome labels. No signing credential is used by local tests.
+All ownership and execution evidence lives in RAM. Process exit loses it, including
+unknown pending transactions and external orders. Restart begins new discovery
+without reconciling previous work. Use one process per dedicated signer; there is
+no file lock or coordination between independent processes.

@@ -13,7 +13,7 @@ import (
 // It is distinct from malformed data, failed validation and transport errors.
 var ErrNotReady = errors.New("strategy is not ready")
 
-// Output is persisted before sending. Action keys are "stepIndex:actionIndex";
+// Output is retained in RAM before sending. Action keys are "stepIndex:actionIndex";
 // values replace calldata only, never the target, mask, proof or native value.
 // Inputs are decimal uint256 strings. Duplicate assignments are rejected.
 type Output struct {

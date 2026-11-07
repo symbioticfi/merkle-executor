@@ -65,7 +65,7 @@ No schema or endpoint is fetched automatically during a normal build.
 - Four Securitize ABI subsets cover fund decimals, topology and the distinct
   legacy/modern offramp versions. [Securitize provenance](../../docs/SECURITIZE-ASSETS.md)
   records the official public feed, verified implementation sources and coverage.
-  Its embedded catalogue is a reviewed snapshot, pinned by SHA-256 and durable
+  Its embedded catalogue is a reviewed snapshot, pinned by SHA-256 and protocol
   recipe policy; builds and execution never adopt
   remote feed changes automatically.
 

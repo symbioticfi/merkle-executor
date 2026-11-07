@@ -12,8 +12,9 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
   provenance and deliberate subset limitations belong in `api/schemas`.
 - Runtime providers may fill authorized data only. Do not mutate recipe instructions,
   permission masks, targets or proofs to make a transaction succeed.
-- A failed/ambiguous submission retains nonce ownership. Persist before network
-  mutations; preserve external order identity through retries and restarts.
+- Runtime state is RAM-only: no disk state, journals, importers or restart recovery.
+  Retain nonce ownership and external order identity through in-process retries.
+  Process exit deliberately forgets active work; never claim restart safety.
 - Verify with `make check` and `make integration`; the latter uses an ephemeral
   local Anvil and no external chain. Report local, API-fixture and deployment
   evidence separately. Never use live signing credentials for tests.

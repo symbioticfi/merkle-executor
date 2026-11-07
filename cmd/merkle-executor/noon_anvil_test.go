@@ -29,7 +29,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	runtime "github.com/symbioticfi/merkle-executor/sdk/runtime"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
@@ -351,30 +350,20 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Mode = "send"
-	path = writeCLIConfig(t, t.TempDir(), cfg)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
-	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
+	rows, err := runServiceOnce(ctx, &cfg, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	var job runtime.Workflow
-	if found, e := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[0]), &job); e != nil || !found || job.Phase != "settled" || job.Reserved || job.Transaction.Terminal != "confirmed" || len(job.Plan.Operations) != 1 || job.Plan.Operations[0].Progress.Outcome != "redeemed" {
-		t.Fatalf("native canonical address job did not settle: %+v %v", job.Transaction, e)
+	job := workflowNamed(t, rows, cfg.Strategies[0])
+	if job.Phase != "settled" || job.Execution == nil || len(job.Plan.Operations) != 1 || job.Plan.Operations[0].Progress.Outcome != "redeemed" {
+		t.Fatalf("native RAM workflow did not settle: %+v", job)
 	}
 	if read(usn, tokenArtifact, "balanceOf", account).Sign() != 0 || read(usn, tokenArtifact, "totalSupply").Sign() != 0 || read(usn, tokenArtifact, "allowance", account, handler).Sign() != 0 {
 		t.Fatal("USN burn or exact-allowance cleanup failed")
 	}
 	if read(usdc, tokenArtifact, "balanceOf", account).Int64() != 1_233_332 || read(usdc, tokenArtifact, "balanceOf", treasury).Int64() != 8_766_668 {
 		t.Fatal("18-to-6 decimal redemption payment or treasury debit is incorrect")
-	}
-	nonce, e := client.NonceAt(ctx, caller, nil)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
-		t.Fatal(err)
-	}
-	if after, e := client.NonceAt(ctx, caller, nil); e != nil || after != nonce {
-		t.Fatal("native restart repeated completed redemption", e)
 	}
 }

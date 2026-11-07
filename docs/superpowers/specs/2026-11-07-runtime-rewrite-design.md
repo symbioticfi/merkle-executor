@@ -1,6 +1,8 @@
 # Clean-slate Merkle runtime
 
-Status: approved and implemented on 2026-11-07. Final local checks, Anvil integration, artifact regeneration and container smoke pass; see `docs/VERIFICATION.md`.
+RAM-only follow-up: the user superseded persistence/restart requirements; see `docs/superpowers/plans/2026-11-07-ram-runtime.md` and current `docs/DESIGN.md`.
+
+Historical status: approved and implemented on 2026-11-07. Final local checks, Anvil integration, artifact regeneration and container smoke pass; see `docs/VERIFICATION.md`.
 Independent builder review found no planning blockers.
 
 ## Intent and scope
