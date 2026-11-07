@@ -215,7 +215,7 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	}
 	run()
 	requested := load(cfg.Strategies[0])
-	if requested.Phase != "settled" || len(requested.Plan.Operations) != 1 || !requested.Plan.Operations[0].Progress.Done || requested.Plan.Operations[0].Progress.Outcome != "requested" || requested.Transaction.Execution == nil {
+	if requested.Phase != "settled" || requested.Reserved || len(requested.Plan.Operations) != 1 || !requested.Plan.Operations[0].Progress.Done || requested.Plan.Operations[0].Progress.Outcome != "requested" || requested.Transaction.Execution == nil {
 		t.Fatal("confirmed request did not release account ownership with correlated execution evidence")
 	}
 	if read(issuer, issuerArtifact, "pendingShares", account).Int64() != 100 || read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(share, shareArtifact, "allowance", account, issuer).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Sign() != 0 {
@@ -231,7 +231,7 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	serviceSeedTransaction(t, ctx, client, owner, &issuer, servicePack(t, issuerArtifact, "finalize", account))
 	run() // Separate claim strategy may now own the same account and nonce lane.
 	claimed := load(cfg.Strategies[1])
-	if claimed.Phase != "settled" || !claimed.Plan.Operations[0].Progress.Done || claimed.Plan.Operations[0].Progress.Outcome != "claimed" || claimed.Transaction.Execution == nil || claimed.Transaction.Execution.TxHash == requested.Transaction.Execution.TxHash {
+	if claimed.Phase != "settled" || claimed.Reserved || !claimed.Plan.Operations[0].Progress.Done || claimed.Plan.Operations[0].Progress.Outcome != "claimed" || claimed.Transaction.Execution == nil || claimed.Transaction.Execution.TxHash == requested.Transaction.Execution.TxHash {
 		t.Fatal("matured issuer claim did not finish as its own confirmed execution")
 	}
 	if read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Int64() != 200 || read(issuer, issuerArtifact, "claimCount").Int64() != 1 {
@@ -240,9 +240,6 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	run()
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 2 {
 		t.Fatalf("completed lifecycle repeated across restart: nonce=%d error=%v", nonce, err)
-	}
-	if found, err := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); err != nil || found {
-		t.Fatalf("completed claim retained nonce ownership: %v", err)
 	}
 }
 

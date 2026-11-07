@@ -110,7 +110,7 @@ func Run(ctx context.Context, cfg *config.Config, opts Options) (err error) {
 	if cfg.Signer.Address != "" && common.HexToAddress(cfg.Signer.Address) != caller {
 		return errors.New("signer.address assertion does not match executor caller")
 	}
-	registered, converters, err := integrations(registry.Deps{Chain: reads, HTTP: opts.HTTP})
+	registered, converters, err := DefaultIntegrations(registry.Deps{Chain: reads, HTTP: opts.HTTP})
 	if err != nil {
 		return err
 	}

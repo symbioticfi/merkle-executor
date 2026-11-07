@@ -377,7 +377,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	wrongPermissionChain.Store(false)
 
 	// Finality requires descendants after inclusion; mine local empty blocks while
-	// the real transaction manager confirms and acknowledges the signed transaction.
+	// the driver confirms and durably releases the signed transaction.
 	startServiceConfirmationMining(t, ctx, client, caller)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
@@ -387,16 +387,8 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if found, err := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[0]), &job); err != nil || !found {
 		t.Fatalf("durable job missing: %v", err)
 	}
-	if job.Phase != "settled" || job.Transaction.Terminal != "confirmed" || job.Transaction.Execution.TxHash == (common.Hash{}) || len(job.Plan.Operations) != 0 || job.FinishedAt.IsZero() {
+	if job.Phase != "settled" || job.Reserved || job.Transaction.Terminal != "confirmed" || job.Transaction.Execution.TxHash == (common.Hash{}) || len(job.Plan.Operations) != 0 || job.FinishedAt.IsZero() {
 		t.Fatalf("job did not settle: %+v", job.Transaction)
-	}
-	for _, record := range job.Plan.Operations {
-		if !record.Progress.Done {
-			t.Fatal("provider progress was not persisted")
-		}
-	}
-	if found, err := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); err != nil || found {
-		t.Fatalf("terminal journal was not acknowledged: %v", err)
 	}
 	transaction, pending, err := client.TransactionByHash(ctx, job.Transaction.Execution.TxHash)
 	if err != nil || pending {

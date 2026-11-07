@@ -132,7 +132,7 @@ Manage step still occupies a runtime slot and must pass full simulation.
 For a claim → Morpho-cap → Aave-overflow recipe, commit the claim and issuer
 operations, balance reads and routing arithmetic in the recipe. Startup registers
 a fixed provider set; authenticated action layouts select the applicable protocols.
-The keeper supplies unavailable proofs, request IDs and signatures. Runtime inputs
+Integrations supply unavailable proofs, request IDs and signatures. Runtime inputs
 use exact recipe-result anchors or the maximum permitted READ-derived bounds;
 unknown sources are rejected.
 SDK hosts implement their own providers through the SDK provider interfaces;
@@ -148,12 +148,11 @@ receipt confirmation, bounded tracking and graceful shutdown. Caller cancellatio
 does not stop admitted work; subsequent ticks rejoin it. A receipt from any owned
 variant can complete the job. No cancellation self-transfers are sent.
 
-Restart reads saved hashes without rebroadcasting the recipe. Engine abandonment,
-nonce consumption without an owned receipt, or a missing receipt retains Merkle's
-durable job and blocks new recipe admission. Generic recipes can execute more than
-once, so timeout alone cannot authorize a retry or provider settlement. Recovery
-requires canonical receipt evidence; keeper progress is durable before the journal
-is acknowledged.
+Restart observes saved hashes without signing or broadcasting. A timeout, missing
+receipt or consumed nonce without an owned receipt retains the workflow reservation
+and blocks signer admission. Generic recipes can execute more than once, so timeout
+alone cannot authorize a retry or provider settlement. Canonical transaction evidence
+and workflow progress are durable before ownership is released.
 
 `transaction.maxFeeGwei` is the required absolute sending fee ceiling. Timings,
 confirmation depth, replacement horizons and gas headroom use explicit YAML policy;
@@ -171,7 +170,7 @@ allowance. Its receipt must prove the exact managed redemption, USN burn and
 account USDC payment before finishing as `redeemed`. Issuer enrollment and
 external settlement remain issuer-controlled.
 
-After authorization confirms, external progress is checkpointed separately.
+After authorization confirms, external progress is checkpointed in the workflow.
 CoW API status alone is insufficient to finish a trade. Full on-chain fill or
 confirmed on-chain deadline expiry ends tracking with distinct outcomes. New
 work for the same account waits while another job is unresolved. Changing or
@@ -188,7 +187,7 @@ bin/merkle-executor reset-strategy --config config/operator.local.yaml --executo
 Use the executor address shown by `status` with `reset-strategy --executor`.
 Invalid or zero addresses fail before state opens.
 
-Reset is permitted only for terminal jobs after the transaction journal is clear.
+Reset is permitted only for terminal workflows with no signer reservation.
 Confirmed reverts halt the strategy until inspected/reset. Preserve the state
 volume across deployments. Do not delete unresolved state, change nonce ownership,
 or treat root/role changes as cancellation of an already approved CoW digest.
@@ -196,7 +195,7 @@ Account-owner revocation and settlement-specific invalidation remain explicit
 protocol operations.
 
 `/healthz`, `/readyz` and `/metrics` are available when `observability.addr` is set.
-Readiness reflects the last keeper iteration. Each provider and strategy shares
+Readiness reflects the last runtime iteration. Each provider and strategy shares
 the process's single sender; pure data providers never submit transactions.
 
 ## Validation and source generation

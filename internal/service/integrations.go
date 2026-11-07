@@ -13,9 +13,9 @@ import (
 	rt "github.com/symbioticfi/merkle-executor/sdk/runtime"
 )
 
-// Registration is the only host location that knows protocol names. The order
-// below also describes the v1 provider slots; v2 identities never depend on it.
-func integrations(deps registry.Deps) ([]provider.Integration, []rt.LegacyConverter, error) {
+// DefaultIntegrations registers the supported protocols at the host boundary.
+// This order also describes the v1 provider slots; v2 identities never depend on it.
+func DefaultIntegrations(deps registry.Deps) ([]provider.Integration, []rt.LegacyConverter, error) {
 	constructors := []func(registry.Deps) (provider.Integration, error){
 		cowswap.NewAutomatic, merkl.NewAutomatic, liquidlanerfq.NewAutomatic,
 		redemptions.NewAutomatic, securitize.NewAutomatic,

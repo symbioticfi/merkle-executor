@@ -274,7 +274,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	}
 	run()
 	job = load()
-	if job.Phase != "settled" || !job.Plan.Operations[0].Progress.Done || job.Plan.Operations[0].Progress.Outcome != "settled" {
+	if job.Phase != "settled" || job.Reserved || !job.Plan.Operations[0].Progress.Done || job.Plan.Operations[0].Progress.Outcome != "settled" {
 		t.Fatal("canonical fill did not settle", job.Phase, job.Plan.Operations)
 	}
 	for token, want := range map[common.Address]int64{tokenIn: 0, tokenOut: 950} {
@@ -287,9 +287,6 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	run()
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 || posts.Load() != 1 || quotes.Load() != 2 || gets.Load() != lookupCalls || curatorCalls.Load() != treeCalls {
 		t.Fatal("settled restart repeated network mutation", nonce, e)
-	}
-	if found, e := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); e != nil || found {
-		t.Fatal("settled transaction retained nonce journal", e)
 	}
 }
 

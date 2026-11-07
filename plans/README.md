@@ -1,5 +1,7 @@
 # Improvement plans
 
+Historical October planning record. The [November runtime rewrite](../docs/superpowers/plans/2026-11-07-runtime-rewrite.md) supersedes its keeper, transaction-engine and published-SDK delivery architecture. Status and evidence below describe the original planning run; use [current design](../docs/DESIGN.md), [migration](../docs/MIGRATION.md) and [verification](../docs/VERIFICATION.md) for the implemented runtime.
+
 Prepared with the improve skill on 2026-10-16 against clean main at
 3184aa390edbeb66d1d6c5d1a62dc337794c4d6e.
 

@@ -358,11 +358,8 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 		t.Fatal(err)
 	}
 	var job runtime.Workflow
-	if found, e := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[0]), &job); e != nil || !found || job.Phase != "settled" || job.Transaction.Terminal != "confirmed" || len(job.Plan.Operations) != 1 || job.Plan.Operations[0].Progress.Outcome != "redeemed" {
+	if found, e := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[0]), &job); e != nil || !found || job.Phase != "settled" || job.Reserved || job.Transaction.Terminal != "confirmed" || len(job.Plan.Operations) != 1 || job.Plan.Operations[0].Progress.Outcome != "redeemed" {
 		t.Fatalf("native canonical address job did not settle: %+v %v", job.Transaction, e)
-	}
-	if found, e := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); e != nil || found {
-		t.Fatalf("native completed sender journal retained: %v", e)
 	}
 	if read(usn, tokenArtifact, "balanceOf", account).Sign() != 0 || read(usn, tokenArtifact, "totalSupply").Sign() != 0 || read(usn, tokenArtifact, "allowance", account, handler).Sign() != 0 {
 		t.Fatal("USN burn or exact-allowance cleanup failed")
