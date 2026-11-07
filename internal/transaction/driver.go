@@ -233,12 +233,8 @@ func (d *Driver) Execute(ctx context.Context, intent rt.Intent, persist rt.Persi
 	if err != nil {
 		return rt.TransactionResult{NotSubmitted: true, Err: err}
 	}
-	currentNonce, err := d.minedNonce(ctx)
-	if err != nil {
+	if err := d.guardNonce(ctx, tx.Nonce); err != nil {
 		return rt.TransactionResult{NotSubmitted: true, Err: err}
-	}
-	if currentNonce > tx.Nonce {
-		return rt.TransactionResult{NotSubmitted: true, Err: ErrNonceConsumed}
 	}
 	signed, err := d.sign(ctx, &tx, gas, fees, persist)
 	if err != nil {
@@ -311,7 +307,9 @@ func (d *Driver) track(ctx context.Context, tx *rt.Transaction, persist rt.Persi
 		}
 		nonce, err := d.minedNonce(ctx)
 		if err != nil {
-			lastErr = err
+			if !errors.Is(lastErr, ErrNonceConsumed) {
+				lastErr = err
+			}
 		} else if nonce > tx.Nonce {
 			// Receipt reads and mined-nonce reads can straddle inclusion or lag
 			// independently. Keep observing every owned hash, but stop all mutations.
@@ -323,6 +321,9 @@ func (d *Driver) track(ctx context.Context, tx *rt.Transaction, persist rt.Persi
 		if state != nil && err == nil && nonce <= tx.Nonce && !seen {
 			if err := d.advance(ctx, tx, persist, state); err != nil {
 				lastErr = err
+				if errors.Is(err, ErrNonceConsumed) {
+					state = nil
+				}
 				d.mu.Lock()
 				blocked := d.blocked
 				d.mu.Unlock()
@@ -396,6 +397,9 @@ func (d *Driver) advance(ctx context.Context, tx *rt.Transaction, persist rt.Per
 		return nil
 	}
 	if state.uncertain {
+		if err := d.guardNonce(ctx, tx.Nonce); err != nil {
+			return err
+		}
 		state.uncertain = false
 		err := d.broadcast(ctx, state.latest)
 		state.contention = nonceConflict(err)
@@ -436,6 +440,9 @@ func (d *Driver) advance(ctx context.Context, tx *rt.Transaction, persist rt.Per
 			} else if state.stallRebroadcasts >= 2 {
 				replace = true
 			} else {
+				if err := d.guardNonce(ctx, tx.Nonce); err != nil {
+					return err
+				}
 				state.stallRebroadcasts++
 				err := d.broadcast(ctx, state.latest)
 				state.contention = nonceConflict(err)
@@ -456,6 +463,9 @@ func (d *Driver) advance(ctx context.Context, tx *rt.Transaction, persist rt.Per
 	fees, err := replacementFees(state.fees, current, d.limit)
 	if err != nil {
 		// At the ceiling, retain the last authorized bytes; never weaken the bump.
+		if err := d.guardNonce(ctx, tx.Nonce); err != nil {
+			return err
+		}
 		broadcastErr := d.broadcast(ctx, state.latest)
 		state.contention = nonceConflict(broadcastErr)
 		state.sentAt = time.Now()
@@ -466,12 +476,8 @@ func (d *Driver) advance(ctx context.Context, tx *rt.Transaction, persist rt.Per
 		return ctx.Err()
 	}
 	// A fresh write-endpoint nonce check closes the potentially slow estimate/fee phase.
-	nonce, err := d.minedNonce(ctx)
-	if err != nil {
+	if err := d.guardNonce(ctx, tx.Nonce); err != nil {
 		return err
-	}
-	if nonce > tx.Nonce {
-		return ErrNonceConsumed
 	}
 	signed, err := d.sign(ctx, tx, gas, fees, persist)
 	if err != nil {
@@ -543,6 +549,18 @@ func (d *Driver) minedNonce(ctx context.Context) (uint64, error) {
 	defer cancel()
 	return d.write.NonceAt(ctx, d.signer.Address(), nil)
 }
+
+// Every mutation closes its preparation phase against the submission endpoint.
+func (d *Driver) guardNonce(ctx context.Context, owned uint64) error {
+	nonce, err := d.minedNonce(ctx)
+	if err != nil {
+		return err
+	}
+	if nonce > owned {
+		return ErrNonceConsumed
+	}
+	return nil
+}
 func (d *Driver) broadcast(ctx context.Context, tx *types.Transaction) error {
 	ctx, cancel := context.WithTimeout(ctx, d.cfg.BroadcastTimeout)
 	defer cancel()
@@ -564,6 +582,9 @@ func (d *Driver) sign(ctx context.Context, tx *rt.Transaction, gas uint64, fees 
 	if err := d.validateSigned(*tx, signed); err != nil {
 		return nil, err
 	}
+	if signed.GasFeeCap().Cmp(d.limit) > 0 {
+		return nil, errors.New("signed transaction exceeds current fee ceiling")
+	}
 	raw, err := signed.MarshalBinary()
 	if err != nil {
 		return nil, err
@@ -584,8 +605,8 @@ func validateIntent(i rt.Intent) error {
 	return nil
 }
 func (d *Driver) validateSigned(tx rt.Transaction, signed *types.Transaction) error {
-	if signed.Type() != types.DynamicFeeTxType || signed.ChainId().Cmp(d.chainID) != 0 || signed.Nonce() != tx.Nonce || signed.To() == nil || *signed.To() != tx.Intent.To || signed.Value().Sign() != 0 || !bytes.Equal(signed.Data(), tx.Intent.Data) || signed.Gas() == 0 || signed.GasFeeCap().Sign() < 0 || signed.GasTipCap().Sign() < 0 || signed.GasTipCap().Cmp(signed.GasFeeCap()) > 0 || signed.GasFeeCap().Cmp(d.limit) > 0 {
-		return errors.New("signed transaction differs from durable intent or policy")
+	if signed.Type() != types.DynamicFeeTxType || signed.ChainId().Cmp(d.chainID) != 0 || signed.Nonce() != tx.Nonce || signed.To() == nil || *signed.To() != tx.Intent.To || signed.Value().Sign() != 0 || !bytes.Equal(signed.Data(), tx.Intent.Data) || signed.Gas() == 0 || signed.GasFeeCap().Sign() < 0 || signed.GasTipCap().Sign() < 0 || signed.GasTipCap().Cmp(signed.GasFeeCap()) > 0 {
+		return errors.New("signed transaction differs from durable intent")
 	}
 	from, err := types.Sender(types.LatestSignerForChainID(d.chainID), signed)
 	if err != nil || from != tx.Sender {

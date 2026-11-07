@@ -39,7 +39,7 @@ Tests/interface were written before the driver implementation. The initial test 
 
 Latest completed focused checks after all code/config changes:
 
-- `go test -race -cover ./internal/transaction -count=1`: PASS, 86.0% statement coverage.
+- `go test -race -cover ./internal/transaction -count=1`: PASS, 85.9% statement coverage (after independent-review fixes).
 - `go test -race -tags=integration ./internal/transaction -run TestAnvil -count=1 -v`: PASS, fresh and observation-only restart subtests. Each starts an ephemeral local Anvil, verifies persisted exact wire bytes before sending, rejects completion before two descendants, verifies canonical receipt/evidence persistence, and confirms restart performs no rebroadcast/signing.
 - `go vet ./internal/transaction`: PASS.
 - `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run ./internal/transaction/...`: PASS, 0 issues.
@@ -56,3 +56,24 @@ A subsequent repeated-race attempt encountered concurrent `sdk/runtime/confirmat
 - Parent final `make check` and `make integration` are still required after all parallel tasks land; this task does not claim those repository gates passed.
 - Shared canonical closing/ancestry/reorg fixture coverage belongs to Task 1; the driver consumes that verifier and tests its own fail-closed integration.
 - This is local fixture and local Anvil evidence only. No live API, production deployment, external chain or live-key evidence exists.
+
+
+## Independent-review remediation
+
+The two findings in `task-3-independent-review.md` were verified against the implementation. All three supplied reproductions were ported into permanent `nonce_policy_test.go` tests and first produced the reported failing assertions in the integrated checkout (no overlay required).
+
+- A closing mined-nonce check can no longer lose its stop-mutation transition when a subsequent endpoint response lags. `track` permanently drops active mutation state on any `ErrNonceConsumed` returned by `advance`; later observation errors preserve that consumed-nonce classification. The driver continues observing and retains ownership.
+- One shared final nonce guard now closes every active mutation path after preparation: replacement signing, ambiguous exact retry, stalled exact retry after its estimate, and fee-capped exact retry. No signing/rebroadcast resumes after a guard has observed consumption.
+- Signed recovery validates structure, signature, sender, chain, nonce, destination, zero value and calldata without comparing historical signed bytes to the current spending ceiling. New signatures still enforce the current ceiling before persistence; an additional regression checks that distinction. A canonically confirmed attempt signed at 18.04 Gwei now resumes successfully under a valid 1-Gwei current ceiling.
+- Removed the unused `derived` import from `internal/providers/cowswap/automatic_test.go` at the parent’s explicit request; no provider behavior changed.
+
+Post-fix completed verification:
+
+- `go test -race -cover ./internal/transaction -count=1`: PASS, 85.9% statement coverage.
+- `go test -race ./internal/transaction -run 'TestClosingNonceConsumption|TestStalledRebroadcastCloses' -count=10`: PASS.
+- `go test -race -tags=integration ./internal/transaction -run TestAnvil -count=1 -v`: PASS, fresh/restart.
+- `go vet ./internal/transaction`: PASS.
+- Scoped golangci-lint: PASS, 0 issues.
+- `go test ./internal/providers/cowswap`: PASS.
+
+No new live API, external-chain, deployment or credential evidence. Repository-wide final gates remain parent-owned after integration.
