@@ -180,3 +180,18 @@ func TestRPCBatchCodeOverridePreservesCompleteContext(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestRPCBatchReaderChecksActualCodecCalldata(t *testing.T) {
+	called := false
+	r := RPCBatchReader{Multicall: common.HexToAddress("0x99"), Codec: oversizedAggregateCodec{}, Call: func(context.Context, []rpc.BatchElem) error { called = true; return nil }}
+	a, b := request(1), request(2)
+	a.MulticallSafe = true
+	b.MulticallSafe = true
+	ctx := WithReadBounds(t.Context(), ReadBounds{MaxRequestBytes: 32 << 20, MaxResponseBytes: 32 << 20, MaxCalldataBytes: 100})
+	if _, e := r.BatchRead(ctx, []ReadRequest{a, b}); e == nil {
+		t.Fatal("accepted actual aggregate over calldata bound")
+	}
+	if called {
+		t.Fatal("oversized codec payload dispatched")
+	}
+}

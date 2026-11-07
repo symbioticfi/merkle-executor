@@ -57,3 +57,25 @@ These are local unit/race and HTTP API-fixture tests. No Anvil integration or de
 - Queue admission returns a bounded explicit error when full; callers may retry a future eligible wave. Canceled owners keep their reservations until the bounded in-flight group resolves, so shared owners are unaffected.
 - The scheduler's fairness and owner-count fixtures prove its local boundary. They do not by themselves prove the final automatic-provider daemon path, cold/warm protocol throughput, deployment or live behavior.
 - Temporary protocolio/provider aliases and old submission/keeper implementations remain for root's final caller/reachability cleanup after porting. This task did not modify root runtime, service/config or provider integration files.
+
+## Independent-review remediation (follow-up)
+
+Addressed all three findings in `task-1-independent-review.md` after writing focused regression tests and observing each fail on the reviewed implementation:
+
+1. **Abandoned/stalled partition cancellation.** Each dispatched partition now owns a context with mandatory host-configured `Limits.ReadTimeout` (`yaml:"readTimeout"`). Its context remains alive while any assigned owner remains live and is canceled when the last live owner cancels. Canceled pending partitions do not call the backend. Context watchers are stopped when transport returns; in-flight completion releases the existing queue reservation. This preserves another owner's read and also bounds deadline-free owners. Root added explicit `reads.readTimeout: 30s` in host YAML; no scheduler default is hidden in code.
+2. **Raw response/request limits.** Introduced an explicit `ReadBounds` backend-context contract. Scheduler partition contexts carry configured request, raw response and calldata caps; backends preserve that context through transport. The shared HTTP reader now reads at most configured raw response bytes plus the one-byte overflow sentinel, under the existing hard 32-MiB ceiling. It no longer substitutes `ReadResult` base64 remarshal size for hexadecimal RPC wire size. Exact encoded request bodies are checked both before codec dispatch and in HTTP. Decoded output/per-owner reservations retain their separate checks. Partition estimates charge hexadecimal expansion, JSON envelope and conservative aggregate return framing, and dedup retains the largest owner's wire reservation.
+3. **Aggregate calldata limits.** Scheduler partitions conservatively charge aggregate ABI tuple/header/padding for eligible safe calls. `RPCBatchReader` independently measures actual post-codec input and override code bytes before calling transport; this includes the generated host `aggregate3` payload. No failed-group single fallback was added.
+
+New local tests prove: all canceled owners cancel a stalled backend and release capacity; pending canceled partitions never reach the backend; a finite configured I/O deadline also bounds a live deadline-free owner; oversized raw RPC error bodies fail before consumption; actual generated host Multicall calldata is rejected before HTTP dispatch; codec payloads are checked against exact calldata caps; and larger deduplicated response reservations still split partitions correctly. The earlier shared-live-owner cancellation test remains green. These are local context/HTTP/ABI fixtures only.
+
+Follow-up verification passed:
+
+- `go -C sdk test -race ./chainio ./recipes ./protocolio`
+- `go test -race ./internal/chain`
+- `go -C sdk test ./...`
+- `go -C sdk run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --config .golangci.yml ./chainio/...` — 0 issues.
+- `git diff --check`
+
+The backend contract is explicit: custom `BatchReader` implementations must preserve and honor `ReadBounds` in their wire transport. The provided RPC/HTTP implementation and host chain adapter enforce it. Conservative admission may reject an aggregate-eligible read under an exceptionally small budget even where an isolated call would fit; it never silently changes read class or retries after a failed group.
+
+A follow-up full root `go test ./...` still failed on in-progress CLI test migration (`config.DefaultStrategyInterval`, `config.DefaultKeyEnv`, `config.TxManager` and `bindState` references). It also exposed the redemptions scheduler fixture missing new `ReadTimeout`; root authorized updating that explicit test literal, and its focused test passed afterward. These root CLI failures are outside the scheduler fix and were reported to root.

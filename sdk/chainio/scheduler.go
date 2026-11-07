@@ -30,22 +30,23 @@ type Limits struct {
 	MaxQueuedRequests  int           `yaml:"maxQueuedRequests"`
 	MaxQueuedBytes     uint64        `yaml:"maxQueuedBytes"`
 	CollectionWindow   time.Duration `yaml:"collectionWindow"`
+	ReadTimeout        time.Duration `yaml:"readTimeout"`
 }
 
 func (l Limits) Validate() error {
-	if l.MaxMembers < 1 || l.MaxMembers > MaxReadBatch || l.MaxRequestBytes < 1 || l.MaxRequestBytes > 32<<20 || l.MaxResponseBytes < 1 || l.MaxResponseBytes > 32<<20 || l.MaxCalldataBytes < 1 || l.MaxGas < 1 || l.MaxGas > ^uint64(0)/2 || l.MaxOutputBytes < 1 || l.MaxConcurrent < 1 || l.MaxQueuedRequests < 1 || l.MaxQueuedBytes < 1 || l.CollectionWindow < 0 || l.DefaultCallGas < 1 || l.DefaultCallGas > l.MaxGas || l.DefaultOutputBytes < 1 || l.DefaultOutputBytes > l.MaxOutputBytes || l.DefaultOutputBytes > l.MaxResponseBytes {
+	if l.MaxMembers < 1 || l.MaxMembers > MaxReadBatch || l.MaxRequestBytes < 1 || l.MaxRequestBytes > 32<<20 || l.MaxResponseBytes < 1 || l.MaxResponseBytes > 32<<20 || l.MaxCalldataBytes < 1 || l.MaxGas < 1 || l.MaxGas > ^uint64(0)/2 || l.MaxOutputBytes < 1 || l.MaxConcurrent < 1 || l.MaxQueuedRequests < 1 || l.MaxQueuedBytes < 1 || l.CollectionWindow < 0 || l.ReadTimeout <= 0 || l.DefaultCallGas < 1 || l.DefaultCallGas > l.MaxGas || l.DefaultOutputBytes < 1 || l.DefaultOutputBytes > l.MaxOutputBytes || l.DefaultOutputBytes > l.MaxResponseBytes {
 		return errors.New("invalid shared read scheduler limits")
 	}
 	return nil
 }
 
-type readCost struct{ request, calldata, gas, output uint64 }
+type readCost struct{ request, response, calldata, gas, output uint64 }
 
 func (c readCost) add(b readCost) readCost {
-	return readCost{c.request + b.request, c.calldata + b.calldata, c.gas + b.gas, c.output + b.output}
+	return readCost{c.request + b.request, c.response + b.response, c.calldata + b.calldata, c.gas + b.gas, c.output + b.output}
 }
 func (c readCost) fits(l Limits) bool {
-	return c.request <= l.MaxRequestBytes && c.calldata <= l.MaxCalldataBytes && c.gas <= l.MaxGas && c.output <= l.MaxOutputBytes && c.output <= l.MaxResponseBytes
+	return c.request <= l.MaxRequestBytes && c.calldata <= l.MaxCalldataBytes && c.gas <= l.MaxGas && c.output <= l.MaxOutputBytes && c.response <= l.MaxResponseBytes
 }
 
 type scheduledRead struct {
@@ -126,6 +127,15 @@ func (s *Scheduler) BatchRead(ctx context.Context, requests []ReadRequest) ([]Re
 		if cost.output == 0 {
 			cost.output = s.limits.DefaultOutputBytes
 		}
+		if cost.output > s.limits.MaxResponseBytes {
+			return nil, errors.New("read output exceeds wire response bound")
+		}
+		cost.response = 2*cost.output + 64
+		if canAggregate(q) {
+			padding := uint64((32 - len(q.Call.Data)%32) % 32)
+			cost.calldata += 228 + padding
+			cost.response += 2 * (192 + 31)
+		}
 		if !cost.fits(s.limits) {
 			return nil, errors.New("read exceeds scheduler partition budget")
 		}
@@ -155,6 +165,10 @@ func (s *Scheduler) BatchRead(ctx context.Context, requests []ReadRequest) ([]Re
 	}
 	select {
 	case <-ctx.Done():
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
 		return nil, ctx.Err()
 	case <-s.stop:
 		return nil, errors.New("read scheduler is closed")
@@ -202,15 +216,17 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		go func() {
 			defer workers.Done()
 			for p := range tasks {
-				results, err := s.backend.BatchRead(workCtx, p.requests)
+				partitionCtx, done := s.partitionContext(workCtx, p)
+				var results []ReadResult
+				err := partitionCtx.Err()
+				if err == nil {
+					results, err = s.backend.BatchRead(partitionCtx, p.requests)
+				}
+				done()
 				if err == nil && len(results) != len(p.requests) {
 					err = errors.New("read batch result count mismatch")
 				}
 				if err == nil {
-					raw, e := json.Marshal(results)
-					if e != nil || uint64(len(raw)) > s.limits.MaxResponseBytes {
-						err = errors.New("read batch response exceeds scheduler limit")
-					}
 					var output uint64
 					for i, r := range results {
 						size := resultOutputBytes(r)
@@ -310,6 +326,45 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 	}
 }
+
+// partitionContext follows all currently live owners, rather than borrowing one
+// owner's cancellation. The configured I/O deadline also bounds owners with no
+// deadline. AfterFunc watchers are stopped when transport returns.
+func (s *Scheduler) partitionContext(parent context.Context, p readPartition) (context.Context, func()) {
+	bounds := ReadBounds{MaxRequestBytes: s.limits.MaxRequestBytes, MaxResponseBytes: s.limits.MaxResponseBytes, MaxCalldataBytes: s.limits.MaxCalldataBytes}
+	ctx, cancel := context.WithTimeout(WithReadBounds(parent, bounds), s.limits.ReadTimeout)
+	owners := map[*scheduledRead]struct{}{}
+	for _, slots := range p.slots {
+		for _, slot := range slots {
+			if slot.owner.ctx.Err() == nil {
+				owners[slot.owner] = struct{}{}
+			}
+		}
+	}
+	var mu sync.Mutex
+	live := len(owners)
+	if live == 0 {
+		cancel()
+	}
+	stops := make([]func() bool, 0, live)
+	for owner := range owners {
+		stops = append(stops, context.AfterFunc(owner.ctx, func() {
+			mu.Lock()
+			live--
+			empty := live == 0
+			mu.Unlock()
+			if empty {
+				cancel()
+			}
+		}))
+	}
+	return ctx, func() {
+		for _, stop := range stops {
+			stop()
+		}
+		cancel()
+	}
+}
 func resultOutputBytes(r ReadResult) uint64 {
 	total := uint64(len(r.Data))
 	if r.Header != nil {
@@ -369,6 +424,7 @@ func (s *Scheduler) partition(jobs []*scheduledRead) []readPartition {
 			} else {
 				u.cost.gas = max(u.cost.gas, j.costs[i].gas)
 				u.cost.output = max(u.cost.output, j.costs[i].output)
+				u.cost.response = max(u.cost.response, j.costs[i].response)
 			}
 			u.slots = append(u.slots, resultSlot{j, i})
 		}

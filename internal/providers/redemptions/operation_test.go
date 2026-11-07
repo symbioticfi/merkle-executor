@@ -113,7 +113,7 @@ func TestAutomaticIndependentRoutesShareSchedulerAndRecoverStableIdentity(t *tes
 		t.Fatal(err)
 	}
 	backend := &batchIssuerReader{issuerReader: initial, failIndex: -1}
-	scheduler, err := chainio.NewScheduler(backend, chainio.Limits{MaxMembers: 256, MaxRequestBytes: 1 << 20, MaxResponseBytes: 1 << 20, MaxCalldataBytes: 1 << 20, MaxGas: 10000000, MaxOutputBytes: 1 << 20, DefaultCallGas: 100000, DefaultOutputBytes: 4096, MaxConcurrent: 1, MaxQueuedRequests: 256, MaxQueuedBytes: 1 << 20, CollectionWindow: 10 * time.Millisecond})
+	scheduler, err := chainio.NewScheduler(backend, chainio.Limits{ReadTimeout: time.Second, MaxMembers: 256, MaxRequestBytes: 1 << 20, MaxResponseBytes: 1 << 20, MaxCalldataBytes: 1 << 20, MaxGas: 10000000, MaxOutputBytes: 1 << 20, DefaultCallGas: 100000, DefaultOutputBytes: 4096, MaxConcurrent: 1, MaxQueuedRequests: 256, MaxQueuedBytes: 1 << 20, CollectionWindow: 10 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}

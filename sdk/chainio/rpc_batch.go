@@ -53,16 +53,12 @@ func CallHTTPBatch(ctx context.Context, client *http.Client, endpoint string, ba
 	if len(batch) > MaxReadBatch {
 		return errors.New("RPC batch exceeds request limit")
 	}
-	messages := make([]batchMessage, len(batch))
-	for i, element := range batch {
-		messages[i] = batchMessage{JSONRPC: "2.0", ID: uint64(i + 1), Method: element.Method, Params: element.Args}
-	}
-	body, err := json.Marshal(messages)
+	body, err := encodeBatch(batch)
 	if err != nil {
-		return rpcFailure("encode read batch", err)
+		return err
 	}
-	if len(body) > 32<<20 {
-		return errors.New("read RPC batch request exceeds limit")
+	if err := checkBatchBounds(ctx, batch, body); err != nil {
+		return err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
@@ -79,11 +75,15 @@ func CallHTTPBatch(ctx context.Context, client *http.Client, endpoint string, ba
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return rpcFailure("read RPC batch HTTP status", rpc.HTTPError{StatusCode: response.StatusCode, Status: response.Status})
 	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxBatchResponseBytes+1))
+	responseLimit := uint64(maxBatchResponseBytes)
+	if bounds, ok := ReadBoundsFromContext(ctx); ok {
+		responseLimit = min(responseLimit, bounds.MaxResponseBytes)
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, int64(responseLimit)+1))
 	if err != nil {
 		return rpcFailure("read RPC batch response", err)
 	}
-	if len(raw) > maxBatchResponseBytes {
+	if uint64(len(raw)) > responseLimit {
 		return errors.New("read RPC batch response exceeds limit")
 	}
 	var responses []batchResponse
@@ -118,6 +118,89 @@ func CallHTTPBatch(ctx context.Context, client *http.Client, endpoint string, ba
 		}
 	}
 	return nil
+}
+
+// encodeBatch and checkBatchBounds are shared by codec dispatch and HTTP, so
+// post-codec calldata and exact wire request bytes are checked before transport.
+func encodeBatch(batch []rpc.BatchElem) ([]byte, error) {
+	messages := make([]batchMessage, len(batch))
+	for i, element := range batch {
+		messages[i] = batchMessage{JSONRPC: "2.0", ID: uint64(i + 1), Method: element.Method, Params: element.Args}
+	}
+	body, err := json.Marshal(messages)
+	if err != nil {
+		return nil, rpcFailure("encode read batch", err)
+	}
+	return body, nil
+}
+func checkBatchBounds(ctx context.Context, batch []rpc.BatchElem, body []byte) error {
+	requestLimit := uint64(32 << 20)
+	bounds, bounded := ReadBoundsFromContext(ctx)
+	if bounded {
+		requestLimit = min(requestLimit, bounds.MaxRequestBytes)
+	}
+	if uint64(len(body)) > requestLimit {
+		return errors.New("read RPC batch request exceeds limit")
+	}
+	if !bounded {
+		return nil
+	}
+	var calldata uint64
+	for _, elem := range batch {
+		if elem.Method != "eth_call" || len(elem.Args) == 0 {
+			continue
+		}
+		call, ok := elem.Args[0].(map[string]any)
+		if !ok {
+			return errors.New("bounded RPC call arguments required")
+		}
+		for _, field := range []string{"input", "data"} {
+			n, err := argumentBytes(call[field])
+			if err != nil {
+				return err
+			}
+			calldata += n
+		}
+		if len(elem.Args) > 2 {
+			overrides, ok := elem.Args[2].(map[common.Address]any)
+			if !ok {
+				return errors.New("bounded RPC code override arguments required")
+			}
+			for _, override := range overrides {
+				fields, ok := override.(map[string]any)
+				if !ok {
+					return errors.New("bounded RPC code override fields required")
+				}
+				n, err := argumentBytes(fields["code"])
+				if err != nil {
+					return err
+				}
+				calldata += n
+			}
+		}
+	}
+	if calldata > bounds.MaxCalldataBytes {
+		return errors.New("read RPC calldata exceeds limit")
+	}
+	return nil
+}
+func argumentBytes(value any) (uint64, error) {
+	switch v := value.(type) {
+	case nil:
+		return 0, nil
+	case hexutil.Bytes:
+		return uint64(len(v)), nil
+	case []byte:
+		return uint64(len(v)), nil
+	case string:
+		decoded, err := hexutil.Decode(v)
+		if err != nil {
+			return 0, errors.New("invalid RPC byte argument")
+		}
+		return uint64(len(decoded)), nil
+	default:
+		return 0, errors.New("invalid RPC byte argument type")
+	}
 }
 
 func (r RPCBatchReader) BatchRead(ctx context.Context, requests []ReadRequest) ([]ReadResult, error) {
@@ -199,6 +282,13 @@ func (r RPCBatchReader) readChunk(ctx context.Context, requests []ReadRequest) (
 		}
 		calls = append(calls, call)
 		operations = append(operations, op)
+	}
+	body, err := encodeBatch(calls)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkBatchBounds(ctx, calls, body); err != nil {
+		return nil, err
 	}
 	if err := r.Call(ctx, calls); err != nil {
 		return nil, err

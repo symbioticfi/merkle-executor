@@ -3,7 +3,11 @@ package chainio
 import (
 	"context"
 	stderrors "errors"
+	"github.com/ethereum/go-ethereum/rpc"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -49,7 +53,7 @@ func (b *recordingBackend) BatchRead(ctx context.Context, qs []ReadRequest) ([]R
 	return out, nil
 }
 func testLimits() Limits {
-	return Limits{MaxMembers: 256, DefaultCallGas: 1, DefaultOutputBytes: 1, MaxRequestBytes: 32 << 20, MaxResponseBytes: 32 << 20, MaxCalldataBytes: 32 << 20, MaxGas: 30_000_000, MaxOutputBytes: 32 << 20, MaxConcurrent: 2, MaxQueuedRequests: 4096, MaxQueuedBytes: 64 << 20, CollectionWindow: 20 * time.Millisecond}
+	return Limits{MaxMembers: 256, ReadTimeout: time.Second, DefaultCallGas: 1, DefaultOutputBytes: 1, MaxRequestBytes: 32 << 20, MaxResponseBytes: 32 << 20, MaxCalldataBytes: 32 << 20, MaxGas: 30_000_000, MaxOutputBytes: 32 << 20, MaxConcurrent: 2, MaxQueuedRequests: 4096, MaxQueuedBytes: 64 << 20, CollectionWindow: 20 * time.Millisecond}
 }
 func startScheduler(t *testing.T, b BatchReader, l Limits) *Scheduler {
 	t.Helper()
@@ -333,5 +337,158 @@ func TestSchedulerResultCannotExceedReservedOutput(t *testing.T) {
 	q.ExpectedOutputBytes = 1
 	if _, e := s.BatchRead(t.Context(), []ReadRequest{q}); e == nil {
 		t.Fatal("accepted result larger than reserved output budget")
+	}
+}
+
+func TestSchedulerCancelsAbandonedPartitionAndReleasesCapacity(t *testing.T) {
+	b := &abandonedBackend{started: make(chan struct{}), canceled: make(chan struct{})}
+	l := testLimits()
+	l.MaxConcurrent = 1
+	l.MaxQueuedRequests = 1
+	l.CollectionWindow = 0
+	s := startScheduler(t, b, l)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { _, e := s.BatchRead(ctx, []ReadRequest{request(1)}); done <- e }()
+	<-b.started
+	cancel()
+	if e := <-done; !stderrors.Is(e, context.Canceled) {
+		t.Fatal(e)
+	}
+	select {
+	case <-b.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("abandoned partition did not cancel backend")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, e := s.BatchRead(t.Context(), []ReadRequest{request(2)})
+		if e == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("queue reservation not released", e)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+type abandonedBackend struct {
+	started, canceled chan struct{}
+	calls             atomic.Int64
+}
+
+func (b *abandonedBackend) BatchRead(ctx context.Context, qs []ReadRequest) ([]ReadResult, error) {
+	if b.calls.Add(1) == 1 {
+		close(b.started)
+		<-ctx.Done()
+		close(b.canceled)
+		return nil, ctx.Err()
+	}
+	return []ReadResult{{Data: []byte{1}}}, nil
+}
+func TestSchedulerRejectsRPCWireResponseLargerThanConfiguredBound(t *testing.T) {
+	raw := `[{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"` + strings.Repeat("x", 600) + `"}}]`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(raw)) }))
+	defer server.Close()
+	b := RPCBatchReader{Call: func(ctx context.Context, elems []rpc.BatchElem) error {
+		return CallHTTPBatch(ctx, server.Client(), server.URL, elems)
+	}}
+	l := testLimits()
+	l.MaxResponseBytes = 500
+	s := startScheduler(t, b, l)
+	if _, e := s.BatchRead(t.Context(), []ReadRequest{request(1)}); e == nil {
+		t.Fatal("accepted raw response exceeding configured bound")
+	}
+}
+func TestSchedulerChargesAggregateCalldataBeforeTransport(t *testing.T) {
+	var dispatched atomic.Int64
+	b := RPCBatchReader{Multicall: common.HexToAddress("0x99"), Codec: oversizedAggregateCodec{}, Call: func(_ context.Context, elems []rpc.BatchElem) error { dispatched.Add(1); return nil }}
+	l := testLimits()
+	l.MaxCalldataBytes = 8
+	s := startScheduler(t, b, l)
+	a, c := request(1), request(2)
+	a.Call.Data = []byte{1, 2, 3, 4}
+	c.Call.Data = []byte{5, 6, 7, 8}
+	a.MulticallSafe = true
+	c.MulticallSafe = true
+	if _, e := s.BatchRead(t.Context(), []ReadRequest{a, c}); e == nil {
+		t.Fatal("accepted aggregate calldata exceeding configured bound")
+	}
+	if dispatched.Load() != 0 {
+		t.Fatal("oversized aggregate reached transport")
+	}
+}
+
+type oversizedAggregateCodec struct{}
+
+func (oversizedAggregateCodec) Encode([]AggregateCall) ([]byte, error) { return make([]byte, 452), nil }
+func (oversizedAggregateCodec) Decode([]byte) ([]AggregateResult, error) {
+	return []AggregateResult{{Success: true, Data: []byte{1}}, {Success: true, Data: []byte{1}}}, nil
+}
+
+func TestSchedulerReadDeadlineBoundsLiveOwners(t *testing.T) {
+	b := &abandonedBackend{started: make(chan struct{}), canceled: make(chan struct{})}
+	l := testLimits()
+	l.ReadTimeout = 10 * time.Millisecond
+	s := startScheduler(t, b, l)
+	if _, e := s.BatchRead(t.Context(), []ReadRequest{request(1)}); !stderrors.Is(e, context.DeadlineExceeded) {
+		t.Fatalf("backend deadline: %v", e)
+	}
+	select {
+	case <-b.canceled:
+	default:
+		t.Fatal("backend remained alive after I/O deadline")
+	}
+}
+
+func TestSchedulerSkipsCanceledPendingPartitions(t *testing.T) {
+	b := &abandonedBackend{started: make(chan struct{}), canceled: make(chan struct{})}
+	l := testLimits()
+	l.MaxMembers = 1
+	l.MaxConcurrent = 1
+	l.MaxQueuedRequests = 2
+	l.CollectionWindow = 0
+	s := startScheduler(t, b, l)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { _, e := s.BatchRead(ctx, []ReadRequest{request(1), request(2)}); done <- e }()
+	<-b.started
+	cancel()
+	<-done
+	<-b.canceled
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, e := s.BatchRead(t.Context(), []ReadRequest{request(3)})
+		if e == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("canceled pending stage retained capacity", e)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if b.calls.Load() != 2 {
+		t.Fatalf("canceled pending partition reached backend; total calls=%d", b.calls.Load())
+	}
+}
+
+func TestSchedulerDedupRetainsLargestWireResponseReservation(t *testing.T) {
+	b := new(recordingBackend)
+	l := testLimits()
+	l.MaxResponseBytes = 500
+	s := startScheduler(t, b, l)
+	a, c := request(1), request(1)
+	a.ExpectedOutputBytes = 2
+	c.ExpectedOutputBytes = 200
+	other := request(2)
+	other.ExpectedOutputBytes = 2
+	if _, e := s.BatchRead(t.Context(), []ReadRequest{a, c, other}); e != nil {
+		t.Fatal(e)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.groups) != 2 {
+		t.Fatalf("wire partition ignored larger shared reservation: groups=%d", len(b.groups))
 	}
 }

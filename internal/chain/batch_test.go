@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 	multicall "github.com/symbioticfi/merkle-executor/api/bindings/multicall3"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
@@ -256,5 +257,32 @@ func TestMixedBatchAggregatesOnlyCompatibleVerifiedCalls(t *testing.T) {
 				t.Fatal("successful aggregate member lost")
 			}
 		})
+	}
+}
+
+func TestHostBatchHonorsSchedulerRawResponseBound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"` + strings.Repeat("x", 600) + `"}}]`))
+	}))
+	defer server.Close()
+	client := &Client{http: server.Client(), readURL: server.URL}
+	ctx := chainio.WithReadBounds(t.Context(), chainio.ReadBounds{MaxRequestBytes: 1 << 20, MaxResponseBytes: 500, MaxCalldataBytes: 1 << 20})
+	target := common.HexToAddress("0x1234")
+	if _, e := client.BatchRead(ctx, []chainio.ReadRequest{chainio.ContractRead(target, []byte{1}, big.NewInt(10), false)}); e == nil {
+		t.Fatal("host accepted raw response larger than scheduler budget")
+	}
+}
+func TestHostBatchChecksGeneratedAggregateCalldataBeforeDispatch(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { calls++; _, _ = w.Write([]byte(`[]`)) }))
+	defer server.Close()
+	client := &Client{http: server.Client(), readURL: server.URL, multicall: common.HexToAddress("0x99")}
+	ctx := chainio.WithReadBounds(t.Context(), chainio.ReadBounds{MaxRequestBytes: 1 << 20, MaxResponseBytes: 1 << 20, MaxCalldataBytes: 8})
+	target := common.HexToAddress("0x1234")
+	if _, e := client.BatchRead(ctx, []chainio.ReadRequest{chainio.ContractRead(target, []byte{1, 2, 3, 4}, big.NewInt(10), true), chainio.ContractRead(target, []byte{5, 6, 7, 8}, big.NewInt(10), true)}); e == nil {
+		t.Fatal("host accepted generated aggregate larger than calldata budget")
+	}
+	if calls != 0 {
+		t.Fatal("oversized generated aggregate reached HTTP transport")
 	}
 }
