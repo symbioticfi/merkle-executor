@@ -33,6 +33,8 @@ type Transaction struct {
 
 // NotSubmitted proves that no signed attempt exists. Pending retains ownership;
 // missing receipts, foreign nonce consumption and cancellation never prove failure.
+// Canonical reverts return Reverted and Execution with nil Err: observation and
+// persistence succeeded, and the runtime records the business failure separately.
 type TransactionResult struct {
 	Pending      bool
 	NotSubmitted bool

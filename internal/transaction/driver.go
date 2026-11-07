@@ -384,9 +384,6 @@ func (d *Driver) observe(ctx context.Context, tx *rt.Transaction, persist rt.Per
 		}
 		*tx = candidate
 		r := rt.TransactionResult{Reverted: terminal == "reverted", Execution: evidence.Clone()}
-		if r.Reverted {
-			r.Err = errors.New("transaction execution reverted")
-		}
 		return seen, &r
 	}
 	return seen, nil

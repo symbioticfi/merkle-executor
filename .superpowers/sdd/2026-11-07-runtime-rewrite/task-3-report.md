@@ -77,3 +77,15 @@ Post-fix completed verification:
 - `go test ./internal/providers/cowswap`: PASS.
 
 No new live API, external-chain, deployment or credential evidence. Repository-wide final gates remain parent-owned after integration.
+
+## Canonical-revert driver/runtime boundary
+
+The final review found that a canonical revert had durable evidence and `Reverted=true`, but also returned an observation error. Runtime correctly refuses to release on observation errors (needed for stale/reorged evidence), so this mismatched contract left the failed workflow and signer reservation wedged.
+
+Added permanent failing-first coverage in `internal/transaction/runtime_revert_test.go`. Before the fix, both direct Execute/Resume tests failed on `Err=transaction execution reverted`; the actual Driver+Runtime+state.Store boundary test failed with `phase=failed reserved=true releases=0`.
+
+Canonical revert observation now succeeds with `Reverted=true`, persisted Execution, and nil Err. The SDK contract documents that business failure belongs to runtime workflow state. No coordinator production logic changed.
+
+The boundary fixture uses the real driver, real runtime, real durable state store and the chain fixture; only preparation is stubbed with valid empty committed recipe plans. It verifies the failed workflow phase and canonical evidence are already durable when actual Driver.Release runs, the unrelated strategy can execute nonce 1 after reverted nonce 0, and the failed strategy remains halted and continues reporting business failure without replay. The two unrelated accounts/executors share one signer, exercising the lane boundary directly.
+
+Post-fix checks: targeted contract/boundary race tests PASS; complete transaction race suite PASS (86.2% statement coverage); real-boundary test repeated 10 times under race PASS; transaction vet and scoped lint PASS (0 issues); local Anvil fresh/restart race tests PASS. Repository-wide gates were intentionally left to the parent final integration run. No live API, external chain, deployment or live credential was used.
