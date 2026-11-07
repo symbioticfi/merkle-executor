@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"github.com/symbioticfi/merkle-executor/internal/service"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"math/big"
 	"testing"
 
@@ -11,7 +13,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
 type discoveryReader struct {
@@ -98,7 +99,7 @@ func (r *discoveryReader) FilterLogs(context.Context, ethereum.FilterQuery) ([]t
 
 type discoveryBatch struct{ *discoveryReader }
 
-func (r discoveryBatch) BatchRead(ctx context.Context, qs []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
+func (r discoveryBatch) BatchRead(ctx context.Context, qs []chainio.ReadRequest) ([]chainio.ReadResult, error) {
 	r.batches++
 	if len(qs) > 256 {
 		r.t.Fatal("unbounded group")
@@ -109,9 +110,9 @@ func (r discoveryBatch) BatchRead(ctx context.Context, qs []protocolio.ReadReque
 	if r.mode == "shape" {
 		return nil, nil
 	}
-	results := make([]protocolio.ReadResult, len(qs))
+	results := make([]chainio.ReadResult, len(qs))
 	for i, q := range qs {
-		if q.Kind != protocolio.ReadCall || !q.MulticallSafe {
+		if q.Kind != chainio.ReadCall || !q.MulticallSafe {
 			r.t.Fatal("account getter lost aggregation")
 		}
 		results[i].Data, results[i].Err = r.CallContract(ctx, q.Call, q.Block)
@@ -139,7 +140,7 @@ func TestStartupAccountsAreAtomicDeduplicatedAndCanonicallyClosed(t *testing.T) 
 			if mode == "canceled" {
 				cancel()
 			}
-			result, caller, err := discoverIdentity(ctx, discoveryBatch{r}, targets)
+			result, caller, err := service.DiscoverIdentity(ctx, discoveryBatch{r}, targets)
 			if mode == "valid" || mode == "chunked" {
 				if err != nil || len(result) != want || r.calls != 2*want || r.headers != 2 || r.batches != (2*want+255)/256 || caller != common.HexToAddress("0xabcd") {
 					t.Fatalf("discovery result%v calls%d headers%d batches%d: %v", result, r.calls, r.headers, r.batches, err)
@@ -161,7 +162,7 @@ func TestStartupAccountsAreAtomicDeduplicatedAndCanonicallyClosed(t *testing.T) 
 }
 func TestStartupAccountsSingleReaderKeepsSamePin(t *testing.T) {
 	r := &discoveryReader{t: t, head: &types.Header{Number: big.NewInt(12)}}
-	got, caller, err := discoverIdentity(t.Context(), r, []common.Address{common.HexToAddress("0x01")})
+	got, caller, err := service.DiscoverIdentity(t.Context(), r, []common.Address{common.HexToAddress("0x01")})
 	if err != nil || len(got) != 1 || r.calls != 2 || r.headers != 2 || caller != common.HexToAddress("0xabcd") {
 		t.Fatal(got, err)
 	}

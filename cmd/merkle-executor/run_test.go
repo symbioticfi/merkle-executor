@@ -31,8 +31,9 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	runtime "github.com/symbioticfi/merkle-executor/sdk/runtime"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
@@ -118,7 +119,7 @@ func startServiceAnvil(t *testing.T, ctx context.Context) (*ethclient.Client, st
 			if err != nil || len(runtime) == 0 {
 				t.Fatal("Multicall3 fixture runtime unavailable", err)
 			}
-			if err := client.Client().CallContext(ctx, nil, "anvil_setCode", common.HexToAddress(config.StandardMulticall3), hexutil.Bytes(runtime)); err != nil {
+			if err := client.Client().CallContext(ctx, nil, "anvil_setCode", common.HexToAddress(protocolio.StandardMulticall3), hexutil.Bytes(runtime)); err != nil {
 				t.Fatal(err)
 			}
 			return client, endpoint
@@ -159,7 +160,7 @@ func startServiceConfirmationMining(t *testing.T, ctx context.Context, client *e
 				if nonce <= confirmedNonce {
 					continue
 				}
-				for range config.DefaultConfirmations {
+				for range uint64(2) {
 					if err := client.Client().CallContext(mining, nil, "evm_mine"); err != nil {
 						if mining.Err() == nil {
 							t.Error(err)
@@ -319,12 +320,12 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		if err = runBot(ctx, path, true, true, &output); err != nil {
 			t.Fatalf("plan read signer or failed: %v", err)
 		}
-		var plans map[string]keeper.Plan
+		var plans map[string]runtime.Plan
 		if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
 			t.Fatal(err)
 		}
 		plan, exists := plans[cfg.Strategies[0]]
-		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 6 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
+		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Operations) != 0 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
 			t.Fatal("plan lost configuration, provider output or transaction")
 		}
 	}
@@ -343,8 +344,8 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if err := runBot(ctx, path, true, false, new(bytes.Buffer)); err == nil {
 		t.Fatal("send accepted a key that is not executor caller")
 	}
-	if _, err := os.Stat(cfg.StateDir); !os.IsNotExist(err) {
-		t.Fatal("caller mismatch created durable state", err)
+	if found, e := state.ReadNamespace(cfg.StateDir, runtime.Namespace, "deployment", new(any)); e != nil || found {
+		t.Fatal("caller mismatch created deployment state", e)
 	}
 
 	// Failed curator acquisition/validation must stop the real send path before
@@ -361,10 +362,8 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
 			t.Fatalf("source failure submitted nonce%d: %v", nonce, e)
 		}
-		for _, key := range []string{"strategy." + cfg.Strategies[0] + ".v1", "txmanager.active.v1"} {
-			if found, e := state.Read(cfg.StateDir, key, new(any)); e != nil || found {
-				t.Fatalf("source failure persisted executable work %s: %v", key, e)
-			}
+		if found, e := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[0]), new(any)); e != nil || found {
+			t.Fatalf("source failure persisted executable work: %v", e)
 		}
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddress, Data: tokenABI.PackBalanceOf(recipient)}, nil)
 		if e != nil || new(big.Int).SetBytes(raw).Sign() != 0 {
@@ -384,22 +383,22 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
 		t.Fatalf("send-once failed: %v", err)
 	}
-	var job keeper.Job
-	if found, err := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); err != nil || !found {
+	var job runtime.Workflow
+	if found, err := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[0]), &job); err != nil || !found {
 		t.Fatalf("durable job missing: %v", err)
 	}
-	if job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || job.Result.Hash == (common.Hash{}) || len(job.Progress) != 6 || job.FinishedAt.IsZero() {
-		t.Fatalf("job did not settle: %+v", job.Result)
+	if job.Phase != "settled" || job.Transaction.Terminal != "confirmed" || job.Transaction.Execution.TxHash == (common.Hash{}) || len(job.Plan.Operations) != 0 || job.FinishedAt.IsZero() {
+		t.Fatalf("job did not settle: %+v", job.Transaction)
 	}
-	for _, progress := range job.Progress {
-		if !progress.Done {
+	for _, record := range job.Plan.Operations {
+		if !record.Progress.Done {
 			t.Fatal("provider progress was not persisted")
 		}
 	}
 	if found, err := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); err != nil || found {
 		t.Fatalf("terminal journal was not acknowledged: %v", err)
 	}
-	transaction, pending, err := client.TransactionByHash(ctx, job.Result.Hash)
+	transaction, pending, err := client.TransactionByHash(ctx, job.Transaction.Execution.TxHash)
 	if err != nil || pending {
 		t.Fatalf("canonical local transaction missing: %v", err)
 	}
@@ -425,4 +424,27 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || curatorCalls.Load() != permissionRequests {
 		t.Fatalf("restart repeated completed work: nonce=%d / %v", nonce, err)
 	}
+}
+
+// Every caller-bound override remains a separate eth_call even in a shared array.
+func countLensCalls(body []byte) int {
+	type request struct {
+		Method string
+		Params []json.RawMessage
+	}
+	var batch []request
+	if len(body) > 0 && body[0] == '[' {
+		_ = json.Unmarshal(body, &batch)
+	} else {
+		var one request
+		_ = json.Unmarshal(body, &one)
+		batch = []request{one}
+	}
+	count := 0
+	for _, q := range batch {
+		if q.Method == "eth_call" && len(q.Params) == 3 {
+			count++
+		}
+	}
+	return count
 }

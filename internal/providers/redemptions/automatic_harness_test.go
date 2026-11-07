@@ -102,22 +102,3 @@ func encodeTestBundle(policy string, bundle durableRoutes, inner provider.Output
 	route := bundle.Routes[0]
 	return provider.EncodeOperation(policy+"/operation-v2", routeEnvelope{Config: route.Config, Account: bundle.Account}, route.Output)
 }
-func (p *automaticTest) restore(out provider.Output) ([]*Provider, []provider.Output, error) {
-	record, err := p.record(out)
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err = p.Restore(record); err != nil {
-		return nil, nil, err
-	}
-	var envelope routeEnvelope
-	inner, err := provider.DecodeOperation(p.Policy(), out, &envelope)
-	if err != nil {
-		return nil, nil, err
-	}
-	runtime, err := New(envelope.Config, p.deps)
-	if err != nil {
-		return nil, nil, err
-	}
-	return []*Provider{runtime}, []provider.Output{inner}, nil
-}

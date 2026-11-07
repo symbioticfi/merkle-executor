@@ -26,8 +26,8 @@ import (
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	runtime "github.com/symbioticfi/merkle-executor/sdk/runtime"
 )
 
 func TestAnvilAutomaticMerklClaimFeedsRecipeBalance(t *testing.T) {
@@ -131,13 +131,7 @@ func TestAnvilAutomaticMerklClaimFeedsRecipeBalance(t *testing.T) {
 		}
 		r.Body.Close()
 		r.Body = io.NopCloser(bytes.NewReader(body))
-		var request struct {
-			Method string
-			Params []json.RawMessage
-		}
-		if json.Unmarshal(body, &request) == nil && request.Method == "eth_call" && len(request.Params) == 3 {
-			lenses.Add(1)
-		}
+		lenses.Add(int32(countLensCalls(body)))
 		proxy.ServeHTTP(w, r)
 	}))
 	defer rpc.Close()
@@ -153,12 +147,12 @@ func TestAnvilAutomaticMerklClaimFeedsRecipeBalance(t *testing.T) {
 	if err = runBotWithHTTP(ctx, path, true, true, &output, httpClient); err != nil {
 		t.Fatal(err)
 	}
-	var plans map[string]keeper.Plan
+	var plans map[string]runtime.Plan
 	if err = json.Unmarshal(output.Bytes(), &plans); err != nil {
 		t.Fatal(err)
 	}
 	plan := plans[cfg.Strategies[0]]
-	if len(plan.Outputs) != 6 || plan.Results[1] != "100" || plan.Results[2] != "17" || plan.Outputs[1].Inputs[0] != "100" || len(plan.Outputs[1].Actions) != 1 || lenses.Load() != 1 || rewardsHTTP.Load() != 1 {
+	if len(plan.Operations) != 1 || plan.Results[1] != "100" || plan.Results[2] != "17" || plan.Operations[0].Output.Inputs[0] != "100" || len(plan.Operations[0].Output.Actions) != 1 || lenses.Load() != 1 || rewardsHTTP.Load() != 1 {
 		t.Fatalf("incorrect staged preparation: results=%v lens=%d rewardHTTP=%d", plan.Results, lenses.Load(), rewardsHTTP.Load())
 	}
 	balance, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: tokenABI.PackBalanceOf(account)}, nil)

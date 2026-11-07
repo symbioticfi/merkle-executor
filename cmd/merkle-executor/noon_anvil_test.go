@@ -26,9 +26,9 @@ import (
 	native "github.com/symbioticfi/merkle-executor/api/bindings/noonredeemhandlerv2"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	runtime "github.com/symbioticfi/merkle-executor/sdk/runtime"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
@@ -180,13 +180,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 		}
 		r.Body.Close()
 		r.Body = io.NopCloser(bytes.NewReader(body))
-		var request struct {
-			Method string
-			Params []json.RawMessage
-		}
-		if json.Unmarshal(body, &request) == nil && request.Method == "eth_call" && len(request.Params) == 3 {
-			lenses.Add(1)
-		}
+		lenses.Add(int32(countLensCalls(body)))
 		proxy.ServeHTTP(w, r)
 	}))
 	defer rpc.Close()
@@ -198,18 +192,18 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	cfg.Strategies = []string{strings.ToLower(executor.Hex())}
 	cfg.Signer.Address = ""
 	path := writeCLIConfig(t, t.TempDir(), cfg)
-	prepare := func() (keeper.Plan, error) {
+	prepare := func() (runtime.Plan, error) {
 		before := lenses.Load()
 		var output bytes.Buffer
 		if e := runBot(ctx, path, true, true, &output); e != nil {
-			return keeper.Plan{}, e
+			return runtime.Plan{}, e
 		}
-		var plans map[string]keeper.Plan
+		var plans map[string]runtime.Plan
 		if e := json.Unmarshal(output.Bytes(), &plans); e != nil {
-			return keeper.Plan{}, e
+			return runtime.Plan{}, e
 		}
 		plan, exists := plans[cfg.Strategies[0]]
-		if !exists || len(plans) != 1 || plan.Snapshot.Account != account || plan.Snapshot.Caller != caller || len(plan.Outputs) != 6 || plan.Results[0] != amount.String() || len(plan.Outputs[3].Actions) != 1 || plan.Outputs[3].Inputs[0] != amount.String() || lenses.Load()-before != 1 {
+		if !exists || len(plans) != 1 || plan.Snapshot.Account != account || plan.Snapshot.Caller != caller || len(plan.Operations) != 1 || plan.Results[0] != amount.String() || len(plan.Operations[0].Output.Actions) != 1 || plan.Operations[0].Output.Inputs[0] != amount.String() || lenses.Load()-before != 1 {
 			t.Fatalf("automatic native host lost address identity/budget/lens: %+v", plan.Results)
 		}
 		return plan, nil
@@ -363,9 +357,9 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	if err = runBot(ctx, path, true, false, new(bytes.Buffer)); err != nil {
 		t.Fatal(err)
 	}
-	var job keeper.Job
-	if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); e != nil || !found || job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || len(job.Progress) != 6 || job.Progress[3].Outcome != "redeemed" {
-		t.Fatalf("native canonical address job did not settle: %+v %v", job.Result, e)
+	var job runtime.Workflow
+	if found, e := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[0]), &job); e != nil || !found || job.Phase != "settled" || job.Transaction.Terminal != "confirmed" || len(job.Plan.Operations) != 1 || job.Plan.Operations[0].Progress.Outcome != "redeemed" {
+		t.Fatalf("native canonical address job did not settle: %+v %v", job.Transaction, e)
 	}
 	if found, e := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); e != nil || found {
 		t.Fatalf("native completed sender journal retained: %v", e)

@@ -1,12 +1,12 @@
 # Merkle executor
 
-A Go keeper for curator-committed `RecipeExecutor` strategies. It discovers the
+A Go runtime for curator-committed `RecipeExecutor` strategies. It discovers the
 current `SetRecipe`, assembles runtime calldata from the active permission tree,
 resolves protocol data, simulates the complete call and optionally sends it.
 
 Recipes use opcode-prefixed `bytes[]` steps and packed operands/bindings from
 the current `IRecipes` schema. Literal values and indices fit `uint216`;
-runtime inputs and computed results retain all 256 bits. [Wire format](docs/DESIGN.md#recipe-encoding).
+runtime inputs and computed results retain all 256 bits. [Wire format](docs/DESIGN.md).
 
 The service uses integration-neutral infrastructure,
 isolated protocol packages, strict YAML, generated ABI bindings, Cobra, logr and
@@ -52,9 +52,9 @@ Treat plan files and the state directory as operational data: they contain
 calldata, signatures and prepared orders. Logs omit those payloads.
 
 For sending, configure `mode: send`, set `MERKLE_EXECUTOR_PRIVATE_KEY` in the
-process environment and choose a finite positive `txManager.maxFeeGwei` ceiling.
+process environment and choose a finite positive `transaction.maxFeeGwei` ceiling.
 The key determines the sending address; startup verifies it against every
-executor's authorized caller before opening state or starting the transaction sender. Gas is estimated
+executor's authorized caller before transaction admission. Gas is estimated
 for the next block with headroom, and priority fees follow recent block fullness. Grant leaf roles to the **executor
 contract**, set its caller to the sending EOA, publish the recipe and accept the
 permission root through the existing curator workflow. The service manages no
@@ -76,12 +76,13 @@ logs and metrics. Reordering does not change identity; duplicate addresses are
 rejected, including different checksum spellings. Strategy objects, labels and
 per-strategy options are rejected before network access.
 
-The runtime policy version is `1`. Its recovery fingerprint binds the executor,
+The runtime policy version is `2`. Its recovery fingerprint binds the executor,
 chain, discovered account and caller, curator source, provider policies and sender
 fee ceiling. Active work must match that fingerprint before it can resume.
 
-Cache, timeout, polling, confirmation and fee-horizon policies are fixed in code.
-Their fields are not configuration inputs.
+Cache, timeout, polling, confirmation, fee-horizon and batching policies live in YAML.
+The complete defaults are in `internal/config/defaults.yaml`; strict user configuration overlays them.
+See [migration](docs/MIGRATION.md) for the Go/YAML changes and offline v1 state conversion.
 Optional `signer.address` is an identity assertion,
 and `signer.keyEnv` may name an alternative key environment variable. Neither is
 required. Offline `check-config`, `status` and `reset-strategy` never read a key or
@@ -98,10 +99,10 @@ reads. Arbitrary data reads and ERC-1271 checks preserve their original caller
 and separate `eth_call` execution. Full simulations remain isolated EVM calls
 while sharing JSON arrays with getters.
 Dependent reads and the later closing canonical checks remain ordered.
-Automatic Merkl learns its distributor after recipe authentication and uses a later
-strict aggregate. Numeric values for all adapters share one prefix lens call. Verified recipe-event bodies can
+Automatic Merkl learns its distributor after recipe authentication and submits
+its later read stage through the shared scheduler. Numeric values for all adapters share one prefix lens call. Verified recipe-event bodies can
 be reused after fresh metadata and canonical event-header checks; account state,
-permissions and simulation remain fresh. The retained recipe cache has a fixed
+permissions and simulation remain fresh. The retained recipe cache defaults to a configurable
 16777216-byte (16 MiB) budget. Entries are also limited by
 the number of configured strategies and are cleared on restart.
 [Batching scopes, counts and compatibility](docs/PROVIDERS.md#shared-numerical-prefix-and-read-batching).
@@ -154,15 +155,10 @@ once, so timeout alone cannot authorize a retry or provider settlement. Recovery
 requires canonical receipt evidence; keeper progress is durable before the journal
 is acknowledged.
 
-`txManager.maxFeeGwei` is the required absolute sending fee ceiling. The fixed
-runtime profile bounds broadcasts at 5 seconds, fallback replacement cadence at
-30 seconds, pending tracking at 5 minutes and shutdown drain at 1 minute. Ordinary
-repricing uses block evidence; horizon, tip and gas-headroom policies are built-in
-constants (see [transaction design](docs/TRANSACTIONS.md)).
-The metrics endpoint includes the engine's bounded `merkle_executor_txmanager_*`
-lifecycle, fee, replacement and sender-account metrics. Gas/fee counters cover
-receipts observed during active engine tracking. Recovery after tracking ends is
-owned by the durable journal and reported through its terminal logs and keeper outcomes.
+`transaction.maxFeeGwei` is the required absolute sending fee ceiling. Timings,
+confirmation depth, replacement horizons and gas headroom use explicit YAML policy;
+see [transaction processing](docs/TRANSACTIONS.md). One transaction driver persists
+all signed variants in the same workflow checkpoint before broadcast.
 
 Issuer providers require the account's confirmed `Manage` logs to match their
 prepared calls, so a skipped recipe group cannot count as a request. Request jobs

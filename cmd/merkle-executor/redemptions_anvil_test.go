@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/symbioticfi/merkle-executor/internal/service"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -19,12 +20,14 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/merkle-executor/internal/chain"
-	"github.com/symbioticfi/merkle-executor/internal/curator"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/signer"
-	"github.com/symbioticfi/merkle-executor/internal/txmanager"
+	"github.com/symbioticfi/merkle-executor/internal/transaction"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
+	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 
 	async "github.com/symbioticfi/merkle-executor/api/bindings/asyncredeemvault"
@@ -32,8 +35,8 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/providers/redemptions"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	runtime "github.com/symbioticfi/merkle-executor/sdk/runtime"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
@@ -203,22 +206,22 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 		}
 		return values[0].(*big.Int)
 	}
-	load := func(name string) keeper.Job {
-		var job keeper.Job
-		if found, err := state.Read(cfg.StateDir, "strategy."+name+".v1", &job); err != nil || !found {
+	load := func(name string) runtime.Workflow {
+		var job runtime.Workflow
+		if found, err := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(name), &job); err != nil || !found {
 			t.Fatalf("load %s lifecycle job: %v", name, err)
 		}
 		return job
 	}
 	run()
 	requested := load(cfg.Strategies[0])
-	if requested.Phase != "settled" || len(requested.Progress) != 1 || !requested.Progress[0].Done || requested.Progress[0].Outcome != "requested" || requested.Result.Execution == nil {
+	if requested.Phase != "settled" || len(requested.Plan.Operations) != 1 || !requested.Plan.Operations[0].Progress.Done || requested.Plan.Operations[0].Progress.Outcome != "requested" || requested.Transaction.Execution == nil {
 		t.Fatal("confirmed request did not release account ownership with correlated execution evidence")
 	}
 	if read(issuer, issuerArtifact, "pendingShares", account).Int64() != 100 || read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(share, shareArtifact, "allowance", account, issuer).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Sign() != 0 {
 		t.Fatal("request did not consume exact allowance and retain issuer-owned pending shares")
 	}
-	if found, err := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[1]+".v1", new(keeper.Job)); err != nil || found {
+	if found, err := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[1]), new(runtime.Workflow)); err != nil || found {
 		t.Fatalf("unready claim became durable work: %v", err)
 	}
 	run() // Restart while the issuer is still pending must not submit another request.
@@ -228,7 +231,7 @@ func TestAnvilRedemptionRequestThenClaim(t *testing.T) {
 	serviceSeedTransaction(t, ctx, client, owner, &issuer, servicePack(t, issuerArtifact, "finalize", account))
 	run() // Separate claim strategy may now own the same account and nonce lane.
 	claimed := load(cfg.Strategies[1])
-	if claimed.Phase != "settled" || !claimed.Progress[0].Done || claimed.Progress[0].Outcome != "claimed" || claimed.Result.Execution == nil || claimed.Result.Hash == requested.Result.Hash {
+	if claimed.Phase != "settled" || !claimed.Plan.Operations[0].Progress.Done || claimed.Plan.Operations[0].Progress.Outcome != "claimed" || claimed.Transaction.Execution == nil || claimed.Transaction.Execution.TxHash == requested.Transaction.Execution.TxHash {
 		t.Fatal("matured issuer claim did not finish as its own confirmed execution")
 	}
 	if read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Int64() != 200 || read(issuer, issuerArtifact, "claimCount").Int64() != 1 {
@@ -252,12 +255,12 @@ func runIssuerFixture(ctx context.Context, path string, policies []redemptions.C
 		return err
 	}
 	chainID := new(big.Int).SetUint64(cfg.Chain.ChainID)
-	client, err := chain.Dial(ctx, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID, common.HexToAddress(config.StandardMulticall3))
+	client, err := chain.Dial(ctx, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID, common.HexToAddress(cfg.Chain.Multicall3))
 	if err != nil {
 		return err
 	}
 	defer client.Close()
-	source, err := curator.New(cfg.Curator.HTTPConfig(), &http.Client{Timeout: config.DefaultHTTPTimeout})
+	source, err := permissions.New(cfg.Curator.HTTPConfig(), &http.Client{Timeout: cfg.Runtime.HTTPTimeout})
 	if err != nil {
 		return err
 	}
@@ -265,40 +268,78 @@ func runIssuerFixture(ctx context.Context, path string, policies []redemptions.C
 	for i, strategy := range cfg.Strategies {
 		targets[i] = common.HexToAddress(strategy)
 	}
-	accounts, caller, err := discoverIdentity(ctx, client, targets)
+	accounts, caller, err := service.DiscoverIdentity(ctx, client, targets)
 	if err != nil {
 		return err
 	}
-	strategies := make([]keeper.Strategy, len(cfg.Strategies))
+	strategies := make([]runtime.Strategy, len(cfg.Strategies))
 	for i, strategy := range cfg.Strategies {
-		runtime, err := redemptions.New(policies[i], providerRegistry.Deps{Chain: client})
+		helper, err := redemptions.New(policies[i], providerRegistry.Deps{Chain: client})
 		if err != nil {
 			return err
 		}
 		revision, _ := json.Marshal(policies[i])
-		strategies[i] = keeper.Strategy{Config: keeper.Config{Name: strategy, Executor: strategy, Account: accounts[targets[i]].Hex(), Interval: config.DefaultStrategyInterval, Revision: string(revision)}, Providers: []provider.Provider{runtime}}
+		strategies[i] = runtime.Strategy{Config: runtime.Config{Name: strategy, Executor: strategy, Account: accounts[targets[i]].Hex(), Interval: cfg.Runtime.StrategyInterval, Revision: string(revision)}, Integrations: []provider.Integration{&issuerFixtureIntegration{helper: helper, cfg: policies[i]}}}
 	}
 	store, err := state.Open(cfg.StateDir)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
-	if err = bindState(store, cfg.Chain.ChainID, caller.Hex()); err != nil {
-		return err
-	}
+
 	txSigner, err := signer.FromEnv(cfg.Signer.KeyEnv)
 	if err != nil {
 		return err
 	}
-	sender, err := txmanager.New(client, txSigner, chainID, store, cfg.TxManager.EngineConfig(), logr.Discard())
+	driver, err := transaction.New(client, client, txSigner, chainID, cfg.Transaction)
 	if err != nil {
 		return err
 	}
-	if err = sender.Start(ctx); err != nil {
+	reads, err := chainio.NewScheduler(client, cfg.Reads)
+	if err != nil {
 		return err
 	}
-	defer sender.Close()
-	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations}
-	worker := keeper.Keeper{Store: store, Planner: planner, Sender: sender, Strategies: strategies, Mode: "send", OperationTimeout: config.DefaultOperationTimeout, Log: logr.Discard()}
+	readCtx, cancelReads := context.WithCancel(ctx)
+	defer cancelReads()
+	go func() { _ = reads.Run(readCtx) }()
+	defer reads.Close()
+	planner := &runtime.Planner{PermissionSource: source, Chain: reads, ChainID: chainID, Caller: caller, Confirmations: cfg.Transaction.Confirmations, MaxConcurrent: cfg.Runtime.MaxPreparations}
+	worker := runtime.Runtime{Store: store, Planner: planner, Driver: driver, Strategies: strategies, Mode: "send", OperationTimeout: cfg.Runtime.OperationTimeout, ShutdownTimeout: cfg.Runtime.ShutdownTimeout, Log: logr.Discard(), ChainID: chainID, Caller: caller}
+	if err := worker.Start(ctx); err != nil {
+		return err
+	}
+	defer worker.Close()
 	return worker.Tick(ctx)
 }
+
+// The local issuer is outside the production catalogue. This small test-only
+// integration supplies the explicitly reviewed fixture route through the new SDK.
+type issuerFixtureIntegration struct {
+	helper *redemptions.Provider
+	cfg    redemptions.Config
+}
+
+func (*issuerFixtureIntegration) ID() string     { return "fixture-issuer" }
+func (*issuerFixtureIntegration) Policy() string { return "local-route/v1" }
+func (p *issuerFixtureIntegration) Compile(provider.Program) ([]provider.Operation, error) {
+	return []provider.Operation{issuerFixtureOperation{p}}, nil
+}
+func (p *issuerFixtureIntegration) Restore(r provider.Record) (provider.Operation, error) {
+	if r.ID != p.cfg.Action {
+		return nil, errors.New("fixture operation identity changed")
+	}
+	return issuerFixtureOperation{p}, nil
+}
+func (p *issuerFixtureIntegration) Requirements() provider.Requirements {
+	return provider.Requirements{Actions: []string{p.cfg.Action}, ExclusiveTargets: p.helper.ExclusiveTargets()}
+}
+func (p *issuerFixtureIntegration) Prepare(ctx context.Context, in provider.Preparation) (provider.Output, error) {
+	return p.helper.Prepare(ctx, in.Program.Snapshot)
+}
+func (p *issuerFixtureIntegration) Advance(ctx context.Context, s chainio.Snapshot, o provider.Output, progress json.RawMessage) (provider.Progress, error) {
+	return p.helper.Advance(ctx, s, o, progress)
+}
+
+type issuerFixtureOperation struct{ *issuerFixtureIntegration }
+
+func (o issuerFixtureOperation) ID() string { return o.cfg.Action }

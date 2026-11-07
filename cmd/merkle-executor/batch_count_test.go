@@ -20,18 +20,21 @@ import (
 	multicall "github.com/symbioticfi/merkle-executor/api/bindings/multicall3"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/internal/chain"
+	"github.com/symbioticfi/merkle-executor/internal/config"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/merkl"
 	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	runtime "github.com/symbioticfi/merkle-executor/sdk/runtime"
+	"net/url"
 )
 
-func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
-	account, token, dist, aggregate, target, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01"), common.HexToAddress("0x04"), common.HexToAddress("0x05"), common.HexToAddress("0x06"), common.HexToAddress("0x07")
+func TestAutomaticMerklPlannerNetworkRequestCounts(t *testing.T) {
+	account, token, dist, aggregate, target, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01"), common.HexToAddress("0x04"), common.HexToAddress(protocolio.StandardMulticall3), common.HexToAddress("0x06"), common.HexToAddress("0x07")
 	root := crypto.Keccak256Hash(protocolio.AddressWord(account), protocolio.AddressWord(token), protocolio.Word(big.NewInt(100)))
 	claim := distributor.NewMerklDistributor().PackClaim([]common.Address{account}, []common.Address{token}, []*big.Int{big.NewInt(100)}, [][][32]byte{{}})
 	leaf := recipes.Leaf{Target: dist, Value: new(big.Int), Data: claim, DataMask: make([]byte, len(claim))}
@@ -203,8 +206,24 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer backend.Close()
-	cfg := merkl.Config{HTTP: protocolio.HTTPConfig{URL: rewards.URL}, Distributor: dist.Hex(), Multicall3: aggregate.Hex(), Tokens: []string{token.Hex()}, ProofLengths: []int{0}, Action: "0:0", CalldataBytes: len(claim), MinClaimable: "1"}
-	p, err := merkl.New(cfg, registry.Deps{Chain: backend, HTTP: rewards.Client()})
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("curator:\n  url: http://127.0.0.1:1\nchain:\n  chainId: 1\n  rpcUrl: "+rpc.URL+"\nstrategies:\n  - '"+target.Hex()+"'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reads, err := chainio.NewScheduler(backend, cfg.Reads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readCtx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() { _ = reads.Run(readCtx) }()
+	defer reads.Close()
+	rewardURL, _ := url.Parse(rewards.URL)
+	p, err := merkl.NewAutomatic(registry.Deps{Chain: reads, HTTP: &http.Client{Transport: serviceRewriteTransport{host: "api.merkl.xyz", target: rewardURL}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +232,7 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 	if err := os.WriteFile(path, tree, 0600); err != nil {
 		t.Fatal(err)
 	}
-	planner := keeper.Planner{Chain: backend, ChainID: big.NewInt(1), Caller: caller}
+	planner := runtime.Planner{Chain: reads, ChainID: big.NewInt(1), Caller: caller}
 
 	var previous []byte
 	for _, advanced := range []bool{false, true} {
@@ -226,16 +245,16 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 					advanceOnValidation = advanced
 					simulationBlock = `"0xc"`
 					requests, arrays, methods = 0, 0, 0
-					plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []provider.Provider{p}})
+					plan, err := planner.Prepare(t.Context(), runtime.Strategy{Config: runtime.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Integrations: []provider.Integration{p}})
 					wantMethods := 10
 					if advanced {
 						wantMethods = 12
 					}
-					wantRequests, wantArrays := 6, 5
+					wantRequests, wantArrays := 7, 7
 					if warm {
-						wantRequests, wantArrays, wantMethods = 5, 4, wantMethods-1
+						wantRequests, wantArrays, wantMethods = 6, 6, wantMethods-1
 					}
-					if err != nil || requests != wantRequests || arrays != wantArrays || methods != wantMethods || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0].Actions["0:0"], claim) {
+					if err != nil || requests != wantRequests || arrays != wantArrays || methods != wantMethods || len(plan.Operations) != 1 || !bytes.Equal(plan.Operations[0].Output.Actions["0:0"], claim) {
 						t.Fatalf("Merkl Prepare requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
 					}
 					if previous != nil && !bytes.Equal(previous, plan.Calldata) {

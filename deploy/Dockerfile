@@ -2,12 +2,8 @@
 FROM golang:1.27.1 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
-ENV GOPRIVATE=github.com/symbioticfi/merkle-executor
-RUN --mount=type=secret,id=merkle_sdk_read_token,required=true \
-    GIT_CONFIG_COUNT=1 \
-    GIT_CONFIG_KEY_0=credential.https://github.com.helper \
-    GIT_CONFIG_VALUE_0='!f() { read sdk_token < /run/secrets/merkle_sdk_read_token; printf "username=x-access-token\npassword=%s\n" "$sdk_token"; }; f' \
-    go mod download
+COPY sdk/go.mod sdk/go.sum ./sdk/
+RUN go mod download
 COPY . .
 ARG VERSION=dev
 ARG COMMIT=none

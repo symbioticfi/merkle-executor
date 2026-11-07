@@ -1,3 +1,5 @@
+> Historical design. Runtime contracts were superseded by the 2026-11-07 rewrite; see `docs/DESIGN.md` and `docs/MIGRATION.md`.
+
 # Merkle SDK and vault-solver host integration
 
 > Execute inline using executing-plans. The user's approved architecture and this document are the spec.

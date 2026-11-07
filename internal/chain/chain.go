@@ -99,10 +99,6 @@ func (c *Client) NonceAt(ctx context.Context, a common.Address, b *big.Int) (uin
 	value, err := c.write.NonceAt(ctx, a, b)
 	return value, rpcFailure("read mined nonce from write RPC", err)
 }
-func (c *Client) PendingNonceAt(ctx context.Context, a common.Address) (uint64, error) {
-	value, err := c.write.PendingNonceAt(ctx, a)
-	return value, rpcFailure("read pending nonce from write RPC", err)
-}
 func (c *Client) SendTransaction(ctx context.Context, tx *types.Transaction) error {
 	return rpcFailure("submit transaction to write RPC", c.write.SendTransaction(ctx, tx))
 }
@@ -145,7 +141,7 @@ type rpcError struct {
 }
 
 func (e *rpcError) Error() string {
-	// The engine needs these bounded classifications to handle nonce races,
+	// The driver needs these bounded classifications to handle nonce races,
 	// rejected broadcasts and exact-byte retries. Never echo a provider message.
 	message := strings.ToLower(e.cause.Error())
 	for _, kind := range []string{"nonce too low", "nonce is too low", "nonce has already been used", "replacement transaction underpriced", "already known", "insufficient funds", "intrinsic gas too low", "invalid sender", "transaction type not supported", "execution reverted"} {
@@ -191,14 +187,4 @@ func (c *Client) EstimateGasNextBlock(ctx context.Context, msg ethereum.CallMsg,
 	var gas hexutil.Uint64
 	err := c.Client.Client().CallContext(ctx, &gas, "eth_estimateGas", arg, "latest", nil, overrides)
 	return uint64(gas), rpcFailure("estimate next-block transaction gas", err)
-}
-
-// Account telemetry stays on the read endpoint and behind the same redaction
-// boundary as submission and receipt I/O.
-func (c *Client) BalanceAt(ctx context.Context, account common.Address, block *big.Int) (*big.Int, error) {
-	balance, err := c.Client.BalanceAt(ctx, account, block)
-	return balance, rpcFailure("read account balance", err)
-}
-func (c *Client) ReadBalanceAt(ctx context.Context, account common.Address) (*big.Int, error) {
-	return c.BalanceAt(ctx, account, nil)
 }

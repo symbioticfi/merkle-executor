@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"io"
 	"math/big"
 	"net/http"
@@ -26,9 +27,8 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/chain"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	runtime "github.com/symbioticfi/merkle-executor/sdk/runtime"
 )
 
 func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) {
@@ -167,8 +167,8 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 		requests, arrays, methods, latestReads = 0, 0, 0, 0
 		aggregateSizes = nil
 	}
-	planner := keeper.Planner{Chain: batched, ChainID: big.NewInt(31337), Caller: owner}
-	var plan keeper.Plan
+	planner := runtime.Planner{Chain: batched, ChainID: big.NewInt(31337), Caller: owner}
+	var plan runtime.Plan
 	for _, advanced := range []bool{false, true} {
 		planner.RecipeCache = recipes.NewRecipeCache(1, 1<<20)
 		for _, warm := range []bool{false, true} {
@@ -176,7 +176,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 			mu.Lock()
 			advanceOnValidation = advanced
 			mu.Unlock()
-			current, err := planner.Prepare(ctx, keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: treePath}})
+			current, err := planner.Prepare(ctx, runtime.Strategy{Config: runtime.Config{Account: account.Hex(), Executor: target.Hex(), Tree: treePath}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -218,15 +218,15 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 		}
 	}
 	reset()
-	var calls []protocolio.ReadRequest
+	var calls []chainio.ReadRequest
 	for _, data := range [][]byte{
 		tokenABI.PackTransfer(owners[1], big.NewInt(1)),
 		tokenABI.PackApprove(owners[1], big.NewInt(1)),
 		tokenABI.PackApprove(owners[1], big.NewInt(2)),
 	} {
-		calls = append(calls, protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: account, To: &token, Data: data}, Block: plan.Snapshot.BlockNumber})
+		calls = append(calls, chainio.ReadRequest{Kind: chainio.ReadCall, Call: ethereum.CallMsg{From: account, To: &token, Data: data}, Block: plan.Snapshot.BlockNumber})
 	}
-	reads, err := protocolio.ReadGroup(ctx, batched, calls...)
+	reads, err := chainio.ReadGroup(ctx, batched, calls...)
 	if err != nil {
 		t.Fatal(err)
 	}

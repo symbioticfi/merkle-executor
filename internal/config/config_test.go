@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 )
 
 const validConfig = `curator:
@@ -39,7 +38,7 @@ func TestConfigurationDefaultsAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Mode != "simulate" || c.Signer.KeyEnv != DefaultKeyEnv || c.StateDir != filepath.Join(filepath.Dir(p), "state") {
+	if c.Mode != "simulate" || c.Signer.KeyEnv != "MERKLE_EXECUTOR_PRIVATE_KEY" || c.StateDir != filepath.Join(filepath.Dir(p), "state") {
 		t.Fatal(c)
 	}
 }
@@ -84,14 +83,12 @@ func TestTransactionHorizonDefaultsAndInvalidLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defaults.TxManager.EngineConfig().Horizon.MaxBlocks != 6 || defaults.TxManager.EngineConfig().Horizon.BlockTime != 12*time.Second || defaults.TxManager.EngineConfig().PendingTimeout != 5*time.Minute {
+	if defaults.Transaction.Horizon.MaxBlocks != 6 || defaults.Transaction.Horizon.BlockTime != 12*time.Second || defaults.Transaction.PendingTimeout != 5*time.Minute {
 		t.Fatal("unexpected transaction defaults")
 	}
 	for name, block := range map[string]string{
-		"fixed confirmations":          "confirmations: 2",
 		"fixed polling":                "pollIntervalMs: 2000",
 		"fixed broadcast":              "broadcastTimeoutMs: 5000",
-		"fixed horizon":                "horizon: {maxBlocks: 6}",
 		"unsupported static fee":       "maxFeePerGas: '30000000000'",
 		"unsupported passive timeout":  "lateReceiptTimeoutMs: 600000",
 		"unsupported passive hash cap": "lateReceiptMaxHashes: 1024",
@@ -101,24 +98,24 @@ func TestTransactionHorizonDefaultsAndInvalidLimits(t *testing.T) {
 		"negative broadcast":           "broadcastTimeoutMs: -1",
 		"overflow broadcast":           "broadcastTimeoutMs: 9223372036854775807",
 		"pending shorter than bump":    "pendingTimeoutMs: 1000",
-		"horizon too long":             "horizon: {maxBlocks: 13}",
+		"horizon too long":             "horizon: {maxBlocks: 1025}",
 		"nan percentile":               "horizon: {congestedRewardPercentile: .nan}",
 		"tip ordering":                 "horizon: {tipFloorGwei: 16}",
 		"gas headroom":                 "horizon: {gasHeadroomBps: 2000, fallbackGasHeadroomBps: 1000}",
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := Load(writeConfig(t, validConfig+"txManager:\n  "+block+"\n")); err == nil {
+			if _, err := Load(writeConfig(t, validConfig+"transaction:\n  "+block+"\n")); err == nil {
 				t.Fatal("accepted invalid transaction policy")
 			}
 		})
 	}
 }
 
-func TestGlobalMulticallAddressIsFixed(t *testing.T) {
+func TestMulticallAddressIsConfiguredAndValidated(t *testing.T) {
 	for _, tc := range []struct {
 		value string
 		valid bool
-	}{{"", true}, {StandardMulticall3, false}, {"0x0000000000000000000000000000000000000005", false}, {"0x0000000000000000000000000000000000000000", false}, {"not-address", false}} {
+	}{{"", true}, {"0xcA11bde05977b3631167028862bE2a173976CA11", true}, {"0x0000000000000000000000000000000000000005", true}, {"0x0000000000000000000000000000000000000000", false}, {"not-address", false}} {
 		t.Run(tc.value, func(t *testing.T) {
 			text := validConfig
 			if tc.value != "" {
@@ -178,29 +175,23 @@ func TestMinimalConfigurationDerivesSignerAndUsesStandardConstants(t *testing.T)
 	for _, mode := range []string{"simulate", "send"} {
 		t.Run(mode, func(t *testing.T) {
 			raw := strings.Replace(validConfig, "signer:\n  address: '0x0000000000000000000000000000000000000001'\n", "", 1)
-			raw += "mode: " + mode + "\ntxManager:\n  maxFeeGwei: 30\n"
+			raw += "mode: " + mode + "\ntransaction:\n  maxFeeGwei: 30\n"
 			cfg, err := Load(writeConfig(t, raw))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.Signer.Address != "" || cfg.Signer.KeyEnv != DefaultKeyEnv {
+			if cfg.Signer.Address != "" || cfg.Signer.KeyEnv != "MERKLE_EXECUTOR_PRIVATE_KEY" {
 				t.Fatalf("unexpected defaults: %+v", cfg)
 			}
 		})
 	}
 }
 
-func TestRuntimePolicyRejectsFixedFields(t *testing.T) {
-	for name, override := range map[string]string{
-		"poll": "pollInterval: 1s\n", "operation": "operationTimeout: 1s\n", "http": "httpTimeout: 1s\n",
-		"confirmations": "txManager: {confirmations: 1}\n", "transaction poll": "txManager: {pollInterval: 1s}\n",
-		"horizon": "txManager: {horizon: {maxBlocks: 8}}\n", "broadcast": "txManager: {broadcastTimeoutMs: 1000}\n",
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := Load(writeConfig(t, validConfig+override)); err == nil {
-				t.Fatal("non-configurable runtime setting accepted")
-			}
-		})
+func TestRuntimePolicyRejectsObsoleteFieldLayout(t *testing.T) {
+	for _, override := range []string{"pollInterval: 1s\n", "operationTimeout: 1s\n", "httpTimeout: 1s\n", "transaction: {broadcastTimeoutMs: 1000}\n", "txManager: {maxFeeGwei: 30}\n"} {
+		if _, err := Load(writeConfig(t, validConfig+override)); err == nil {
+			t.Fatal("obsolete field layout accepted")
+		}
 	}
 }
 
@@ -215,36 +206,37 @@ func TestRuntimeRejectsManualProviders(t *testing.T) {
 	}
 }
 
-func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
+func TestCuratorEffectivePolicyAndFingerprint(t *testing.T) {
 	var fingerprint string
 	for _, tc := range []struct {
 		name, fields string
-		invalid      bool
+		timeout      int
+		bound        int64
+		equivalent   bool
 	}{
-		{"omitted", "", false}, {"zero", "  timeoutSeconds: 0\n  maxResponseBytes: 0\n", true}, {"fixed", "  timeoutSeconds: 10\n  maxResponseBytes: 2097152\n", true}, {"different timeout", "  timeoutSeconds: 11\n", true}, {"different bound", "  maxResponseBytes: 1048576\n", true},
+		{"omitted", "", 10, 2097152, true},
+		{"explicit defaults", "  timeoutSeconds: 10\n  maxResponseBytes: 2097152\n", 10, 2097152, true},
+		{"changed timeout", "  timeoutSeconds: 11\n", 11, 2097152, false},
+		{"changed bound", "  maxResponseBytes: 1048576\n", 10, 1048576, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			raw := strings.Replace(validConfig, "curator:\n", "curator:\n"+tc.fields, 1)
-			cfg, err := Load(writeConfig(t, raw))
-			if tc.invalid {
-				if err == nil {
-					t.Fatal("non-configurable curator transport setting accepted")
-				}
-				return
-			}
+			cfg, err := Load(writeConfig(t, strings.Replace(validConfig, "curator:\n", "curator:\n"+tc.fields, 1)))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.Curator.HTTPConfig().TimeoutSeconds != permissions.HostTimeoutSeconds || cfg.Curator.HTTPConfig().MaxResponseBytes != permissions.HostMaxResponseBytes {
-				t.Fatalf("effective curator policy %+v", cfg.Curator)
+			if cfg.Curator.TimeoutSeconds != tc.timeout || cfg.Curator.MaxResponseBytes != tc.bound {
+				t.Fatal("effective curator policy differs")
 			}
 			got := cfg.StrategyFingerprint(cfg.Strategies[0], common.HexToAddress("0x03"), common.HexToAddress("0x01"))
 			if fingerprint == "" {
 				fingerprint = got
-			} else if fingerprint != got {
-				t.Fatal("equivalent curator policy changed fingerprint")
+			} else if (got == fingerprint) != tc.equivalent {
+				t.Fatal("curator policy fingerprint differs")
 			}
 		})
+	}
+	if _, err := Load(writeConfig(t, strings.Replace(validConfig, "curator:\n", "curator:\n  timeoutSeconds: 0\n", 1))); err == nil {
+		t.Fatal("zero timeout accepted")
 	}
 }
 
@@ -278,7 +270,7 @@ func TestScalarStrategyAddressSchema(t *testing.T) {
 		})
 	}
 	many := strings.Builder{}
-	for i := 1; i <= 257; i++ {
+	for i := 1; i <= 1025; i++ {
 		fmt.Fprintf(&many, "  - '0x%040x'\n", i)
 	}
 	for name, body := range map[string]string{
@@ -315,7 +307,7 @@ func TestAddressIdentityIgnoresCaseAndOrder(t *testing.T) {
 		"chain":         func(c *Config, _, _ *common.Address) { c.Chain.ChainID++ },
 		"source":        func(c *Config, _, _ *common.Address) { c.Curator.URL = "http://other.invalid/api/v1" },
 		"credential":    func(c *Config, _, _ *common.Address) { c.Curator.APIKeyEnv = "OTHER_CURATOR_KEY" },
-		"sender policy": func(c *Config, _, _ *common.Address) { c.TxManager.MaxFeeGwei++ },
+		"sender policy": func(c *Config, _, _ *common.Address) { c.Transaction.MaxFeeGwei++ },
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, a1, c1 := *a, account, caller

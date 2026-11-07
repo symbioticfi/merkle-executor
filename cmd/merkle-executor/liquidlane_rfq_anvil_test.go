@@ -28,9 +28,9 @@ import (
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	runtime "github.com/symbioticfi/merkle-executor/sdk/runtime"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
@@ -215,12 +215,12 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	if err = runBotWithHTTP(ctx, path, true, true, &planOutput, apiHTTP); err != nil {
 		t.Fatal(err)
 	}
-	var plans map[string]keeper.Plan
+	var plans map[string]runtime.Plan
 	if err = json.Unmarshal(planOutput.Bytes(), &plans); err != nil {
 		t.Fatal(err)
 	}
 	plan := plans[cfg.Strategies[0]]
-	if len(plan.Outputs) != 6 || !bytes.Equal(plan.Outputs[2].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
+	if len(plan.Operations) != 1 || !bytes.Equal(plan.Operations[0].Output.Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
 		t.Fatal("plan did not preserve exact sign or published early")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
@@ -233,23 +233,23 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	load := func() keeper.Job {
-		var job keeper.Job
-		if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); e != nil || !found {
+	load := func() runtime.Workflow {
+		var job runtime.Workflow
+		if found, e := state.ReadNamespace(cfg.StateDir, runtime.Namespace, runtime.WorkflowKey(cfg.Strategies[0]), &job); e != nil || !found {
 			t.Fatal("job absent", e)
 		}
 		return job
 	}
 	run()
 	job := load()
-	if job.Phase != "authorized" || len(job.Progress) != 6 || job.Progress[2].Outcome != "publication-uncertain" || job.Result.Execution == nil || posts.Load() != 1 || quotes.Load() != 2 {
-		t.Fatalf("ambiguous publication lost ownership: phase=%s progress=%+v posts=%d quotes=%d", job.Phase, job.Progress, posts.Load(), quotes.Load())
+	if job.Phase != "authorized" || len(job.Plan.Operations) != 1 || job.Plan.Operations[0].Progress.Outcome != "publication-uncertain" || job.Transaction.Execution == nil || posts.Load() != 1 || quotes.Load() != 2 {
+		t.Fatalf("ambiguous publication lost ownership: phase=%s progress=%+v posts=%d quotes=%d", job.Phase, job.Plan.Operations, posts.Load(), quotes.Load())
 	}
-	originalData := bytes.Clone(job.Plan.Outputs[2].Data)
+	originalData := bytes.Clone(job.Plan.Operations[0].Output.Data)
 	treeCalls := curatorCalls.Load()
 	run()
 	job = load()
-	if job.Phase != "authorized" || job.Progress[2].Done || job.Progress[2].Reference != orderID || posts.Load() != 1 || quotes.Load() != 2 || curatorCalls.Load() != treeCalls || !bytes.Equal(originalData, job.Plan.Outputs[2].Data) {
+	if job.Phase != "authorized" || job.Plan.Operations[0].Progress.Done || job.Plan.Operations[0].Progress.Reference != orderID || posts.Load() != 1 || quotes.Load() != 2 || curatorCalls.Load() != treeCalls || !bytes.Equal(originalData, job.Plan.Operations[0].Output.Data) {
 		t.Fatal("API-only fill released work or restart changed identity")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 {
@@ -274,8 +274,8 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	}
 	run()
 	job = load()
-	if job.Phase != "settled" || !job.Progress[2].Done || job.Progress[2].Outcome != "settled" {
-		t.Fatal("canonical fill did not settle", job.Phase, job.Progress)
+	if job.Phase != "settled" || !job.Plan.Operations[0].Progress.Done || job.Plan.Operations[0].Progress.Outcome != "settled" {
+		t.Fatal("canonical fill did not settle", job.Phase, job.Plan.Operations)
 	}
 	for token, want := range map[common.Address]int64{tokenIn: 0, tokenOut: 950} {
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: erc20.NewERC20().PackBalanceOf(account)}, nil)

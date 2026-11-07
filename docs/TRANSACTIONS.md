@@ -1,30 +1,42 @@
 # Transaction processing
 
-The service owns `internal/txengine` for transaction mechanics and `internal/txmanager` for durable recipe ownership. Logs and tracing use the shared `internal/observability` package. Transaction metrics use the service namespace `merkle_executor_txmanager_*` with bounded operation labels. The engine was adapted from [vault-solver transaction processing](https://github.com/symbioticfi/vault-solver/tree/cc75494298aa3c9b4a17021564d569b811a8fd42); it is local code with local regression tests and requires no sibling checkout, module dependency, telemetry bridge or copied-source parity check.
+`internal/transaction.Driver` implements the SDK `runtime.Driver` contract. One
+runtime-owned worker and one durable workflow replace the former keeper, submission
+journal, transaction manager and transaction engine lifecycle layers.
 
-The engine owns one signed lifecycle at a time. It reads the write endpoint's mined nonce before preparation, retains that nonce through estimation/signing, and ignores pending counts for selection. It keeps a floor for canonically confirmed owned nonces. Fees use the next base fee, its exact EIP-1559 growth bound and recent block fullness. Gas is estimated against the next block; unsupported block overrides use latest-state estimates with larger headroom. New-block validity, congestion or stall evidence triggers same-nonce replacements; unavailable fee windows use bounded fallback bumps. All variants remain eligible for receipt discovery. Ambiguous sends get an exact-byte rebroadcast, with no new nonce. Pending timeout and shutdown drain are bounded. The engine never sends cancellation self-transfers.
+The driver reserves one signer lane. It reads the write endpoint's mined nonce,
+ignores pending counts for allocation and retains a floor for canonically confirmed
+owned nonces. Read RPC supplies fee history, estimation, receipts and headers; write
+RPC supplies nonce admission and broadcast. Both HTTP clients refuse redirects.
 
-Merkle's adapter adds business durability. The keeper persists the job before admission; the signing wrapper validates sender, chain, destination, calldata, value and signature payload, and fsyncs every signed attempt before returning it to the broadcaster. A persistence error blocks further signing and acknowledgement. Caller cancellation returns pending work while the engine continues on its process context. The next keeper tick joins that lifecycle, rather than creating another one. Even unsigned admitted work retains its job identity until the engine reports a result.
+Before broadcasting, the driver validates the signer result against the complete
+quoted transaction, including chain, nonce, destination, value, calldata, gas and fees,
+and calls the workflow persistence callback with the exact signed wire bytes. An
+uncertain write blocks further admission and release until restart/reload. Signed
+originals and replacements remain candidates for confirmation. An older variant may
+win. Ambiguous sends can rebroadcast identical bytes; they never allocate a new nonce.
 
-The journal stores one identity and same-nonce variants. Terminal success/revert is persisted only after the engine's canonical ancestry and descendant-depth proof, plus validation of receipt logs. An older variant's receipt can win. The result carries its exact hash, block and logs; providers use that evidence to reconcile their prepared calls. Keeper progress is persisted before acknowledgement clears the journal. A restored terminal journal also restores the owned-nonce floor.
+Fee policy uses exact EIP-1559 base-fee growth, recent block fullness and bounded tips.
+Gas estimation targets the next block; unsupported overrides use latest-state
+estimation with explicit fallback headroom. Congestion, new-block validity and stall
+evidence can trigger same-nonce replacements. The driver never sends cancellation
+self-transfers. All limits, timings, horizon and fee values live in YAML under
+`transaction`; defaults are in `internal/config/defaults.yaml`. Send mode requires a
+finite positive `transaction.maxFeeGwei` ceiling.
 
-A generic Merkle recipe can be repeatable and has no universal order ID/idempotency check. Merkle retains its unresolved journal when the engine abandons tracking or observes foreign nonce consumption. Restart checks every owned hash without replaying stored calldata. Neither a missing receipt, an RPC error nor a pending nonce is proof that the recipe failed. This intentional business-layer constraint prevents duplicate recipe execution and unauthorized external settlement.
+Receipt confirmation proves canonical ancestry and descendant depth, closes with
+fresh numbered witnesses and validates log identity. Terminal evidence is persisted
+before the runtime durably changes phase and releases ownership. External settlement
+uses that exact transaction evidence. A reverted recipe halts its workflow for
+inspection. Missing receipts, foreign nonce consumption, timeouts and cancellation
+retain the reservation because a generic recipe may execute more than once.
 
-`txManager.maxFeeGwei` is the only transaction configuration field. It sets a
-finite positive fee ceiling in send mode. Timing and fee-horizon settings are
-fixed by runtime policy version `1`: 2 confirmations, 2-second receipt polling,
-5-second broadcast timeout, 30-second account telemetry and replacement intervals,
-5-minute pending timeout, and 1-minute shutdown drain.
+Restored signed workflows are observation-only: no signing, rebroadcast or replay of
+saved calldata. Definitely unsigned admission may refresh only after its safe state
+is persisted and the lane released. Process-owned observation survives a caller Tick
+timeout. Shutdown cancels/drains this worker before releasing RPC or state resources;
+a drain failure leaves ownership intact.
 
-The fixed fee horizon spans 6 blocks at 12 seconds each. Tip floors are 0.02 Gwei
-normally, 0.1 for a full block, and 0.2 under congestion, capped at 15 Gwei. The
-reward window is 3 blocks at percentile 50; escalation starts after 2 full blocks
-or 3 stalled blocks. Gas headroom is 500 basis points, or 1000 for the estimate
-fallback. The engine checks that these values fit the configured global fee cap.
-
-Both read and write HTTP RPC clients refuse redirects, including transaction
-submission redirects, so signed payloads stay on the configured endpoint.
-
-Read RPC handles simulation, fee history, receipts and confirmation headers. Write RPC handles nonce admission and broadcast. RPC error text is redacted but preserves a finite allowlist of nonce, fee/rejection and execution-revert classifications; original typed causes remain available for invalid-params fallback and revert decoding. No endpoint credentials or provider response text appear in lifecycle logs.
-
-The engine has no solver identity or protocol-obsolescence callback. Receipt confirmation and restoring the confirmed nonce floor are ordinary engine APIs. Merkle owns recovery after tracking ends: it polls stored variants directly, without a second passive observer, hash cache, deduplication ledger or receipt callback. Engine gas/fee metrics account receipts found during active tracking; recovered terminal receipts are reported by journal logs and keeper outcomes, without passive-observer cost counters.
+RPC errors preserve typed causes for cancellation/revert handling but redact endpoint
+credentials and unbounded remote text from logs. Runtime outcome metrics use bounded
+strategy/outcome labels. No signing credential is used by local tests.

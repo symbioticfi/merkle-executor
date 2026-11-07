@@ -103,13 +103,12 @@ count. Opening/canonical headers, recipe event evidence, current metadata/roles 
 original full simulation remain necessary separate stages. The 16 MiB recipe cache
 retains only canonical event bodies, never balances, roots, roles or quotes.
 
-SDK fixture counts in `batch_count_test.go` and `batch_anvil_test.go` measure
-explicitly configured providers: 6 cold / 5 warm preparation requests and 3 presend
-requests for their small recipes. They are not counts for the normal automatic
-daemon. `TestAnvilAutomaticMerklClaimFeedsRecipeBalance` verifies the normal daemon
-uses one shared lens and one rewards HTTP fetch for a claim followed by balance
-READ and a derived transfer. RPC counts are local fixture evidence, not latency or
-deployment guarantees.
+The automatic Merkl fixture in `batch_count_test.go` uses the registered integration
+and shared scheduler: its small recipe needs 7 cold / 6 warm preparation HTTP batches
+and 3 presend batches. The older 6/5 fixture staged a manually configured adapter
+before authentication and is superseded. `TestAnvilAutomaticMerklClaimFeedsRecipeBalance`
+verifies automatic claim effects feed one union lens and later derived transfer.
+Counts are fixture measurements, not production latency or deployment guarantees.
 
 ## Liquid Lane RFQ consumer redemptions
 
@@ -237,18 +236,17 @@ and terminal completion requires on-chain settlement evidence as well as API sta
 
 ## Recovery and provider interfaces
 
-Automatic output envelopes persist the fully derived internal configuration, wire
-output and policy version, even for unmatched adapters. Startup adapter ordering and
-the runtime-policy fingerprint are durable identity. Recovery requires that
-identity to match; it never rewrites a fingerprint, UID, nonce or provider index. Recovery validates envelopes, bounds and target ownership before
-network mutation. Already signed attempts retain their exact saved bytes and use canonical receipt
-and execution reconciliation; they do not repeat preparation/presend numerical
-simulation. Recovery fetches neither curator permissions nor new quotes for
-existing work.
+Automatic integrations compile once into stable per-route operations. Only matched
+operations have saved records. Identity combines integration ID, policy and action
+keys; registration ordering does not affect recovery. Envelopes bind assignments
+and fully derived protocol configuration. Recovery validates complete ownership,
+including finished operations, and immutable execute permissions before protocol I/O.
+Signed attempts retain exact bytes and recover through canonical receipt observation;
+existing work never fetches replacement curator permissions or fresh quotes.
 
 Direct typed provider constructors serve recipe derivation, saved output
 validation and focused tests. They are not daemon configuration inputs. Generic static/http/rpc data providers are not included in the daemon; deterministic
-recipe-constrained Inputs use `keeper.NewRecipeInputs()` and the shared lens.
+recipe-constrained Inputs resolve intrinsically through the shared lens.
 
 ## Evidence and generation
 

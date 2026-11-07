@@ -1,3 +1,5 @@
+> Historical design. Runtime contracts were superseded by the 2026-11-07 rewrite; see `docs/DESIGN.md` and `docs/MIGRATION.md`.
+
 # Merkle transaction processing
 
 Goal: use the transaction engine from vault-solver stage cc75494298aa3c9b4a17021564d569b811a8fd42, targeting Merkle executor main.

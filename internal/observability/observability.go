@@ -33,7 +33,7 @@ type Metrics struct {
 
 func NewMetrics() *Metrics {
 	r := prometheus.NewRegistry()
-	c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "merkle_executor_iterations_total", Help: "Keeper iterations by configured strategy and outcome."}, []string{"strategy", "outcome"})
+	c := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "merkle_executor_iterations_total", Help: "Runtime iterations by configured strategy and outcome."}, []string{"strategy", "outcome"})
 	r.MustRegister(c)
 	return &Metrics{registry: r, iterations: c}
 }
@@ -54,6 +54,3 @@ func (m *Metrics) Server(addr string) *http.Server {
 	})
 	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
 }
-
-// Registerer shares the service registry with neutral transaction metrics.
-func (m *Metrics) Registerer() prometheus.Registerer { return m.registry }

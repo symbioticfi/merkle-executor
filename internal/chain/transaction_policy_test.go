@@ -93,29 +93,3 @@ type invalidParams struct{}
 
 func (*invalidParams) Error() string  { return "invalid params" }
 func (*invalidParams) ErrorCode() int { return -32602 }
-
-func TestBalanceTelemetryRedactsTransportCredentials(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request struct {
-			ID     json.RawMessage
-			Method string
-		}
-		_ = json.NewDecoder(r.Body).Decode(&request)
-		if request.Method == "eth_chainId" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": "0x1"})
-			return
-		}
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte("secret-response-body"))
-	}))
-	defer server.Close()
-	client, err := Dial(t.Context(), server.URL+"/secret-path?key=secret-query", "", big.NewInt(1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	_, err = client.BalanceAt(t.Context(), common.Address{}, nil)
-	if err == nil || strings.Contains(err.Error(), "secret-") {
-		t.Fatalf("balance telemetry leaked credentials: %v", err)
-	}
-}

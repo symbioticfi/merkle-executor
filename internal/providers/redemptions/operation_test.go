@@ -2,6 +2,7 @@ package redemptions
 
 import (
 	"context"
+	"github.com/go-errors/errors"
 	"maps"
 	"math/big"
 	"slices"
@@ -70,7 +71,7 @@ func TestIntegrationCompilesStableRouteAndRestoresWithoutRecipe(t *testing.T) {
 	}
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := operation.Prepare(canceled, provider.Preparation{Program: provider.Program{Snapshot: snapshot}, Results: map[uint]*big.Int{0: big.NewInt(100)}, Reader: reader}); err != context.Canceled || reader.reads != 0 {
+	if _, err := operation.Prepare(canceled, provider.Preparation{Program: provider.Program{Snapshot: snapshot}, Results: map[uint]*big.Int{0: big.NewInt(100)}, Reader: reader}); !errors.Is(err, context.Canceled) || reader.reads != 0 {
 		t.Fatalf("canceled preparation reached I/O: %v", err)
 	}
 	if operation.ID() != cfg.Action {

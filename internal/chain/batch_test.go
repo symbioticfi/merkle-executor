@@ -18,7 +18,6 @@ import (
 	"github.com/go-errors/errors"
 	multicall "github.com/symbioticfi/merkle-executor/api/bindings/multicall3"
 	"github.com/symbioticfi/merkle-executor/sdk/chainio"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
 func TestBatchReadsPreserveCallsAndAssociateResponsesByID(t *testing.T) {
@@ -73,16 +72,16 @@ func TestBatchReadsPreserveCallsAndAssociateResponsesByID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	batcher, ok := any(client).(protocolio.BatchReader)
+	batcher, ok := any(client).(chainio.BatchReader)
 	if !ok {
 		t.Fatal("production chain lacks read batching")
 	}
 	message := ethereum.CallMsg{From: from, To: &to, Data: []byte{0x12, 0x34}, Value: big.NewInt(3), Gas: 77, GasPrice: big.NewInt(7), GasFeeCap: big.NewInt(5), GasTipCap: big.NewInt(2), BlobGasFeeCap: big.NewInt(9), BlobHashes: []common.Hash{{1}}, AccessList: types.AccessList{{Address: to}}, AuthorizationList: []types.SetCodeAuthorization{}}
-	results, err := batcher.BatchRead(context.Background(), []protocolio.ReadRequest{
-		{Kind: protocolio.ReadCall, Call: message, Block: big.NewInt(12)},
-		{Kind: protocolio.ReadHeader, Block: big.NewInt(13)},
-		protocolio.ContractRead(to, []byte{1, 2, 3, 4}, big.NewInt(12), false),
-		{Kind: protocolio.ReadReceipt, Hash: common.HexToHash("0x05")},
+	results, err := batcher.BatchRead(context.Background(), []chainio.ReadRequest{
+		{Kind: chainio.ReadCall, Call: message, Block: big.NewInt(12)},
+		{Kind: chainio.ReadHeader, Block: big.NewInt(13)},
+		chainio.ContractRead(to, []byte{1, 2, 3, 4}, big.NewInt(12), false),
+		{Kind: chainio.ReadReceipt, Hash: common.HexToHash("0x05")},
 	})
 	if err != nil || len(results) != 4 || requests != 1 {
 		t.Fatalf("batch response: %+v %v requests=%d", results, err, requests)
@@ -145,7 +144,7 @@ func TestBatchReadsRejectMissingDuplicateAndMalformedResponses(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close()
-			batcher, ok := any(client).(protocolio.BatchReader)
+			batcher, ok := any(client).(chainio.BatchReader)
 			if !ok {
 				t.Fatal("production chain lacks read batching")
 			}
@@ -154,7 +153,7 @@ func TestBatchReadsRejectMissingDuplicateAndMalformedResponses(t *testing.T) {
 			if mode == "canceled" {
 				cancel()
 			}
-			_, err = batcher.BatchRead(ctx, []protocolio.ReadRequest{{Kind: protocolio.ReadHeader}, {Kind: protocolio.ReadHeader}})
+			_, err = batcher.BatchRead(ctx, []chainio.ReadRequest{{Kind: chainio.ReadHeader}, {Kind: chainio.ReadHeader}})
 			if err == nil || strings.Contains(err.Error(), "secret") {
 				t.Fatalf("invalid response accepted or leaked: %v", err)
 			}
@@ -234,7 +233,7 @@ func TestMixedBatchAggregatesOnlyCompatibleVerifiedCalls(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close()
-			reqs := []protocolio.ReadRequest{protocolio.ContractRead(target, []byte{1, 0, 0, 0}, big.NewInt(12), true), protocolio.ContractRead(target, []byte{2, 0, 0, 0}, big.NewInt(12), true), protocolio.ContractRead(target, []byte{3, 0, 0, 0}, big.NewInt(12), true)}
+			reqs := []chainio.ReadRequest{chainio.ContractRead(target, []byte{1, 0, 0, 0}, big.NewInt(12), true), chainio.ContractRead(target, []byte{2, 0, 0, 0}, big.NewInt(12), true), chainio.ContractRead(target, []byte{3, 0, 0, 0}, big.NewInt(12), true)}
 			reqs[1].Call.From = common.HexToAddress("0x09")
 			results, err := client.BatchRead(context.Background(), reqs)
 			if requests != 1 {

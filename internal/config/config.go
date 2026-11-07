@@ -1,10 +1,12 @@
-// Package config decodes strict file-driven runtime configuration.
+// Package config decodes strict YAML over the versioned file-driven defaults.
 package config
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,38 +16,55 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-	"gopkg.in/yaml.v3"
-
+	"github.com/symbioticfi/merkle-executor/internal/transaction"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"gopkg.in/yaml.v3"
 )
 
-type Config struct {
-	Curator       Curator       `yaml:"curator"`
-	Mode          string        `yaml:"mode"`
-	Chain         Chain         `yaml:"chain"`
-	Signer        Signer        `yaml:"signer"`
-	TxManager     TxManager     `yaml:"txManager"`
-	StateDir      string        `yaml:"stateDir"`
-	Observability Observability `yaml:"observability"`
-	Strategies    []string      `yaml:"strategies"`
-}
+//go:embed defaults.yaml
+var defaults []byte
 
-// Curator contains the operator-supplied permission service settings.
+type Config struct {
+	Curator       Curator            `yaml:"curator"`
+	Mode          string             `yaml:"mode"`
+	Chain         Chain              `yaml:"chain"`
+	Signer        Signer             `yaml:"signer"`
+	Transaction   transaction.Config `yaml:"transaction"`
+	Runtime       Runtime            `yaml:"runtime"`
+	Reads         chainio.Limits     `yaml:"reads"`
+	StateDir      string             `yaml:"stateDir"`
+	Observability Observability      `yaml:"observability"`
+	Strategies    []string           `yaml:"strategies"`
+}
+type Runtime struct {
+	PollInterval     time.Duration `yaml:"pollInterval"`
+	OperationTimeout time.Duration `yaml:"operationTimeout"`
+	HTTPTimeout      time.Duration `yaml:"httpTimeout"`
+	StrategyInterval time.Duration `yaml:"strategyInterval"`
+	ShutdownTimeout  time.Duration `yaml:"shutdownTimeout"`
+	RecipeCacheBytes int64         `yaml:"recipeCacheBytes"`
+	MaxPreparations  int           `yaml:"maxPreparations"`
+	MaxStrategies    int           `yaml:"maxStrategies"`
+}
 type Curator struct {
-	URL       string `yaml:"url"`
-	APIKeyEnv string `yaml:"apiKeyEnv,omitempty"`
+	URL              string `yaml:"url"`
+	APIKeyEnv        string `yaml:"apiKeyEnv,omitempty"`
+	TimeoutSeconds   int    `yaml:"timeoutSeconds"`
+	MaxResponseBytes int64  `yaml:"maxResponseBytes"`
 }
 
 func (c Curator) HTTPConfig() protocolio.HTTPConfig {
-	return protocolio.HTTPConfig{URL: c.URL, APIKeyEnv: c.APIKeyEnv, TimeoutSeconds: permissions.HostTimeoutSeconds, MaxResponseBytes: permissions.HostMaxResponseBytes}
+	return protocolio.HTTPConfig{URL: c.URL, APIKeyEnv: c.APIKeyEnv, TimeoutSeconds: c.TimeoutSeconds, MaxResponseBytes: c.MaxResponseBytes}
 }
 
 type Chain struct {
 	RPCURL      string `yaml:"rpcUrl"`
 	WriteRPCURL string `yaml:"writeRpcUrl"`
 	ChainID     uint64 `yaml:"chainId"`
+	Multicall3  string `yaml:"multicall3"`
 }
 type Signer struct {
 	Address string `yaml:"address"`
@@ -56,50 +75,53 @@ type Observability struct {
 	Debug bool   `yaml:"debug"`
 }
 
-const (
-	// RuntimePolicyVersion changes when built-in preparation or timing semantics change.
-	RuntimePolicyVersion                  = "1"
-	DefaultKeyEnv                         = "MERKLE_EXECUTOR_PRIVATE_KEY"
-	DefaultRecipeCacheBytes        int64  = 16 << 20
-	DefaultPollInterval                   = 15 * time.Second
-	DefaultOperationTimeout               = 30 * time.Second
-	DefaultHTTPTimeout                    = 15 * time.Second
-	DefaultStrategyInterval               = time.Minute
-	DefaultConfirmations           uint64 = 2
-	DefaultTransactionPollInterval        = 2 * time.Second
-	StandardMulticall3                    = protocolio.StandardMulticall3
-)
-
+func decode(raw []byte, out any) error {
+	var node yaml.Node
+	if err := yaml.Unmarshal(raw, &node); err != nil {
+		return errors.New("malformed YAML configuration")
+	}
+	var inspect func(*yaml.Node) error
+	inspect = func(n *yaml.Node) error {
+		if n.Kind == yaml.AliasNode || n.Anchor != "" {
+			return errors.New("YAML anchors and aliases are unsupported")
+		}
+		for _, child := range n.Content {
+			if err := inspect(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := inspect(&node); err != nil {
+		return err
+	}
+	d := yaml.NewDecoder(bytes.NewReader(raw))
+	d.KnownFields(true)
+	if err := d.Decode(out); err != nil {
+		return errors.New("invalid or unknown configuration field")
+	}
+	if err := d.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return errors.New("expected one YAML document")
+	}
+	return nil
+}
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, errors.Errorf("read configuration: %w", err)
 	}
 	var cfg Config
-	d := yaml.NewDecoder(bytes.NewReader(raw))
-	d.KnownFields(true)
-	if err := d.Decode(&cfg); err != nil {
-		return nil, errors.Errorf("decode configuration: %w", err)
+	if err := decode(defaults, &cfg); err != nil {
+		return nil, errors.Errorf("decode runtime defaults: %w", err)
 	}
-	if err := d.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return nil, errors.New("expected one YAML document")
+	if err := decode(raw, &cfg); err != nil {
+		return nil, err
 	}
-	// Only operational endpoints are expanded. Secret-bearing provider configuration
-	// keeps environment variable names, never interpolated values.
 	cfg.Chain.RPCURL = os.ExpandEnv(cfg.Chain.RPCURL)
 	cfg.Chain.WriteRPCURL = os.ExpandEnv(cfg.Chain.WriteRPCURL)
-	if cfg.Mode == "" {
-		cfg.Mode = "simulate"
-	}
-	if cfg.Signer.KeyEnv == "" {
-		cfg.Signer.KeyEnv = DefaultKeyEnv
-	}
 	base, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
 		return nil, err
-	}
-	if cfg.StateDir == "" {
-		cfg.StateDir = "state"
 	}
 	if !filepath.IsAbs(cfg.StateDir) {
 		cfg.StateDir = filepath.Join(base, cfg.StateDir)
@@ -109,10 +131,12 @@ func Load(path string) (*Config, error) {
 	}
 	return &cfg, nil
 }
-
 func (c *Config) Validate() error {
 	if err := permissions.ValidateConfig(c.Curator.HTTPConfig()); err != nil {
 		return err
+	}
+	if c.Curator.TimeoutSeconds <= 0 || c.Curator.MaxResponseBytes <= 0 {
+		return errors.New("positive curator resource bounds required")
 	}
 	if c.Mode != "simulate" && c.Mode != "send" {
 		return errors.New("mode must be simulate or send")
@@ -132,21 +156,38 @@ func (c *Config) Validate() error {
 	if c.Chain.RPCURL == "" {
 		return errors.New("rpcUrl required")
 	}
+	if _, err := parse.Address(c.Chain.Multicall3); err != nil {
+		return errors.New("chain.multicall3 requires a nonzero address")
+	}
 	if c.Signer.Address != "" {
 		if _, err := parse.Address(c.Signer.Address); err != nil {
-			return errors.New("signer.address must be a nonzero address when used as an assertion")
+			return errors.New("signer.address requires a nonzero address")
 		}
 	}
-	if len(c.Strategies) == 0 || len(c.Strategies) > 256 {
-		return errors.New("configure 1..256 strategies")
+	if c.Mode == "send" && c.Signer.KeyEnv == "" {
+		return errors.New("send mode requires signer.keyEnv")
+	}
+	if c.StateDir == "" {
+		return errors.New("stateDir required")
+	}
+	if c.Runtime.PollInterval <= 0 || c.Runtime.OperationTimeout <= 0 || c.Runtime.HTTPTimeout <= 0 || c.Runtime.StrategyInterval < 0 || c.Runtime.ShutdownTimeout <= 0 || c.Runtime.RecipeCacheBytes < 0 || c.Runtime.MaxPreparations <= 0 || c.Runtime.MaxStrategies <= 0 {
+		return errors.New("invalid runtime resource policy")
+	}
+	if err := c.Reads.Validate(); err != nil {
+		return err
+	}
+	if c.Transaction.MaxFeeGwei < 0 || math.IsNaN(c.Transaction.MaxFeeGwei) || math.IsInf(c.Transaction.MaxFeeGwei, 0) {
+		return errors.New("transaction.maxFeeGwei must be finite and nonnegative")
 	}
 	if c.Mode == "send" {
-		if c.Signer.KeyEnv == "" {
-			return errors.New("send mode requires signer.keyEnv")
+		if err := c.Transaction.Validate(); err != nil {
+			return err
 		}
-	}
-	if err := c.TxManager.validate(c.Mode == "send"); err != nil {
+	} else if err := c.Transaction.ValidatePolicy(); err != nil {
 		return err
+	}
+	if len(c.Strategies) < 1 || len(c.Strategies) > c.Runtime.MaxStrategies {
+		return errors.New("executor count exceeds runtime.maxStrategies")
 	}
 	seen := make(map[string]bool, len(c.Strategies))
 	for i, value := range c.Strategies {
@@ -156,25 +197,39 @@ func (c *Config) Validate() error {
 		}
 		canonical := strings.ToLower(executor.Hex())
 		if seen[canonical] {
-			return errors.Errorf("duplicate executor address %s", canonical)
+			return errors.New("duplicate executor address")
 		}
 		seen[canonical] = true
 		c.Strategies[i] = canonical
 	}
 	return nil
 }
-
-// StrategyFingerprint binds the canonical executor, derived deployment identity
-// and effective runtime policy to durable work.
 func (c *Config) StrategyFingerprint(executor string, account, caller common.Address) string {
 	raw, _ := json.Marshal(struct {
-		Policy    string
-		Executor  common.Address
-		Account   common.Address
-		Caller    common.Address
-		ChainID   uint64
-		Curator   Curator
-		TxManager TxManager
-	}{RuntimePolicyVersion, common.HexToAddress(executor), account, caller, c.Chain.ChainID, c.Curator, c.TxManager})
+		Policy                    string
+		Executor, Account, Caller common.Address
+		ChainID                   uint64
+		Curator                   Curator
+		Transaction               transaction.Config
+	}{"2", common.HexToAddress(executor), account, caller, c.Chain.ChainID, c.Curator, c.Transaction})
+	return crypto.Keccak256Hash(raw).Hex()
+}
+
+// LegacyStrategyFingerprint preserves the exact v1 serializer for offline import.
+func (c *Config) LegacyStrategyFingerprint(executor string, account, caller common.Address) string {
+	type oldCurator struct {
+		URL       string `yaml:"url"`
+		APIKeyEnv string `yaml:"apiKeyEnv,omitempty"`
+	}
+	type oldTx struct {
+		MaxFeeGwei float64 `yaml:"maxFeeGwei"`
+	}
+	raw, _ := json.Marshal(struct {
+		Policy                    string
+		Executor, Account, Caller common.Address
+		ChainID                   uint64
+		Curator                   oldCurator
+		TxManager                 oldTx
+	}{"1", common.HexToAddress(executor), account, caller, c.Chain.ChainID, oldCurator{c.Curator.URL, c.Curator.APIKeyEnv}, oldTx{c.Transaction.MaxFeeGwei}})
 	return crypto.Keccak256Hash(raw).Hex()
 }

@@ -21,7 +21,7 @@ test:
 	go test -race -cover ./...
 integration:
 	$(MAKE) -C sdk integration
-	MERKLE_ANVIL_TEST=1 go test -tags=integration ./cmd/merkle-executor ./internal/txengine -run TestAnvil -count=1 -v
+	MERKLE_ANVIL_TEST=1 go test -tags=integration ./cmd/merkle-executor ./internal/transaction -run TestAnvil -count=1 -v
 vet:
 	go vet ./...
 lint:

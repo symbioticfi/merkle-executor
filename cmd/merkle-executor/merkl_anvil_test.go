@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -76,13 +77,13 @@ func TestAnvilMerklMulticallUsesPinnedDistributorState(t *testing.T) {
 		serviceSeedTransaction(t, ctx, client, owner, &distributor, servicePack(t, distributorArtifact, "configure", root, account, token, big.NewInt(claimed), recipient))
 	}
 	configure(80, common.Address{})
-	currentSnapshot := func() provider.Snapshot {
+	currentSnapshot := func() chainio.Snapshot {
 		t.Helper()
 		header, err := client.HeaderByNumber(ctx, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return provider.Snapshot{ChainID: big.NewInt(31337), BlockNumber: header.Number, BlockHash: header.Hash(), Account: account, Timestamp: header.Time}
+		return chainio.Snapshot{ChainID: big.NewInt(31337), BlockNumber: header.Number, BlockHash: header.Hash(), Account: account, Timestamp: header.Time}
 	}
 	original := currentSnapshot()
 	reward := wire.MerklReward{Token: wire.MerklToken{Address: token.Hex(), Decimals: 6}, Amount: "100", Claimed: "70", Pending: "500", Proofs: []string{sibling.Hex()}}
@@ -105,7 +106,7 @@ func TestAnvilMerklMulticallUsesPinnedDistributorState(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := binding.NewMerklDistributor().PackClaim([]common.Address{account}, []common.Address{token}, []*big.Int{big.NewInt(100)}, [][][32]byte{{sibling}})
-	prepare := func(snapshot provider.Snapshot) (provider.Output, error) {
+	prepare := func(snapshot chainio.Snapshot) (provider.Output, error) {
 		t.Helper()
 		calls, expectedBlock = 0, snapshot.BlockNumber
 		out, err := p.Prepare(ctx, snapshot)
@@ -114,7 +115,7 @@ func TestAnvilMerklMulticallUsesPinnedDistributorState(t *testing.T) {
 		}
 		return out, err
 	}
-	claim := func(snapshot provider.Snapshot, delta string) {
+	claim := func(snapshot chainio.Snapshot, delta string) {
 		t.Helper()
 		out, err := prepare(snapshot)
 		if err != nil || out.Inputs[0] != "100" || out.Inputs[1] != delta || !bytes.Equal(out.Actions["0:0"], payload) || len(out.SkipSteps) != 0 {

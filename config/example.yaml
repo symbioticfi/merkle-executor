@@ -9,9 +9,15 @@ chain:
   rpcUrl: http://127.0.0.1:8545
 stateDir: ../state
 # Required for send mode: choose an absolute fee ceiling for this deployment.
-# txManager:
+# transaction:
 #   maxFeeGwei: 30
 observability:
   addr: 127.0.0.1:9090
 strategies:
   - '0x0000000000000000000000000000000000000002'
+
+# Optional policies are decoded over internal/config/defaults.yaml.
+# runtime:
+#   maxPreparations: 16
+# reads:
+#   maxConcurrent: 4
