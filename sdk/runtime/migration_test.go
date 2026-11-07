@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
@@ -132,7 +133,7 @@ func TestMigrationAcknowledgedExternalProgressRestoresByIdentityAfterReorder(t *
 	in := &testIntegration{name: "route", ops: []provider.Operation{op}}
 	extra := &testIntegration{name: "new-unmatched"}
 	r.Strategies[0].Integrations = []provider.Integration{extra, in}
-	r.LegacyConverters[name] = []LegacyConverter{func(_ provider.Snapshot, out provider.Output, progress provider.Progress) ([]provider.Record, error) {
+	r.LegacyConverters[name] = []LegacyConverter{func(_ chainio.Snapshot, out provider.Output, progress provider.Progress) ([]provider.Record, error) {
 		return []provider.Record{{Integration: in.ID(), Policy: in.Policy(), ID: op.ID(), Output: out, Progress: progress}}, nil
 	}}
 	if err := r.Tick(context.Background()); err != nil {

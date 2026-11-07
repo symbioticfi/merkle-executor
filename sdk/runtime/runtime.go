@@ -122,8 +122,10 @@ func (r *Runtime) Tick(ctx context.Context) error {
 	r.mu.Unlock()
 	var failures []error
 	reconciled := map[string]bool{}
-	if err := r.reconcile(ctx, reconciled); err != nil {
-		failures = append(failures, err)
+	if r.Mode != "simulate" {
+		if err := r.reconcile(ctx, reconciled); err != nil {
+			failures = append(failures, err)
+		}
 	}
 	r.mu.Lock()
 	if r.fault != nil {
@@ -132,8 +134,10 @@ func (r *Runtime) Tick(ctx context.Context) error {
 		return r.global(err)
 	}
 	eligible := make([]Strategy, 0, len(r.Strategies))
+	eligibleIndices := make([]int, 0, len(r.Strategies))
 	for i := range r.Strategies {
-		s := r.Strategies[(i+r.next)%len(r.Strategies)]
+		index := (i + r.next) % len(r.Strategies)
+		s := r.Strategies[index]
 		w, found := r.workflows[s.Config.Name]
 		if found && (w.Reserved || w.Phase == "pending" || w.Phase == "authorized" || w.Phase == "failed" || w.Phase == "settled" && time.Since(w.FinishedAt) < s.Config.Interval) {
 			continue
@@ -143,6 +147,7 @@ func (r *Runtime) Tick(ctx context.Context) error {
 			continue
 		}
 		eligible = append(eligible, s)
+		eligibleIndices = append(eligibleIndices, index)
 	}
 	r.mu.Unlock()
 	if len(eligible) > 0 {
@@ -209,7 +214,7 @@ func (r *Runtime) Tick(ctx context.Context) error {
 			err = r.saveLocked(w)
 			if err == nil {
 				r.launchLocked(w.Name, false)
-				r.next = (r.next + i + 1) % len(r.Strategies)
+				r.next = (eligibleIndices[i] + 1) % len(r.Strategies)
 			}
 			r.mu.Unlock()
 			if err != nil {
@@ -241,8 +246,10 @@ func (r *Runtime) Tick(ctx context.Context) error {
 		}
 		cancel()
 	}
-	if err := r.reconcile(ctx, reconciled); err != nil {
-		failures = append(failures, err)
+	if r.Mode != "simulate" {
+		if err := r.reconcile(ctx, reconciled); err != nil {
+			failures = append(failures, err)
+		}
 	}
 	r.mu.Lock()
 	fault := r.fault
@@ -455,10 +462,6 @@ func (r *Runtime) Close() error {
 	r.tickMu.Lock()
 	defer r.tickMu.Unlock()
 	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		return nil
-	}
 	r.closed = true
 	if r.cancel != nil {
 		r.cancel()

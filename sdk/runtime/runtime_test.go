@@ -22,9 +22,11 @@ import (
 )
 
 type coordinatorPlanner struct {
-	mu       sync.Mutex
-	plans    map[string]Plan
-	prepares int
+	mu          sync.Mutex
+	plans       map[string]Plan
+	prepares    int
+	verifyCalls int
+	verify      func(int) error
 }
 
 func (p *coordinatorPlanner) PrepareAll(_ context.Context, ss []Strategy) []PreparationResult {
@@ -46,7 +48,13 @@ func (*coordinatorPlanner) Validate(context.Context, Plan) error { return nil }
 func (*coordinatorPlanner) ConfirmedSnapshot(_ context.Context, s chainio.Snapshot) (chainio.Snapshot, error) {
 	return s, nil
 }
-func (*coordinatorPlanner) VerifyConfirmedSnapshot(context.Context, chainio.Snapshot) error {
+func (p *coordinatorPlanner) VerifyConfirmedSnapshot(context.Context, chainio.Snapshot) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.verifyCalls++
+	if p.verify != nil {
+		return p.verify(p.verifyCalls)
+	}
 	return nil
 }
 
@@ -131,9 +139,17 @@ type coordinatorStore struct {
 	after     bool
 	lists     int
 	failPhase string
+	failDone  bool
 }
 
 func (s *coordinatorStore) SaveNamespace(n, k string, v any) error {
+	if w, ok := v.(Workflow); ok && s.failDone {
+		for _, record := range w.Plan.Operations {
+			if record.Progress.Done {
+				return errors.New("injected progress checkpoint failure")
+			}
+		}
+	}
 	if w, ok := v.(Workflow); ok && s.failPhase != "" && w.Phase == s.failPhase {
 		return errors.New("injected phase checkpoint failure")
 	}

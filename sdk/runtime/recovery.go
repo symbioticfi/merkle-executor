@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"math/big"
@@ -8,6 +9,184 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 )
+
+// Preflight rejects incompatible local ownership before a host performs RPC or
+// loads signing credentials. Full config/operation validation remains in Start.
+func Preflight(store CheckpointStore, chainID *big.Int, callerAssertion common.Address, configuredNames []string) error {
+	if store == nil || chainID == nil || chainID.Sign() <= 0 {
+		return errors.New("preflight store and chain identity required")
+	}
+	configured := map[string]bool{}
+	for _, name := range configuredNames {
+		configured[name] = true
+	}
+	identity, workflows, found, err := checkpointInventory(store)
+	if err != nil {
+		return err
+	}
+	if found {
+		if identity.ChainID == nil || identity.ChainID.Cmp(chainID) != 0 || identity.Caller == (common.Address{}) || callerAssertion != (common.Address{}) && identity.Caller != callerAssertion {
+			return errors.New("state directory belongs to another chain or caller")
+		}
+		owner := ""
+		for _, w := range workflows {
+			if w.Version != 2 || w.ID == "" {
+				return errors.New("invalid workflow identity")
+			}
+			switch w.Phase {
+			case "prepared", "pending", "authorized", "settled", "failed":
+			default:
+				return errors.New("invalid workflow phase")
+			}
+			if (w.active() || w.Reserved) && !configured[w.Name] {
+				return errors.New("active workflow removed from configuration")
+			}
+			if w.Reserved {
+				if owner != "" {
+					return errors.New("multiple workflows own signer")
+				}
+				owner = w.ID
+				if w.Transaction == nil || w.Transaction.Intent.ID != w.ID || w.Transaction.Sender != identity.Caller || w.Transaction.ChainID == nil || w.Transaction.ChainID.Cmp(chainID) != 0 {
+					return errors.New("reserved workflow identity mismatch")
+				}
+			}
+		}
+		return nil
+	}
+	var old struct {
+		ChainID *big.Int       `json:"chainId"`
+		Caller  common.Address `json:"caller"`
+	}
+	legacy, err := store.Load("deployment.v1", &old)
+	if err != nil {
+		return err
+	}
+	var names []string
+	inventory, err := store.Load("strategies.v1", &names)
+	if err != nil {
+		return err
+	}
+	var journal legacyJournal
+	occupied, err := store.Load("txmanager.active.v1", &journal)
+	if err != nil {
+		return err
+	}
+	if !legacy {
+		if inventory || occupied {
+			return errors.New("legacy work has no deployment identity")
+		}
+		return nil
+	}
+	if old.ChainID == nil || old.ChainID.Cmp(chainID) != 0 || old.Caller == (common.Address{}) || callerAssertion != (common.Address{}) && old.Caller != callerAssertion {
+		return errors.New("state directory belongs to another chain or caller")
+	}
+	if occupied && (journal.Version != 1 || journal.ID == "" || journal.ChainID != chainID.String() || journal.Sender != old.Caller) {
+		return errors.New("legacy signed journal identity mismatch")
+	}
+	seen := map[string]bool{}
+	matched := !occupied
+	for _, name := range names {
+		if name == "" || seen[name] {
+			return errors.New("invalid legacy inventory identity")
+		}
+		seen[name] = true
+		var job legacyJob
+		found, err := store.Load("strategy."+name+".v1", &job)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+		owns := occupied && job.ID == journal.ID
+		if job.ID == "" {
+			return errors.New("invalid legacy job identity")
+		}
+		switch job.Phase {
+		case "prepared", "authorized":
+			if !configured[name] {
+				return errors.New("active legacy executor removed from configuration")
+			}
+		case "settled", "failed":
+		default:
+			return errors.New("invalid legacy job phase")
+		}
+		if owns {
+			if !configured[name] {
+				return errors.New("legacy transaction owner removed from configuration")
+			}
+			if matched {
+				return errors.New("legacy journal has multiple owners")
+			}
+			matched = true
+		}
+	}
+	if !matched {
+		return errors.New("orphan legacy signed journal has no workflow owner")
+	}
+	return nil
+}
+
+func checkpointInventory(store CheckpointStore) (Deployment, []Workflow, bool, error) {
+	var identity Deployment
+	var identityRaw json.RawMessage
+	found, err := store.LoadNamespace(Namespace, "deployment", &identityRaw)
+	if err != nil {
+		return identity, nil, false, err
+	}
+	rows, err := store.ListNamespace(Namespace)
+	if err != nil {
+		return identity, nil, false, err
+	}
+	if !found {
+		if len(rows) > 0 {
+			return identity, nil, false, errors.New("active namespace has no deployment identity")
+		}
+		return identity, nil, false, nil
+	}
+	if err = json.Unmarshal(identityRaw, &identity); err != nil || identity.Kind != "deployment" || identity.Version != 2 {
+		return identity, nil, false, errors.New("invalid deployment checkpoint")
+	}
+	var workflows []Workflow
+	seen := map[string]bool{}
+	identities := 0
+	for _, raw := range rows {
+		var header struct {
+			Kind string `json:"kind"`
+		}
+		if err = json.Unmarshal(raw, &header); err != nil {
+			return identity, nil, false, err
+		}
+		if header.Kind != "" {
+			if header.Kind != "deployment" || !bytes.Equal(raw, identityRaw) {
+				return identity, nil, false, errors.New("unexpected deployment checkpoint")
+			}
+			identities++
+			if identities > 1 {
+				return identity, nil, false, errors.New("duplicate deployment checkpoint")
+			}
+			continue
+		}
+		var w Workflow
+		if err = json.Unmarshal(raw, &w); err != nil || w.Name == "" || seen[w.Name] {
+			return identity, nil, false, errors.New("invalid or duplicate workflow checkpoint")
+		}
+		var actual json.RawMessage
+		exists, err := store.LoadNamespace(Namespace, WorkflowKey(w.Name), &actual)
+		if err != nil {
+			return identity, nil, false, err
+		}
+		if !exists || !bytes.Equal(raw, actual) {
+			return identity, nil, false, errors.New("workflow checkpoint filename differs from identity")
+		}
+		seen[w.Name] = true
+		workflows = append(workflows, w)
+	}
+	if identities != 1 {
+		return identity, nil, false, errors.New("deployment checkpoint missing from namespace")
+	}
+	return identity, workflows, true, nil
+}
 
 type Deployment struct {
 	Kind    string         `json:"kind"`
@@ -85,8 +264,7 @@ func (r *Runtime) start(ctx context.Context) error {
 		}
 		strategies[s.Config.Name] = s
 	}
-	var identity Deployment
-	found, err := r.Store.LoadNamespace(Namespace, "deployment", &identity)
+	identity, rows, found, err := checkpointInventory(r.Store)
 	if err != nil {
 		return err
 	}
@@ -95,7 +273,7 @@ func (r *Runtime) start(ctx context.Context) error {
 			r.fault = err
 			return err
 		}
-		found, err = r.Store.LoadNamespace(Namespace, "deployment", &identity)
+		identity, rows, found, err = checkpointInventory(r.Store)
 		if err != nil {
 			return err
 		}
@@ -103,27 +281,10 @@ func (r *Runtime) start(ctx context.Context) error {
 	if !found || identity.Kind != "deployment" || identity.Version != 2 || identity.ChainID == nil || identity.ChainID.Cmp(r.ChainID) != 0 || identity.Caller != r.Caller {
 		return errors.New("state deployment identity mismatch")
 	}
-	rows, err := r.Store.ListNamespace(Namespace)
-	if err != nil {
-		return err
-	}
 	workflows := make(map[string]Workflow)
 	accounts := make(map[common.Address]string)
 	owner := ""
-	for _, raw := range rows {
-		var header struct {
-			Kind string `json:"kind"`
-		}
-		if err = json.Unmarshal(raw, &header); err != nil {
-			return err
-		}
-		if header.Kind == "deployment" {
-			continue
-		}
-		var w Workflow
-		if err = json.Unmarshal(raw, &w); err != nil {
-			return errors.New("invalid workflow checkpoint")
-		}
+	for _, w := range rows {
 		if err = r.validateWorkflow(w, strategies); err != nil {
 			return err
 		}

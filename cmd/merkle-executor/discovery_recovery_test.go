@@ -5,29 +5,70 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"math/big"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/merkle-executor/internal/config"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	executorABI "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	rt "github.com/symbioticfi/merkle-executor/sdk/runtime"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
-	sdktx "github.com/symbioticfi/merkle-executor/sdk/submission"
 )
+
+type recoveryNoIOPlanner struct{}
+
+func (recoveryNoIOPlanner) PrepareAll(context.Context, []rt.Strategy) []rt.PreparationResult {
+	panic("recovery must not prepare")
+}
+func (recoveryNoIOPlanner) Validate(context.Context, rt.Plan) error {
+	panic("recovery must not simulate")
+}
+func (recoveryNoIOPlanner) ConfirmedSnapshot(context.Context, chainio.Snapshot) (chainio.Snapshot, error) {
+	panic("recovery must not read chain")
+}
+func (recoveryNoIOPlanner) VerifyConfirmedSnapshot(context.Context, chainio.Snapshot) error {
+	panic("recovery must not read chain")
+}
+
+type recoveryNoIODriver struct{}
+
+func (recoveryNoIODriver) Reserve(context.Context, string) error {
+	panic("invalid recovery must not reserve")
+}
+func (recoveryNoIODriver) Release(context.Context, string) error { panic("recovery must not release") }
+func (recoveryNoIODriver) Execute(context.Context, rt.Intent, rt.PersistTransaction) rt.TransactionResult {
+	panic("recovery must not send")
+}
+func (recoveryNoIODriver) Resume(context.Context, rt.Transaction, rt.PersistTransaction) rt.TransactionResult {
+	panic("invalid recovery must not observe")
+}
+
+func recoveryFixturePlan(t *testing.T, chainID uint64, executor, account, caller common.Address) rt.Plan {
+	t.Helper()
+	hash, err := recipes.HashRecipe(recipes.Recipe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt.Plan{Snapshot: chainio.Snapshot{ChainID: new(big.Int).SetUint64(chainID), BlockNumber: big.NewInt(1), BlockHash: common.HexToHash("0x01"), Executor: executor, Account: account, Caller: caller, RecipeHash: hash}, Calldata: executorABI.NewRecipeExecutor().PackExecute(nil, nil, nil, nil)}
+}
 
 func TestDerivedAccountAndCuratorChangesCannotRewriteActiveWork(t *testing.T) {
 	for _, change := range []string{"account", "caller", "chain", "url", "credential reference"} {
 		t.Run(change, func(t *testing.T) {
 			cfg := testCLIConfig(t.TempDir())
-			original := cfg.Strategies[0]
+			name := cfg.Strategies[0]
+			savedChain := cfg.Chain.ChainID
 			account := common.HexToAddress("0x2222")
 			caller := common.HexToAddress(cfg.Signer.Address)
-			savedRevision := cfg.StrategyFingerprint(original, account, caller)
+			savedCaller := caller
+			old := rt.Config{Name: name, Executor: name, Account: account.Hex(), Interval: cfg.Runtime.StrategyInterval, Revision: cfg.StrategyFingerprint(name, account, caller)}
+			plan := recoveryFixturePlan(t, savedChain, common.HexToAddress(name), account, caller)
 			switch change {
 			case "account":
 				account = common.HexToAddress("0x3333")
@@ -40,54 +81,35 @@ func TestDerivedAccountAndCuratorChangesCannotRewriteActiveWork(t *testing.T) {
 			case "credential reference":
 				cfg.Curator.APIKeyEnv = "OTHER_CURATOR_KEY"
 			}
-			current := keeper.Config{Name: original, Executor: original, Account: account.Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(original, account, caller)}
-			old := current
-			old.Revision = savedRevision
+			current := rt.Config{Name: name, Executor: name, Account: account.Hex(), Interval: cfg.Runtime.StrategyInterval, Revision: cfg.StrategyFingerprint(name, account, caller)}
 			store, err := state.Open(cfg.StateDir)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer store.Close()
-			job := keeper.Job{ID: "owned", ConfigHash: old.Fingerprint(), Phase: "prepared"}
-			if err = store.Save("strategies.v1", []string{original}); err != nil {
+			w := rt.Workflow{Version: 2, IdentityVersion: 2, Name: name, ID: "owned", ConfigHash: old.Fingerprint(), Phase: "prepared", Plan: plan}
+			if err = store.ActivateNamespace(rt.Namespace, map[string]any{"deployment": rt.Deployment{Kind: "deployment", Version: 2, ChainID: new(big.Int).SetUint64(savedChain), Caller: savedCaller}, rt.WorkflowKey(name): w}); err != nil {
 				t.Fatal(err)
 			}
-			if err = store.Save("strategy."+original+".v1", job); err != nil {
-				t.Fatal(err)
-			}
-			k := keeper.Keeper{Store: store, Strategies: []keeper.Strategy{{Config: current}}}
-			if err = k.CheckRecovery(); err == nil {
+			worker := rt.Runtime{Store: store, Planner: recoveryNoIOPlanner{}, Driver: recoveryNoIODriver{}, Mode: "send", OperationTimeout: time.Second, ChainID: new(big.Int).SetUint64(cfg.Chain.ChainID), Caller: caller, Strategies: []rt.Strategy{{Config: current}}}
+			if err = worker.Start(context.Background()); err == nil {
 				t.Fatal("changed source identity accepted")
 			}
-			var retained keeper.Job
-			if found, err := store.Load("strategy."+original+".v1", &retained); err != nil || !found || retained.ConfigHash != job.ConfigHash || retained.Phase != job.Phase {
+			var retained rt.Workflow
+			if found, err := store.LoadNamespace(rt.Namespace, rt.WorkflowKey(name), &retained); err != nil || !found || retained.ConfigHash != w.ConfigHash || retained.Phase != w.Phase {
 				t.Fatal("recovery rewrote active identity")
 			}
 		})
 	}
 }
 
-type removedIdentitySender struct{ pending string }
-
-func (s *removedIdentitySender) PendingID() string { return s.pending }
-func (*removedIdentitySender) Send(context.Context, sdktx.Request) (sdktx.Result, error) {
-	panic("recovery must not send")
-}
-func (*removedIdentitySender) Acknowledge(context.Context, string) error {
-	panic("recovery must not acknowledge")
-}
-
 func TestRecoveryFencesRemovedExecutors(t *testing.T) {
-	cfg, err := config.Load(writeCLIConfig(t, t.TempDir(), testCLIConfig(t.TempDir())))
-	if err != nil {
-		t.Fatal(err)
-	}
-	executor := cfg.Strategies[0]
-	strategies := []keeper.Strategy{{Config: keeper.Config{Name: executor, Executor: executor, Interval: config.DefaultStrategyInterval}}}
+	cfg := testCLIConfig(t.TempDir())
+	caller := common.HexToAddress(cfg.Signer.Address)
 	for _, removed := range []string{strings.ToLower(common.HexToAddress("0x2222").Hex()), strings.ToLower(common.HexToAddress("0x3333").Hex())} {
 		for _, tc := range []struct {
-			phase   string
-			pending bool
+			phase    string
+			reserved bool
 		}{{"prepared", false}, {"authorized", true}, {"settled", true}, {"failed", true}} {
 			t.Run(removed+"/"+tc.phase, func(t *testing.T) {
 				directory := t.TempDir()
@@ -96,44 +118,32 @@ func TestRecoveryFencesRemovedExecutors(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer store.Close()
-				job := keeper.Job{ID: "removed-owned", Phase: tc.phase, ConfigHash: "removed-executor-policy", Plan: keeper.Plan{Outputs: []provider.Output{{Data: json.RawMessage(`{"uid":"durable-order"}`)}}}}
-				key := "strategy." + removed + ".v1"
-				if err := store.Save("strategies.v1", []string{removed}); err != nil {
+				w := rt.Workflow{Version: 2, IdentityVersion: 2, Name: removed, ID: "removed-owned", ConfigHash: "removed-executor-policy", Phase: tc.phase, Reserved: tc.reserved, Plan: recoveryFixturePlan(t, cfg.Chain.ChainID, common.HexToAddress(removed), common.HexToAddress("0x9999"), caller)}
+				if tc.reserved {
+					w.Transaction = &rt.Transaction{Intent: rt.Intent{ID: w.ID}, Sender: caller, ChainID: new(big.Int).SetUint64(cfg.Chain.ChainID), Attempts: []hexutil.Bytes{[]byte("existing-signed-bytes")}}
+				}
+				key := rt.WorkflowKey(removed)
+				if err = store.ActivateNamespace(rt.Namespace, map[string]any{"deployment": rt.Deployment{Kind: "deployment", Version: 2, ChainID: new(big.Int).SetUint64(cfg.Chain.ChainID), Caller: caller}, key: w}); err != nil {
 					t.Fatal(err)
 				}
-				if err := store.Save(key, job); err != nil {
-					t.Fatal(err)
-				}
-				sender := &removedIdentitySender{}
-				if tc.pending {
-					sender.pending = job.ID
-					if err := store.Save("txmanager.active.v1", map[string]string{"id": job.ID, "signed": "existing-signed-bytes"}); err != nil {
-						t.Fatal(err)
-					}
-				}
-				bytesFor := func(key string) []byte {
+				bytesFor := func() []byte {
 					t.Helper()
 					hash := sha256.Sum256([]byte(key))
-					raw, err := os.ReadFile(filepath.Join(directory, hex.EncodeToString(hash[:])+".json"))
+					raw, err := os.ReadFile(filepath.Join(directory, rt.Namespace, hex.EncodeToString(hash[:])+".json"))
 					if err != nil {
 						t.Fatal(err)
 					}
 					return raw
 				}
-				before := bytesFor(key)
-				var signed []byte
-				if tc.pending {
-					signed = bytesFor("txmanager.active.v1")
-				}
-				worker := keeper.Keeper{Store: store, Sender: sender, Strategies: strategies}
-				if err := worker.CheckRecovery(); err == nil || !strings.Contains(err.Error(), "removed from configuration") {
+				before := bytesFor()
+				if err = rt.Preflight(store, new(big.Int).SetUint64(cfg.Chain.ChainID), caller, cfg.Strategies); err == nil || !strings.Contains(err.Error(), "removed from configuration") {
 					t.Fatalf("removed owner admitted: %v", err)
 				}
-				if !bytes.Equal(before, bytesFor(key)) || tc.pending && (!bytes.Equal(signed, bytesFor("txmanager.active.v1")) || sender.pending != job.ID) {
+				if !bytes.Equal(before, bytesFor()) {
 					t.Fatal("recovery rewrote removed ownership")
 				}
-				var inventory []string
-				if _, err := store.Load("strategies.v1", &inventory); err != nil || !slices.Contains(inventory, removed) {
+				rows, err := store.ListNamespace(rt.Namespace)
+				if err != nil || len(rows) != 2 {
 					t.Fatal("removed inventory identifier removed", err)
 				}
 			})
