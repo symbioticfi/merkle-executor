@@ -213,10 +213,11 @@ func TestAnvilFullExecute(t *testing.T) {
 	localTransaction(t, ctx, client, sender, &executorAddress, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
 	transferred := int64(0)
 	for _, amount := range []int64{17, 23} {
-		snapshot, recovered, err := Discover(ctx, client, executorAddress, nil)
+		prepared, err := DiscoverBatch(ctx, client, []common.Address{executorAddress}, []common.Address{accountAddress}, sender, PreparationOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
+		snapshot, recovered := prepared[0].Snapshot, prepared[0].Recipe
 		expectedHash, err := HashRecipe(recipe)
 		if err != nil {
 			t.Fatal(err)
@@ -226,9 +227,6 @@ func TestAnvilFullExecute(t *testing.T) {
 		}
 		encoded, leaves, err := Assemble(recovered, tree, map[uint]string{0: strconv.FormatInt(amount, 10), 1: "0"}, nil, []uint{5})
 		if err != nil {
-			t.Fatal(err)
-		}
-		if err = VerifyRoles(ctx, client, snapshot, leaves); err != nil {
 			t.Fatal(err)
 		}
 		simulated, err := client.CallContract(ctx, ethereum.CallMsg{From: sender, To: &executorAddress, Data: encoded}, new(big.Int).SetUint64(snapshot.BlockNumber))
@@ -242,7 +240,7 @@ func TestAnvilFullExecute(t *testing.T) {
 		if decoded[1].Int64() != amount || decoded[7].Int64() != 1000-transferred-amount {
 			t.Fatal("on-chain arithmetic/binding result mismatch")
 		}
-		if err = ValidateSnapshot(ctx, client, snapshot, sender); err != nil {
+		if err = ValidatePreparedBatch(ctx, client, prepared, []ExecutorCall{{Executor: executorAddress, Data: encoded}}, [][]common.Hash{leaves}, []map[uint]string{nil}, sender); err != nil {
 			t.Fatal(err)
 		}
 		localTransaction(t, ctx, client, sender, &executorAddress, encoded)
@@ -287,21 +285,21 @@ func TestAnvilFullExecute(t *testing.T) {
 		localTransaction(t, ctx, client, sender, &accountAddress, fixtureCalldata(t, accountContract, "configure", tree.Root, [][32]byte{leaf.Hash}, executorAddress))
 		recipe := Recipe{Steps: [][]byte{step(Approve, pack(t, approveArgs, input(0), tokenAddress, spender, leaf.Hash))}}
 		localTransaction(t, ctx, client, sender, &executorAddress, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
-		snapshot, recovered, err := Discover(ctx, client, executorAddress, nil)
+		prepared, err := DiscoverBatch(ctx, client, []common.Address{executorAddress}, []common.Address{accountAddress}, sender, PreparationOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		encoded, leaves, err := Assemble(recovered, tree, map[uint]string{0: "17"}, nil, nil)
+		encoded, leaves, err := Assemble(prepared[0].Recipe, tree, map[uint]string{0: "17"}, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = VerifyRoles(ctx, client, snapshot, leaves); err != nil {
+		if err = ValidatePreparedBatch(ctx, client, prepared, []ExecutorCall{{Executor: executorAddress, Data: encoded}}, [][]common.Hash{leaves}, []map[uint]string{nil}, sender); err != nil {
 			t.Fatal(err)
 		}
 		if _, err = client.CallContract(ctx, ethereum.CallMsg{From: sender, To: &executorAddress, Data: encoded}, nil); err != nil {
 			t.Fatalf("amount mask %x: %v", maskByte, err)
 		}
-		invalid, _, err := Assemble(recovered, tree, map[uint]string{0: "32"}, nil, nil)
+		invalid, _, err := Assemble(prepared[0].Recipe, tree, map[uint]string{0: "32"}, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

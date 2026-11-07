@@ -43,8 +43,8 @@ func (r *validationReader) CallContract(_ context.Context, msg ethereum.CallMsg,
 	r.reads++
 	if bytes.Equal(msg.Data, r.payload) {
 		r.simulations++
-		if msg.To == nil || *msg.To != r.snapshot.Executor || msg.From != r.snapshot.Caller || block != nil {
-			r.t.Fatal("validation changed exact send target/caller/latest payload")
+		if msg.To == nil || *msg.To != r.snapshot.Executor || msg.From != r.snapshot.Caller || block == nil || block.Cmp(r.header.Number) != 0 || msg.Gas != r.header.GasLimit {
+			r.t.Fatal("validation changed exact send target/caller/block/gas")
 		}
 		if r.reorgOnSimulation {
 			r.header = types.CopyHeader(r.header)

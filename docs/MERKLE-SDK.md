@@ -17,6 +17,13 @@ atomic direct, same-executor or delegated envelope. Prepared bytes go unchanged
 to sender admission. Configuration must stay fixed for a Keeper's lifetime;
 strategy names must be nonempty and unique so settlement ownership is unambiguous.
 
+At the recipe layer, use `recipes.DiscoverBatch` followed by
+`recipes.ValidatePreparedBatch` for both one executor and many. One executor uses
+one-element slices. The standalone discovery, preparation and validation helpers
+are removed, along with `PreparationOptions.VerifySimulation`; supply numerical
+witnesses to the shared validator. Both sizes receive the same commitment,
+identity, root, leaf-role, simulation and canonical-block checks.
+
 Providers implement `RecipeRequirements` and `PrepareRecipe`. They receive only
 an authenticated recipe/tree and snapshot. Outputs contain authorized inputs,
 masked actions, witnesses and optionally a process-local `provider.Task`.

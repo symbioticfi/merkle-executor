@@ -19,9 +19,11 @@ state on disk.
   hosts with an existing shared sender implement `keeper.Sender` instead.
 - `abi`, `bindings`, `protocoltypes`, `schemas`: generated interfaces and provenance.
 
-`recipes.DiscoverBatch` shares a block pin and independent read stages across
-executors. `ValidatePreparedBatch` validates selected calls, leaves and numerical
-witnesses together, checks the exact final envelope and closes canonical pins.
+`recipes.DiscoverBatch` and `recipes.ValidatePreparedBatch` are the discovery and
+admission entry points for one or many executors; use one-element slices for one.
+Discovery shares a block pin and independent read stages across executors.
+Validation checks selected calls, leaves, numerical witnesses and the exact final
+envelope together, then closes canonical pins.
 Immutable recipe cache evidence publishes only after successful admission.
 
 The HTTP backend sends compatible getters through Multicall3 as an ordinary

@@ -23,6 +23,8 @@ no environment variables.
 
 ## Preparation cycle
 
+`DiscoverBatch` and `ValidatePreparedBatch` are the shared discovery and admission
+path for both one executor and many; a single executor uses one-element slices.
 `DiscoverBatch` opens one block pin for all candidate executors. Metadata, shared
 account roots, event logs and event headers are grouped into independent bounded
 read stages. Exact committed bytes, including trailing ABI data, are retained.

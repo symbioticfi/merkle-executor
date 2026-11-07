@@ -85,3 +85,29 @@ execution was performed. Independent review found a strategy-name ownership edge
 now rejected before work with a regression test. The final review has no outstanding
 important findings. A receipt/nonce race exposed by integration also has a passing
 deterministic regression; RFQ fill/cancel scenarios passed 40 repeated runs.
+
+### Task 6: Consolidate recipe execution
+
+User-authorized follow-up: use one shared discovery and admission implementation
+for one or many executors, preserve validation, run both gates and update PR #39.
+
+- [x] Keep `DiscoverBatch` / `ValidatePreparedBatch` as the public execution path.
+  Remove standalone discovery/preparation/validation orchestration and obsolete
+  callback options; retain only decoder, simulation and canonical primitives
+  actually used by the shared implementation.
+- [x] Migrate existing SDK and host tests to that path. Preserve assertions for
+  exact event bytes, identities, roots, leaf roles, numerical witnesses, cache
+  authenticity/mutation isolation, opening/closing pins, idle work and failures.
+  No test-only compatibility copy of old validation logic.
+- [x] Review the production diff against every removed validation branch and
+  confirm the same shared engine covers single, multicall and delegated cases.
+- [x] Run `make check` and `make integration`, perform independent review,
+  calculate production line savings, commit, push and update the existing PR.
+
+Validation: both required gates passed after consolidation, including host and
+SDK race tests, vet, lint, lens artifact checks, ephemeral local Anvil and API
+fixtures. Independent review found no outstanding important findings. No live
+signing or deployment was performed. The consolidation removes 569 production
+Go lines. Recipes now contain 3,214 lines versus 3,287 on `main`; all production
+Go contains 10,604 versus 15,628 (5,024 fewer, 32.1%). Counts include comments and
+blank lines and exclude tests, fixtures and generated bindings.

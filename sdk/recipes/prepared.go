@@ -13,6 +13,12 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
+// PreparationOptions configures authenticated recipe discovery and its RAM cache.
+type PreparationOptions struct {
+	ChainID *big.Int
+	Cache   *RecipeCache
+}
+
 // PreparedRecipe is provisional authenticated discovery. Providers may inspect a
 // copy of Recipe; only ValidatePreparedBatch admits assembled execution bytes.
 type PreparedRecipe struct {
@@ -199,7 +205,7 @@ func batchSnapshotRequests(snapshots []Snapshot, block *big.Int) ([]protocolio.R
 	indices := make([][5]int, len(snapshots))
 	roots := map[common.Address]int{}
 	for i, snapshot := range snapshots {
-		for j, request := range snapshotRequests(snapshot.Executor, common.Address{}, block) {
+		for j, request := range snapshotRequests(snapshot.Executor, block) {
 			indices[i][j] = len(requests)
 			requests = append(requests, request)
 		}

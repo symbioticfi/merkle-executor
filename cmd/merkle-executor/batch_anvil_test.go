@@ -95,6 +95,8 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 	var aggregateSizes []int
 	advanceOnValidation := false
 	latestReads := 0
+	var simulationBlock string
+	var simulationGas uint64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var raw json.RawMessage
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
@@ -130,9 +132,16 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 			}
 			var call struct {
 				To    common.Address
+				From  common.Address
 				Input hexutil.Bytes
+				Gas   hexutil.Uint64
 			}
 			_ = json.Unmarshal(q.Params[0], &call)
+			if simulationBlock != "" && call.To == target && bytes.Equal(call.Input[:4], executorABI.GetABI().Methods["execute"].ID) {
+				if call.From != owner || string(q.Params[1]) != simulationBlock || uint64(call.Gas) != simulationGas {
+					t.Errorf("simulation context changed caller=%s block=%s gas=%d", call.From, q.Params[1], call.Gas)
+				}
+			}
 			if call.To == aggregate {
 				method := multicall.NewMulticall3().GetABI().Methods["aggregate3"]
 				args, err := method.Inputs.Unpack(call.Input[4:])
@@ -208,18 +217,30 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 			}
 			mu.Unlock()
 			reset()
-			// This phase must simulate nil/latest and retain both closing pins.
-			if err := recipes.ValidateExecutionWithResults(ctx, planner.Chain, current.Recipe, planner.Caller, current.Calldata, current.Results); err != nil {
+			// Revalidation uses the same grouped admission as the planner, including
+			// current roles, a fresh simulation pin, the caller and the gas budget.
+			header, err := client.HeaderByNumber(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			simulationBlock, simulationGas = `"`+hexutil.EncodeBig(header.Number)+`"`, header.GasLimit
+			mu.Unlock()
+			if err := recipes.ValidatePreparedBatch(ctx, planner.Chain,
+				[]recipes.PreparedRecipe{{Snapshot: current.Recipe, Recipe: recipe}},
+				[]recipes.ExecutorCall{{Executor: target, Data: current.Calldata}},
+				[][]common.Hash{current.Leaves}, []map[uint]string{current.Results}, planner.Caller); err != nil {
 				t.Fatal(err)
 			}
 			wantMethods = 5
 			wantArrays = 1
 			if advanced {
-				wantMethods = 6
+				wantMethods = 7
 				wantArrays = 2
 			}
 			mu.Lock()
-			if requests != 4 || arrays != wantArrays || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, []int{5}) {
+			simulationBlock = ""
+			if requests != 3 || arrays != wantArrays || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, []int{7}) {
 				t.Errorf("Validate warm=%t advanced=%t requests=%d arrays=%d methods=%d aggregates=%v", warm, advanced, requests, arrays, methods, aggregateSizes)
 			}
 			mu.Unlock()

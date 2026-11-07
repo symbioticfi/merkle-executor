@@ -192,10 +192,11 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 		manageStep(t, leaf.Hash, result(1), []*big.Int{binding(36, result(1))}),
 	}}
 	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(r.Queries, r.Steps))
-	snapshot, _, err := Discover(ctx, reader, executor, nil)
+	prepared, err := DiscoverBatch(ctx, reader, []common.Address{executor}, []common.Address{account}, sender, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshot := prepared[0].Snapshot
 	call, _, err := Assemble(r, tree, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -211,17 +212,14 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 	if balance := fixtureRead(t, ctx, client, token, target, "balanceOf", account)[0].(*big.Int); balance.Int64() != 25 {
 		t.Fatal("simulation persisted state")
 	}
-	if err := ValidateExecution(ctx, reader, snapshot, sender, batch); err != nil {
-		t.Fatal(err)
-	}
-	prepared, err := DiscoverBatch(ctx, reader, []common.Address{executor}, []common.Address{account}, sender, PreparationOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err = ValidatePreparedBatch(ctx, reader, prepared, []ExecutorCall{{Executor: executor, Data: batch}}, [][]common.Hash{{leaf.Hash}}, []map[uint]string{nil}, sender); err != nil {
 		t.Fatal(err)
 	}
-	if work, err := ExecutionHasWork(ctx, reader, snapshot, sender, batch, nil); err != nil || !work {
+	returned, err := SimulateBatch(ctx, reader, snapshot, calls, 5_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work, err := HasWork(batch, pack(t, batchArguments, returned)); err != nil || !work {
 		t.Fatalf("batch readiness: %v %v", work, err)
 	}
 	if _, err := BatchExecution(ctx, reader, snapshot, call, 21_000); err == nil {
@@ -236,10 +234,11 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 	if balance := fixtureRead(t, ctx, client, token, target, "balanceOf", recipient)[0].(*big.Int); balance.Int64() != 25 {
 		t.Fatalf("recipient balance %s", balance)
 	}
-	latest, _, err := Discover(ctx, reader, executor, nil)
+	prepared, err = DiscoverBatch(ctx, reader, []common.Address{executor}, []common.Address{account}, sender, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	latest := prepared[0].Snapshot
 	if _, err := BatchExecution(ctx, reader, latest, call, 5_000_000); err == nil || !strings.Contains(err.Error(), "not ready") {
 		t.Fatalf("idle error %v", err)
 	}
@@ -247,10 +246,11 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 	localTransaction(t, ctx, client, sender, &target, fixtureCalldata(t, token, "mint", account, big.NewInt(25)))
 	r.Steps[2] = manageStep(t, leaf.Hash, result(0), []*big.Int{binding(36, literal(10))})
 	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(r.Queries, r.Steps))
-	latest, _, err = Discover(ctx, reader, executor, nil)
+	prepared, err = DiscoverBatch(ctx, reader, []common.Address{executor}, []common.Address{account}, sender, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	latest = prepared[0].Snapshot
 	call, _, err = Assemble(r, tree, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +263,7 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 	if err != nil || len(prefixCalls) != 2 {
 		t.Fatalf("executable prefix: %d, %v", len(prefixCalls), err)
 	}
-	if err := ValidateExecution(ctx, reader, latest, sender, prefix); err != nil {
+	if err := ValidatePreparedBatch(ctx, reader, prepared, []ExecutorCall{{Executor: executor, Data: prefix}}, [][]common.Hash{{leaf.Hash}}, []map[uint]string{nil}, sender); err != nil {
 		t.Fatal(err)
 	}
 	if balance := fixtureRead(t, ctx, client, token, target, "balanceOf", account)[0].(*big.Int); balance.Int64() != 25 {
@@ -271,10 +271,11 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 	}
 	r.Steps = [][]byte{manageStep(t, leaf.Hash, literal(1), []*big.Int{binding(36, literal(0))})}
 	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(r.Queries, r.Steps))
-	latest, _, err = Discover(ctx, reader, executor, nil)
+	prepared, err = DiscoverBatch(ctx, reader, []common.Address{executor}, []common.Address{account}, sender, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	latest = prepared[0].Snapshot
 	call, _, err = Assemble(r, tree, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)

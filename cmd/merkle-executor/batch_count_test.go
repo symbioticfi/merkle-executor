@@ -46,7 +46,7 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	headers := map[uint64]*types.Header{11: {Number: big.NewInt(11), Difficulty: new(big.Int), Time: 1000}, 12: {Number: big.NewInt(12), Difficulty: new(big.Int), Time: 1001}, 13: {Number: big.NewInt(13), Difficulty: new(big.Int), Time: 1002}}
+	headers := map[uint64]*types.Header{11: {Number: big.NewInt(11), Difficulty: new(big.Int), GasLimit: 30_000_000, Time: 1000}, 12: {Number: big.NewInt(12), Difficulty: new(big.Int), GasLimit: 30_000_000, Time: 1001}, 13: {Number: big.NewInt(13), Difficulty: new(big.Int), GasLimit: 30_000_000, Time: 1002}}
 	eABI := executor.NewRecipeExecutor().GetABI()
 	event := eABI.Events["SetRecipe"]
 	eventData, err := event.Inputs.NonIndexed().Pack(recipe.Queries, recipe.Steps)
@@ -178,11 +178,12 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 					To    common.Address
 					From  common.Address
 					Input hexutil.Bytes
+					Gas   hexutil.Uint64
 				}
 				_ = json.Unmarshal(q.Params[0], &call)
 				if call.To == target && bytes.Equal(call.Input[:4], eABI.Methods["execute"].ID) {
-					if call.From != caller || string(q.Params[1]) != simulationBlock {
-						t.Errorf("simulation context changed caller=%s block=%s", call.From, q.Params[1])
+					if call.From != caller || string(q.Params[1]) != simulationBlock || uint64(call.Gas) != headers[currentHead].GasLimit {
+						t.Errorf("simulation context changed caller=%s block=%s gas=%d", call.From, q.Params[1], call.Gas)
 					}
 				}
 				value = hexutil.Bytes(contract(call.To, call.Input))
@@ -259,20 +260,22 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 					}
 					previous = bytes.Clone(plan.Calldata)
 					mu.Lock()
-					simulationBlock = `"latest"`
 					requests, arrays, methods = 0, 0, 0
 					mu.Unlock()
 					wantMethods = 5
 					wantArrays = 1
 					if advanced {
-						wantMethods = 6
+						wantMethods = 7
 						wantArrays = 2
 					}
-					err = recipes.ValidateExecutionWithResults(t.Context(), planner.Chain, plan.Recipe, planner.Caller, plan.Calldata, plan.Results)
+					err = recipes.ValidatePreparedBatch(t.Context(), planner.Chain,
+						[]recipes.PreparedRecipe{{Snapshot: plan.Recipe, Recipe: recipe}},
+						[]recipes.ExecutorCall{{Executor: target, Data: plan.Calldata}},
+						[][]common.Hash{plan.Leaves}, []map[uint]string{plan.Results}, planner.Caller)
 					mu.Lock()
 					gotRequests, gotArrays, gotMethods = requests, arrays, methods
 					mu.Unlock()
-					if err != nil || gotRequests != 4 || gotArrays != wantArrays || gotMethods != wantMethods {
+					if err != nil || gotRequests != 3 || gotArrays != wantArrays || gotMethods != wantMethods {
 						t.Fatalf("Validate requests=%d arrays=%d methods=%d error=%v", gotRequests, gotArrays, gotMethods, err)
 					}
 				})
