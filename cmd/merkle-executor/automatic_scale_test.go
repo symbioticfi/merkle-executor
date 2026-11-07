@@ -68,31 +68,31 @@ type automaticScaleMetrics struct {
 }
 
 type automaticScaleFixture struct {
-	mu            sync.Mutex
-	metrics       automaticScaleMetrics
-	keys          map[string]bool
-	active        int
-	executors     map[common.Address]automaticScaleExecutor
-	accounts      map[common.Address]common.Hash
-	distributors  map[common.Address]common.Hash
-	trees         map[common.Hash][]byte
-	caller, token common.Address
-	header        *types.Header
-	rpc, api      *httptest.Server
-	http          *http.Client
-	cfg           *config.Config
-	path          string
-	failBatch     int
-	padding       int
-	delayed       common.Address
-	release       <-chan struct{}
-	apiEntered    chan struct{}
-	staticReady   chan struct{}
-	apiOnce       sync.Once
-	staticOnce    sync.Once
-	reads         *chainio.Scheduler
-	baseline      chainio.SchedulerStats
-	failedTargets map[common.Address]bool
+	mu                sync.Mutex
+	metrics           automaticScaleMetrics
+	keys              map[string]bool
+	active            int
+	executors         map[common.Address]automaticScaleExecutor
+	accounts          map[common.Address]common.Hash
+	distributors      map[common.Address]common.Hash
+	trees             map[common.Hash][]byte
+	caller, token     common.Address
+	header            *types.Header
+	rpc, api          *httptest.Server
+	http              *http.Client
+	cfg               *config.Config
+	path              string
+	failExecutorBatch bool
+	padding           int
+	delayed           common.Address
+	release           <-chan struct{}
+	apiEntered        chan struct{}
+	staticReady       chan struct{}
+	apiOnce           sync.Once
+	staticOnce        sync.Once
+	reads             *chainio.Scheduler
+	baseline          chainio.SchedulerStats
+	failedTargets     map[common.Address]bool
 }
 
 func scaleStep(tb testing.TB, operation byte, names []string, values ...any) []byte {
@@ -283,7 +283,6 @@ func (f *automaticScaleFixture) serveRPC(w http.ResponseWriter, r *http.Request)
 	}
 	f.mu.Lock()
 	f.metrics.RPCRequests++
-	sequence := f.metrics.RPCRequests
 	f.metrics.RPCMembers += len(requests)
 	f.metrics.MaxRPCMembers = max(f.metrics.MaxRPCMembers, len(requests))
 	f.metrics.MaxRequestBytes = max(f.metrics.MaxRequestBytes, len(raw))
@@ -296,8 +295,8 @@ func (f *automaticScaleFixture) serveRPC(w http.ResponseWriter, r *http.Request)
 	f.metrics.MaxConcurrent = max(f.metrics.MaxConcurrent, f.active)
 	f.mu.Unlock()
 	defer func() { f.mu.Lock(); f.active--; f.mu.Unlock() }()
-	if batch && sequence == f.failBatch {
-		f.mu.Lock()
+	f.mu.Lock()
+	if batch && f.failExecutorBatch {
 		f.failedTargets = map[common.Address]bool{}
 		for _, request := range requests {
 			if request.Method != "eth_call" || len(request.Params) == 0 {
@@ -325,10 +324,14 @@ func (f *automaticScaleFixture) serveRPC(w http.ResponseWriter, r *http.Request)
 				}
 			}
 		}
-		f.mu.Unlock()
-		http.Error(w, "failed local batch", http.StatusServiceUnavailable)
-		return
+		if len(f.failedTargets) > 0 {
+			f.failExecutorBatch = false
+			f.mu.Unlock()
+			http.Error(w, "failed local batch", http.StatusServiceUnavailable)
+			return
+		}
 	}
+	f.mu.Unlock()
 	responses := make([]any, len(requests))
 	calldataBytes := 0
 	for i, request := range requests {
@@ -589,7 +592,7 @@ func (f *automaticScaleFixture) planner(tb testing.TB) (*rt.Planner, []rt.Strate
 	if err != nil {
 		tb.Fatal(err)
 	}
-	registered, _, err := service.DefaultIntegrations(registry.Deps{Chain: reads, HTTP: f.http})
+	registered, err := service.DefaultIntegrations(registry.Deps{Chain: reads, HTTP: f.http})
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -733,7 +736,7 @@ func TestAutomaticFailedBatchIsNotRetriedAsSingles(t *testing.T) {
 	f := newAutomaticScaleFixture(t, 16)
 	planner, strategies := f.planner(t)
 	f.reset()
-	f.failBatch = 2 // fail one metadata partition after the shared pin
+	f.failExecutorBatch = true // Account-only partitions may arrive before executor metadata.
 	results := planner.PrepareAll(t.Context(), strategies)
 	failed := 0
 	for i, result := range results {
@@ -745,7 +748,7 @@ func TestAutomaticFailedBatchIsNotRetriedAsSingles(t *testing.T) {
 		}
 	}
 	if failed == 0 || len(f.failedTargets) == 0 || f.snapshot().Singles != 0 {
-		t.Fatalf("failed partition accepted or retried as singles: failed=%d metrics=%+v", failed, f.snapshot())
+		t.Fatalf("failed partition accepted or retried as singles: failed=%d targets=%d metrics=%+v", failed, len(f.failedTargets), f.snapshot())
 	}
 }
 
