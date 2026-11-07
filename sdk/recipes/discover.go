@@ -92,7 +92,11 @@ func discoverRecipe(ctx context.Context, reader Reader, snapshot Snapshot, heade
 	if result.Err != nil {
 		return Recipe{}, common.Hash{}, errors.Errorf("read SetRecipe logs: %w", result.Err)
 	}
-	logs := result.Logs
+	return recipeFromLogs(snapshot, eventHeader, result.Logs)
+}
+
+func recipeFromLogs(snapshot Snapshot, eventHeader *types.Header, logs []types.Log) (Recipe, common.Hash, error) {
+	eventID := executorABI.GetABI().Events["SetRecipe"].ID
 	if len(logs) == 0 {
 		return Recipe{}, common.Hash{}, errors.New("SetRecipe event missing")
 	}

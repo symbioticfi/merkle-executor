@@ -162,6 +162,15 @@ func TestAutomaticPreparesAllFrontendClaimsWithOneRewardsFetch(t *testing.T) {
 					return nil, err
 				}
 				calls := *abi.ConvertType(args[0], new([]multicall.Multicall3Call3)).(*[]multicall.Multicall3Call3)
+				if len(calls) != 6 {
+					t.Fatalf("shared claim reads = %d, want 6", len(calls))
+				}
+				for _, call := range calls {
+					if !call.AllowFailure {
+						t.Fatal("speculative getter can mask an earlier claim branch")
+					}
+				}
+
 				results := make([]multicall.Multicall3Result, len(calls))
 				dist := binding.NewMerklDistributor()
 				contractABI := dist.GetABI()
@@ -206,7 +215,7 @@ func TestAutomaticPreparesAllFrontendClaimsWithOneRewardsFetch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(out.Actions) != 2 || fetches != 1 || reads != 2 {
+			if len(out.Actions) != 2 || fetches != 1 || reads != 1 {
 				t.Fatalf("partial or repeated preparation: actions=%d HTTP=%d reads=%d", len(out.Actions), fetches, reads)
 			}
 			for i := 0; i < 2; i++ {
@@ -218,9 +227,8 @@ func TestAutomaticPreparesAllFrontendClaimsWithOneRewardsFetch(t *testing.T) {
 					t.Fatalf("cumulative/delta differs: %v", out.Inputs)
 				}
 			}
-			progress, err := p.Advance(t.Context(), s, out, nil)
-			if err != nil || !progress.Done {
-				t.Fatalf("persisted batch invalid: %+v %v", progress, err)
+			if out.Task != nil {
+				t.Fatal("synchronous claim retained settlement work")
 			}
 		})
 	}

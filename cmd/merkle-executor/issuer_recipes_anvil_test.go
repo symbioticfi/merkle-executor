@@ -22,9 +22,7 @@ import (
 
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func loadIssuerArtifact(t *testing.T, name string) serviceArtifact {
@@ -198,20 +196,9 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 		}
 		return values[0].(*big.Int)
 	}
-	load := func(name string) keeper.Job {
-		var job keeper.Job
-		if found, err := state.Read(cfg.StateDir, "strategy."+name+".v1", &job); err != nil || !found {
-			t.Fatalf("load %s lifecycle job: %v", name, err)
-		}
-		return job
-	}
 	assertIdle := func() {
 		t.Helper()
-		for _, strategy := range cfg.Strategies {
-			if found, err := state.Read(cfg.StateDir, "strategy."+strategy+".v1", new(keeper.Job)); err != nil || found {
-				t.Fatalf("zero-gated issuer recipe became durable work: %v", err)
-			}
-		}
+
 		if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 0 {
 			t.Fatalf("idle recipes consumed a nonce: nonce=%d error=%v", nonce, err)
 		}
@@ -220,25 +207,23 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 	assertIdle()
 	serviceSeedTransaction(t, ctx, client, owner, &share, servicePack(t, shareArtifact, "mint", account, big.NewInt(100)))
 	run()
-	requested := load(cfg.Strategies[0])
-	if requested.Phase != "settled" || len(requested.Progress) != 5 || !requested.Progress[4][0].Done || requested.Result.Execution == nil {
-		t.Fatal("confirmed recipe request did not release account ownership with correlated execution evidence")
+	requested := serviceTransaction(t, ctx, client, caller, 0)
+	if requested.To() == nil || *requested.To() != requestExecutor {
+		t.Fatal("request used a different executor")
 	}
 	if read(issuer, issuerArtifact, "pendingShares", account).Int64() != 100 || read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(share, shareArtifact, "allowance", account, issuer).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Sign() != 0 {
 		t.Fatal("request did not consume exact allowance and retain issuer-owned pending shares")
 	}
-	if found, err := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[1]+".v1", new(keeper.Job)); err != nil || found {
-		t.Fatalf("unready claim became durable work: %v", err)
-	}
+
 	run() // Restart while the issuer is still pending must not submit another request.
 	if read(issuer, issuerArtifact, "requestCount").Int64() != 1 {
 		t.Fatal("restart duplicated redemption request")
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &issuer, servicePack(t, issuerArtifact, "finalize", account))
 	run() // Separate claim strategy may now own the same account and nonce lane.
-	claimed := load(cfg.Strategies[1])
-	if claimed.Phase != "settled" || len(claimed.Progress) != 5 || !claimed.Progress[4][0].Done || claimed.Result.Execution == nil || claimed.Result.Hash == requested.Result.Hash {
-		t.Fatal("matured issuer claim did not finish as its own confirmed execution")
+	claimed := serviceTransaction(t, ctx, client, caller, 1)
+	if claimed.Hash() == requested.Hash() {
+		t.Fatal("claim reused the request transaction")
 	}
 	if read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Int64() != 200 || read(issuer, issuerArtifact, "claimCount").Int64() != 1 {
 		t.Fatal("claim failed to redeem the exact committed 100 shares")
@@ -247,7 +232,5 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 2 {
 		t.Fatalf("completed lifecycle repeated across restart: nonce=%d error=%v", nonce, err)
 	}
-	if found, err := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); err != nil || found {
-		t.Fatalf("completed claim retained nonce ownership: %v", err)
-	}
+
 }

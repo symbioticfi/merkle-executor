@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -27,22 +26,9 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
-// A separate process gives the crash test the real state-directory lock and
-// fsynced sender journal without inheriting any in-memory keeper state.
-func TestNativeRedemptionProcess(t *testing.T) {
-	path := os.Getenv("MERKLE_NATIVE_PROCESS_CONFIG")
-	if path == "" {
-		t.Skip("subprocess helper")
-	}
-	if err := runBot(t.Context(), path, true); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
+func TestAnvilNativeRedemptionsAtomicityAndInProcessReorg(t *testing.T) {
 	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
 		t.Skip("set MERKLE_ANVIL_TEST=1 for native mixed issuer execution")
 	}
@@ -288,14 +274,10 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	failedRecipe := recipes.CloneRecipe(recipe)
 	failedRecipe.Steps[10] = issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, big.NewInt(81), result(9))
 	serviceSeedTransaction(t, ctx, client, owner, &executor, executors.PackSetRecipe(failedRecipe.Queries, failedRecipe.Steps))
-	if err = runBot(ctx, path, true); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
+	if err = runBot(ctx, path, true); !recipes.BatchRejected(err) {
 		t.Fatal("daemon did not reject the final output guard during simulation", err)
 	}
-	for _, key := range []string{"txmanager.active.v1", "strategy." + cfg.Strategies[0] + ".v1"} {
-		if found, e := state.Read(cfg.StateDir, key, new(any)); e != nil || found {
-			t.Fatal("failed simulation persisted executable work", key, e)
-		}
-	}
+
 	failedCalldata, _, err := recipes.Assemble(failedRecipe, &recipes.Tree{Root: root, Leaves: leaves}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -347,8 +329,7 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	}
 	assertBalances(false)
 
-	// Stop the real daemon process with one signed pending transaction. Recovery
-	// must use that exact ownership after a receipt is removed and reincluded.
+	// Retain one RAM-owned attempt while an inclusion is orphaned and reincluded.
 	if err = client.Client().CallContext(ctx, nil, "evm_setAutomine", false); err != nil {
 		t.Fatal(err)
 	}
@@ -356,66 +337,25 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 	if err = client.Client().CallContext(ctx, &checkpoint, "evm_snapshot"); err != nil {
 		t.Fatal(err)
 	}
-	binary, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
+	worker := serviceKeeper(t, ctx, path, nil)
+	if err = worker.Tick(ctx); err != nil || !worker.Pending() {
+		t.Fatal("native submission did not retain RAM ownership", err)
 	}
-	process := func() (*exec.Cmd, *bytes.Buffer) {
-		command := exec.CommandContext(ctx, binary, "-test.run=^TestNativeRedemptionProcess$", "-test.v")
-		command.Env = append(os.Environ(), "MERKLE_NATIVE_PROCESS_CONFIG="+path)
-		var logs bytes.Buffer
-		command.Stdout, command.Stderr = &logs, &logs
-		return command, &logs
-	}
-	command, logs := process()
-	if err = command.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = command.Process.Kill(); _ = command.Wait() })
-	var journal struct {
-		ID  string
-		Raw hexutil.Bytes
-	}
-	var signed types.Transaction
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		found, e := state.Read(cfg.StateDir, "txmanager.active.v1", &journal)
-		if e != nil {
-			t.Fatal(e)
-		}
-		if found && len(journal.Raw) != 0 {
-			if e = signed.UnmarshalBinary(journal.Raw); e != nil {
-				t.Fatal(e)
-			}
-			if _, pending, e := client.TransactionByHash(ctx, signed.Hash()); e == nil && pending {
-				break
-			}
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("daemon never durably broadcast pending execution", ctx.Err())
-		case <-ticker.C:
-		}
-	}
-	if err = command.Process.Kill(); err != nil {
-		t.Fatal(err)
-	}
-	if err = command.Wait(); err == nil {
-		t.Fatal("daemon exited before forced interruption", logs.String())
-	}
-	var prepared keeper.ExecutionJob
-	if found, e := state.Read(cfg.StateDir, keeper.ExecutionKey, &prepared); e != nil || !found || prepared.Phase != "prepared" || prepared.ID != journal.ID || !bytes.Equal(signed.Data(), prepared.Data) || !bytes.Equal(prepared.Data, plan.Calldata) {
-		t.Fatal("process interruption lost exact job and signed bytes", e)
+	signed := servicePendingTransaction(t, ctx, client, caller)
+	if !bytes.Equal(signed.Data(), plan.Calldata) {
+		t.Fatal("submission changed prepared calldata")
 	}
 	if err = client.Client().CallContext(ctx, nil, "evm_mine"); err != nil {
 		t.Fatal(err)
 	}
 	oldReceipt := waitReceipt(signed.Hash())
 	if oldReceipt.Status != types.ReceiptStatusSuccessful {
-		t.Fatal("interrupted transaction did not mine")
+		t.Fatal("native transaction did not mine")
 	}
 	assertBalances(true)
+	if err = worker.Tick(ctx); err != nil || !worker.Pending() {
+		t.Fatal("unconfirmed inclusion released ownership", err)
+	}
 	var restored bool
 	if err = client.Client().CallContext(ctx, &restored, "evm_revert", checkpoint); err != nil || !restored {
 		t.Fatal("local receipt reorg failed", err)
@@ -424,10 +364,13 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 		t.Fatal("orphaned receipt remained visible", err)
 	}
 	assertBalances(false)
-	if err = client.Client().CallContext(ctx, nil, "evm_setNextBlockTimestamp", oldReceipt.BlockNumber.Uint64()+plan.Snapshot.Timestamp+10); err != nil {
-		t.Fatal(err)
+	if err = worker.Tick(ctx); err != nil || !worker.Pending() {
+		t.Fatal("reorg lost RAM ownership", err)
 	}
-	if err = client.SendTransaction(ctx, &signed); err != nil {
+	if servicePendingTransaction(t, ctx, client, caller).Hash() != signed.Hash() {
+		t.Fatal("reorg changed signed attempt")
+	}
+	if err = client.Client().CallContext(ctx, nil, "evm_setNextBlockTimestamp", oldReceipt.BlockNumber.Uint64()+plan.Snapshot.Timestamp+10); err != nil {
 		t.Fatal(err)
 	}
 	if err = client.Client().CallContext(ctx, nil, "evm_mine"); err != nil {
@@ -443,34 +386,16 @@ func TestAnvilNativeRedemptionsAtomicityAndCrashRecovery(t *testing.T) {
 		}
 	}
 	curatorUnavailable.Store(true)
-	beforeRecovery := curatorCalls.Load()
-	restarted, restartedLogs := process()
-	if err = restarted.Run(); err != nil {
-		t.Fatal("new process failed durable recovery", err, restartedLogs.String())
+	beforeConfirmation := curatorCalls.Load()
+	if err = worker.Tick(ctx); err != nil || worker.Pending() {
+		t.Fatal("canonical confirmation did not finish native work", err)
 	}
-	var settled keeper.Job
-	if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &settled); e != nil || !found || settled.ID != prepared.ID || settled.Phase != "settled" || !settled.Result.Confirmed || settled.Result.Hash != signed.Hash() || settled.Result.Execution == nil || settled.Result.Execution.BlockHash != canonical.BlockHash {
-		t.Fatalf("restart lost canonical execution identity: %+v %v", settled.Result, e)
-	}
-	if curatorCalls.Load() != beforeRecovery {
-		t.Fatal("durable restart fetched new permission data")
-	}
-	if found, e := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); e != nil || found {
-		t.Fatal("canonical restart retained sender journal", e)
+	if curatorCalls.Load() != beforeConfirmation {
+		t.Fatal("active attempt fetched new permission data")
 	}
 	assertBalances(true)
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != signed.Nonce()+1 {
-		t.Fatal("recovery duplicated native execution", e)
-	}
-	if len(settled.Progress) != 5 {
-		t.Fatalf("wrong provider progress count: %+v", settled.Progress)
-	}
-	for _, group := range settled.Progress {
-		for _, progress := range group {
-			if !progress.Done {
-				t.Fatalf("native provider did not finish recovery: %+v", progress)
-			}
-		}
+		t.Fatal("reconciliation duplicated native execution", e)
 	}
 	// A native-only recipe with zero gates is idle even though the previous claim
 	// left settlement cash and a new request remains outstanding.

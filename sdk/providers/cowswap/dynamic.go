@@ -14,9 +14,6 @@ import (
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 )
 
-// PolicyVersion identifies the pinned CoW SDK AUTO policy in strategy revisions.
-const PolicyVersion = "cow-sdk-auto-9ce323316b01-v1"
-
 const (
 	DefaultValiditySeconds uint64 = 1800
 	defaultSlippageBPS     uint64 = 50
@@ -92,7 +89,7 @@ func buyAfterSlippage(buy *big.Int, bps uint64) *big.Int {
 }
 
 func appData(bps uint64) (string, common.Hash) {
-	// Struct field order makes this exact document reproducible across restarts.
+	// Struct field order makes this exact document deterministic.
 	document := struct {
 		AppCode  string `json:"appCode"`
 		Version  string `json:"version"`

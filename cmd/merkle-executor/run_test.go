@@ -34,7 +34,6 @@ import (
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 type serviceArtifact struct {
@@ -175,9 +174,13 @@ func startServiceConfirmationMining(t *testing.T, ctx context.Context, client *e
 	t.Cleanup(func() { stop(); <-done })
 }
 
-func serviceSeedTransaction(t *testing.T, ctx context.Context, client *ethclient.Client, from common.Address, to *common.Address, calldata []byte) *types.Receipt {
+func serviceSeedTransaction(t *testing.T, ctx context.Context, client *ethclient.Client, from common.Address, to *common.Address, calldata []byte, gasBudget ...uint64) *types.Receipt {
 	t.Helper()
-	args := map[string]any{"from": from, "gas": hexutil.Uint64(12_000_000), "data": hexutil.Bytes(calldata)}
+	gas := uint64(12_000_000)
+	if len(gasBudget) != 0 {
+		gas = gasBudget[0]
+	}
+	args := map[string]any{"from": from, "gas": hexutil.Uint64(gas), "data": hexutil.Bytes(calldata)}
 	if to != nil {
 		args["to"] = *to
 	}
@@ -204,6 +207,74 @@ func serviceSeedTransaction(t *testing.T, ctx context.Context, client *ethclient
 		case <-ticker.C:
 		}
 	}
+}
+
+// Inspect the real local transaction rather than relying on a runtime checkpoint.
+func serviceTransaction(t *testing.T, ctx context.Context, client *ethclient.Client, caller common.Address, nonce uint64) *types.Transaction {
+	t.Helper()
+	head, err := client.BlockNumber(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for number := head; ; number-- {
+		block, err := client.BlockByNumber(ctx, new(big.Int).SetUint64(number))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tx := range block.Transactions() {
+			if tx.Nonce() != nonce {
+				continue
+			}
+			from, err := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
+			if err != nil || from != caller {
+				continue
+			}
+			receipt, err := client.TransactionReceipt(ctx, tx.Hash())
+			if err != nil || receipt.BlockHash != block.Hash() || receipt.Status != types.ReceiptStatusSuccessful {
+				t.Fatalf("local execution is not canonically successful: %v", err)
+			}
+			return tx
+		}
+		if number == 0 {
+			break
+		}
+	}
+	t.Fatalf("missing local transaction for caller %s nonce %d", caller, nonce)
+	return nil
+}
+
+func serviceKeeper(t *testing.T, ctx context.Context, path string, client *http.Client) *keeper.Keeper {
+	t.Helper()
+	env, err := openEnvironment(ctx, path, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(env.close)
+	k, err := newKeeper(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+func servicePendingTransaction(t *testing.T, ctx context.Context, client *ethclient.Client, caller common.Address) *types.Transaction {
+	t.Helper()
+	var content struct {
+		Pending map[string]map[string]*types.Transaction
+	}
+	if err := client.Client().CallContext(ctx, &content, "txpool_content"); err != nil {
+		t.Fatal(err)
+	}
+	for address, transactions := range content.Pending {
+		if !strings.EqualFold(address, caller.Hex()) {
+			continue
+		}
+		for _, tx := range transactions {
+			return tx
+		}
+	}
+	t.Fatal("caller has no pending local transaction")
+	return nil
 }
 
 func serviceRecipe(t *testing.T, leaf common.Hash, token, account common.Address) recipes.Recipe {
@@ -315,6 +386,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	}
 	cfg.Signer.Address = ""
 	path := writeCLIConfig(t, directory, cfg)
+	var expectedCalldata []byte
 	for _, invalidKey := range []string{"invalid-test-key-that-plan-must-ignore", ""} {
 		t.Setenv(cfg.Signer.KeyEnv, invalidKey)
 		var output bytes.Buffer
@@ -328,12 +400,13 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 			t.Fatal(err)
 		}
 		plan := response.Plan.Members[0].Plan
+		expectedCalldata = bytes.Clone(plan.Calldata)
 		exists := response.Plan.Members[0].Name == cfg.Strategies[0]
 		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 5 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
 			t.Fatal("plan lost configuration, provider output or transaction")
 		}
 	}
-	if _, err = os.Stat(cfg.StateDir); !os.IsNotExist(err) {
+	if _, err = os.Stat(filepath.Join(directory, "state")); !os.IsNotExist(err) {
 		t.Fatalf("plan created signing state: %v", err)
 	}
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 0 {
@@ -348,14 +421,29 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	if err := runBot(ctx, path, true); err == nil {
 		t.Fatal("send accepted a key that is not executor caller")
 	}
-	if _, err := os.Stat(cfg.StateDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(directory, "state")); !os.IsNotExist(err) {
 		t.Fatal("caller mismatch created durable state", err)
 	}
 
 	// Failed curator acquisition/validation must stop the real send path before
-	// signing or journal ownership. A changed root during HTTP must also fail the
+	// signing or nonce ownership. A changed root during HTTP must also fail the
 	// existing fresh metadata guard; restore only the ephemeral fixture afterward.
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	cfg.Observability.Addr = occupied.Addr().String()
+	path = writeCLIConfig(t, directory, cfg)
+	if err = runBot(ctx, path, true); err == nil || !strings.Contains(err.Error(), "observability listener failed") {
+		t.Fatalf("listener startup failure did not stop before signing: %v", err)
+	}
+	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 0 {
+		t.Fatalf("listener startup failure submitted a transaction: nonce=%d / %v", nonce, err)
+	}
+	cfg.Observability.Addr = ""
+	path = writeCLIConfig(t, directory, cfg)
 	for _, failure := range []string{"HTTP503", "wrong chain", "root during HTTP"} {
 		curatorUnavailable.Store(failure == "HTTP503")
 		wrongPermissionChain.Store(failure == "wrong chain")
@@ -366,11 +454,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
 			t.Fatalf("source failure submitted nonce%d: %v", nonce, e)
 		}
-		for _, key := range []string{"strategy." + cfg.Strategies[0] + ".v1", "txmanager.active.v1"} {
-			if found, e := state.Read(cfg.StateDir, key, new(any)); e != nil || found {
-				t.Fatalf("source failure persisted executable work %s: %v", key, e)
-			}
-		}
+
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddress, Data: tokenABI.PackBalanceOf(recipient)}, nil)
 		if e != nil || new(big.Int).SetBytes(raw).Sign() != 0 {
 			t.Fatal("source failure transferred funds")
@@ -383,36 +467,16 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	wrongPermissionChain.Store(false)
 
 	// Finality requires descendants after inclusion; mine local empty blocks while
-	// the real transaction manager confirms and acknowledges the signed transaction.
+	// the real sender confirms the signed transaction.
 	startServiceConfirmationMining(t, ctx, client, caller)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	if err = runBot(ctx, path, true); err != nil {
 		t.Fatalf("send-once failed: %v", err)
 	}
-	var job keeper.Job
-	if found, err := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); err != nil || !found {
-		t.Fatalf("durable job missing: %v", err)
-	}
-	if job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || job.Result.Hash == (common.Hash{}) || len(job.Progress) != 5 || job.FinishedAt.IsZero() {
-		t.Fatalf("job did not settle: %+v", job.Result)
-	}
-	for _, group := range job.Progress {
-		for _, progress := range group {
-			if !progress.Done {
-				t.Fatal("provider progress was not persisted")
-			}
-		}
-	}
-	if found, err := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); err != nil || found {
-		t.Fatalf("terminal journal was not acknowledged: %v", err)
-	}
-	transaction, pending, err := client.TransactionByHash(ctx, job.Result.Hash)
-	if err != nil || pending {
-		t.Fatalf("canonical local transaction missing: %v", err)
-	}
+	transaction := serviceTransaction(t, ctx, client, caller, 0)
 	signedBy, err := types.Sender(types.LatestSignerForChainID(big.NewInt(31337)), transaction)
-	if err != nil || signedBy != caller || transaction.To() == nil || *transaction.To() != executorAddress || !bytes.Equal(transaction.Data(), job.Plan.Calldata) || transaction.Nonce() != 0 {
-		t.Fatalf("sender/transaction differs from durable plan: %v", err)
+	if err != nil || signedBy != caller || transaction.To() == nil || *transaction.To() != executorAddress || !bytes.Equal(transaction.Data(), expectedCalldata) || transaction.Nonce() != 0 {
+		t.Fatalf("sender/transaction differs from prepared plan: %v", err)
 	}
 	for address, expected := range map[common.Address]int64{accountAddress: 983, recipient: 17} {
 		raw, err := client.CallContract(ctx, ethereum.CallMsg{To: &tokenAddress, Data: tokenABI.PackBalanceOf(address)}, nil)
@@ -426,11 +490,27 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	}
 	permissionRequests := curatorCalls.Load()
 	curatorUnavailable.Store(true)
-	if err = runBot(ctx, path, true); err != nil {
-		t.Fatalf("restart failed: %v", err)
+	if err = runBot(ctx, path, true); err == nil {
+		t.Fatal("fresh runtime bypassed unavailable permission source")
 	}
-	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || curatorCalls.Load() != permissionRequests {
-		t.Fatalf("restart repeated completed work: nonce=%d / %v", nonce, err)
+	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || curatorCalls.Load() <= permissionRequests {
+		t.Fatalf("fresh runtime failed to revalidate current state: nonce=%d / %v", nonce, err)
+	}
+	curatorUnavailable.Store(false)
+	if err = client.Client().CallContext(ctx, nil, "evm_setAutomine", false); err != nil {
+		t.Fatal(err)
+	}
+	stopping, stop := context.WithTimeout(ctx, 2500*time.Millisecond)
+	defer stop()
+	if err = runBot(stopping, path, true); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "pending work") {
+		t.Fatalf("once silently abandoned pending tracking: %v", err)
+	}
+	if pending := servicePendingTransaction(t, ctx, client, caller); pending.Nonce() != 1 {
+		t.Fatal("cancellation changed or lost pending transaction identity")
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "keeper.yaml" {
+		t.Fatalf("runtime wrote local state: entries=%v error=%v", entries, err)
 	}
 }
 

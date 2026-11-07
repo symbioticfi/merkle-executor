@@ -84,7 +84,7 @@ func PrepareExecution(ctx context.Context, reader Reader, executor, account, cal
 }
 
 // ValidateExecution rereads all current metadata even when the head hash matches
-// a persisted snapshot. The exact caller-bound calldata executes at nil/latest,
+// a prepared snapshot. The exact caller-bound calldata executes at nil/latest,
 // isolated from metadata getters; both captured block pins are checked afterward.
 func ValidateExecution(ctx context.Context, reader Reader, snapshot Snapshot, caller common.Address, calldata []byte) error {
 	return ValidateExecutionWithResults(ctx, reader, snapshot, caller, calldata, nil)

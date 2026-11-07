@@ -18,7 +18,7 @@ inputs fail before network I/O. There is no amount or deployment configuration.
 The provider replays the authenticated supply prefix in one same-executor
 `eth_call` code override at the pinned block, then probes Aave's resulting state.
 Executor identity, account permissions and original instruction order are
-preserved. Prefix numerical witnesses are persisted and checked against full
+preserved. Prefix numerical witnesses are retained for preparation and checked against full
 original execution; the final original-code simulation and the on-chain health
 floor remain authoritative. No probe contract is deployed or granted permission.
 
@@ -41,10 +41,5 @@ Anvil test double only. `testdata/frontend-lending.json` projects the generated
 frontend lending recipe and referenced leaves, retaining their original proofs.
 It models topology and proves byte-level compatibility, without live-chain evidence.
 
-`Advance` validates the immutable persisted envelope and confirmed execution
-identity before completing the native phase. Canonical receipt checks remain in
-the keeper; no issuer event or later settlement is inferred.
-
-Adding this provider to a host changes its durable provider roster. Finish or
-reconcile all active jobs with the existing version before upgrading. Older
-pending journals fail the provider-count check; do not clear them to bypass it.
+Canonical receipt checks complete this native execution in the keeper. The provider
+only prepares the capacity input and authenticated prefix witnesses.

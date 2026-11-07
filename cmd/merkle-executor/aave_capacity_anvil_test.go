@@ -179,10 +179,8 @@ func TestAnvilAavePostSupplyCapacity(t *testing.T) {
 	}
 	receipt := serviceSeedTransaction(t, ctx, client, owner, &executor, encoded)
 	t.Logf("capacity physical RPCs=1, prefix capacity=%s, full execution gas=%d", out.Inputs[0], receipt.GasUsed)
-	snapshot.Execution = &provider.Execution{TxHash: receipt.TxHash, BlockNumber: receipt.BlockNumber, BlockHash: receipt.BlockHash}
-	progress, err := native.Advance(ctx, snapshot, out, nil)
-	if err != nil || !progress.Done {
-		t.Fatal(progress, err)
+	if out.Task != nil {
+		t.Fatal("native capacity output created external settlement work")
 	}
 
 	// Probe the bounded native edge cases without a supply prefix.

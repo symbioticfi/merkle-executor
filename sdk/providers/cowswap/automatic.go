@@ -3,9 +3,7 @@ package cowswap
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"math/big"
-	"reflect"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -18,8 +16,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
-
-const automaticPolicy = PolicyVersion + "/recipe-v1"
 
 type Automatic struct{ deps provider.Deps }
 type recipeOrder struct {
@@ -149,7 +145,7 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		return nil, err
 	}
 	if order == nil {
-		return derived.Empty(automaticPolicy)
+		return []provider.Output{{}}, nil
 	}
 	amount, err := recipes.EconomicResult(order.budget, results)
 	if err != nil {
@@ -194,59 +190,39 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if err = derived.BindOutput(order.template, payload, results, &out); err != nil {
 		return nil, err
 	}
-	return derived.Encode(automaticPolicy, order.cfg, out, true)
+	return []provider.Output{out}, nil
 }
-func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
-	var cfg Config
-	inner, matched, err := derived.Decode(automaticPolicy, out, &cfg)
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	if !matched {
-		return provider.Progress{Done: true}, nil
-	}
-	http, settlement, _, err := ChainDefaults(s.ChainID)
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	if cfg.Settlement != settlement.Hex() || !reflect.DeepEqual(cfg.HTTP, http) || cfg.ValiditySeconds != DefaultValiditySeconds {
-		return provider.Progress{}, errors.New("persisted CoW automatic constants differ")
-	}
-	runtime, err := New(cfg, p.deps)
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	var saved prepared
-	if err := derived.StrictJSON(inner.Data, &saved); err != nil {
-		return provider.Progress{}, err
-	}
-	if err := protocolio.Execution(ctx, p.deps.Chain, s); err != nil {
-		return provider.Progress{}, err
-	}
-	if s.Execution == nil {
-		return provider.Progress{}, errors.New("CoW requires confirmed authorizing execution")
-	}
-	count := 0
-	ab := account.NewMerkleAccount()
-	for _, log := range s.Execution.Logs {
-		if log.Address != s.Account || len(log.Topics) == 0 || log.Topics[0] != ab.GetABI().Events["Sign"].ID {
-			continue
+func (p *Provider) confirmedTask(out provider.Output, saved prepared) provider.Task {
+	authorization := bytes.Clone(out.Actions[p.cfg.Action])
+	return provider.TaskFunc(func(ctx context.Context, s provider.Snapshot) (provider.Progress, error) {
+		if err := protocolio.Execution(ctx, p.deps.Chain, s); err != nil {
+			return provider.Progress{}, err
 		}
-		event, err := ab.UnpackSignEvent(&log)
-		if err != nil {
-			return provider.Progress{}, errors.New("CoW malformed confirmed Sign event")
+		if s.Execution == nil {
+			return provider.Progress{}, errors.New("CoW requires confirmed authorizing execution")
 		}
-		if common.Hash(event.Digest) != saved.Digest {
-			continue
+		count := 0
+		ab := account.NewMerkleAccount()
+		for _, log := range s.Execution.Logs {
+			if log.Address != s.Account || len(log.Topics) == 0 || log.Topics[0] != ab.GetABI().Events["Sign"].ID {
+				continue
+			}
+			event, err := ab.UnpackSignEvent(&log)
+			if err != nil {
+				return provider.Progress{}, errors.New("CoW malformed confirmed Sign event")
+			}
+			if common.Hash(event.Digest) != saved.Digest {
+				continue
+			}
+			data, err := ab.TryPackSign(event.DomainSeparator, event.Buffer, event.Plan)
+			if err != nil || !bytes.Equal(data, authorization) {
+				return provider.Progress{}, errors.New("CoW confirmed Sign differs from prepared order")
+			}
+			count++
 		}
-		data, err := ab.TryPackSign(event.DomainSeparator, event.Buffer, event.Plan)
-		if err != nil || !bytes.Equal(data, inner.Actions[cfg.Action]) {
-			return provider.Progress{}, errors.New("CoW confirmed Sign differs from persisted order")
+		if count != 1 {
+			return provider.Progress{}, errors.New("CoW exact confirmed authorizing Sign event is required")
 		}
-		count++
-	}
-	if count != 1 {
-		return provider.Progress{}, errors.New("CoW exact confirmed authorizing Sign event is required")
-	}
-	return runtime.Advance(ctx, s, inner, state)
+		return p.advance(ctx, s, saved)
+	})
 }

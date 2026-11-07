@@ -190,21 +190,17 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 			saved := bytes.Clone(out.Data)
 			snap.BlockNumber = big.NewInt(13)
 			snap.BlockHash = testHeader(snap.BlockNumber).Hash()
-			for range 2 { // recreate provider: retries retain the same authorized UID/order.
-				p, err = fixtureProvider(negativeConfig(srv.URL), provider.Deps{Chain: chain, HTTP: srv.Client()})
-				if err != nil {
-					t.Fatal(err)
-				}
-				progress, err := p.Advance(context.Background(), snap, out, nil)
+			for range 2 { // retries retain the same authorized UID/order.
+				progress, err := p.advance(context.Background(), snap, identity)
 				if progress.Done || (err == nil) != (mode == "post ambiguous") {
 					t.Fatalf("unsafe advancement: %+v %v", progress, err)
 				}
 				if mode != "reorg during lookup" && progress.Reference != identity.UID {
-					t.Fatal("durable identity lost")
+					t.Fatal("order identity lost")
 				}
 			}
 			if !bytes.Equal(saved, out.Data) {
-				t.Fatal("persisted output mutated")
+				t.Fatal("prepared output mutated")
 			}
 			if strings.HasPrefix(mode, "post ") {
 				if posts != 2 || gets != 2 {

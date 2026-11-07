@@ -20,6 +20,6 @@ All setup methods deliberately lack production access control. These contracts
 must never be deployed as production implementations. The daemon test uses the
 real committed RecipeExecutor artifact, a local Multicall3 deployment, backend-shaped
 HTTP permissions and RFQ responses, and a randomly generated key funded only on an
-ephemeral Anvil. It proves local authorization, token movement and recovery behavior,
+ephemeral Anvil. It proves local authorization, token movement and settlement behavior,
 not production API availability or live protocol acceptance. See
 [wire and contract provenance](../../../schemas/LIQUID_LANE_RFQ.md).

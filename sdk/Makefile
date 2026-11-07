@@ -22,7 +22,7 @@ check: verify-lens
 test:
 	go test -race -cover ./...
 integration:
-	MERKLE_ANVIL_TEST=1 go test -tags=integration ./recipes ./txengine -run TestAnvil -count=1 -v
+	MERKLE_ANVIL_TEST=1 go test -tags=integration ./recipes ./transaction -run TestAnvil -count=1 -v
 
 tools: $(ABIGEN)
 $(ABIGEN): Makefile

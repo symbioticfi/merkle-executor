@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -123,7 +124,10 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 	advanceOnValidation := false
 	simulationBlock := `"0xc"`
 	latestReads := 0
+	var mu sync.Mutex
 	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
 		var raw json.RawMessage
 		_ = json.NewDecoder(r.Body).Decode(&raw)
 		type request struct {
@@ -221,35 +225,55 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 		t.Run(map[bool]string{false: "same", true: "advanced"}[advanced], func(t *testing.T) {
 			for _, warm := range []bool{false, true} {
 				t.Run(map[bool]string{false: "cold", true: "warm"}[warm], func(t *testing.T) {
+					mu.Lock()
 					latestReads = 0
 					currentHead = 12
 					advanceOnValidation = advanced
 					simulationBlock = `"0xc"`
-					requests, arrays, methods = 0, 0, 0
-					plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []keeper.Provider{p}})
-					wantMethods := 10
 					if advanced {
-						wantMethods = 12
+						simulationBlock = `"0xd"`
 					}
-					wantRequests, wantArrays := 7, 6
+					requests, arrays, methods = 0, 0, 0
+					mu.Unlock()
+					plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []keeper.Provider{p}})
+					wantMethods := 12
+					if advanced {
+						wantMethods = 14
+					}
+					wantRequests, wantArrays := 9, 2
+					if advanced {
+						wantArrays++
+					}
 					if warm {
-						wantRequests, wantArrays, wantMethods = 6, 5, wantMethods-1
+						wantMethods--
+						wantArrays--
 					}
-					if err != nil || requests != wantRequests || arrays != wantArrays || methods != wantMethods || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0][0].Actions["0:0"], claim) {
-						t.Fatalf("Merkl Prepare requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
+					mu.Lock()
+					gotRequests, gotArrays, gotMethods := requests, arrays, methods
+					mu.Unlock()
+					if err != nil || gotRequests != wantRequests || gotArrays != wantArrays || gotMethods != wantMethods || len(plan.Outputs) != 1 || !bytes.Equal(plan.Outputs[0][0].Actions["0:0"], claim) {
+						t.Fatalf("Merkl Prepare requests=%d arrays=%d methods=%d error=%v", gotRequests, gotArrays, gotMethods, err)
 					}
 					if previous != nil && !bytes.Equal(previous, plan.Calldata) {
 						t.Fatal("head advance changed approved execution")
 					}
 					previous = bytes.Clone(plan.Calldata)
+					mu.Lock()
 					simulationBlock = `"latest"`
 					requests, arrays, methods = 0, 0, 0
+					mu.Unlock()
 					wantMethods = 5
+					wantArrays = 1
 					if advanced {
 						wantMethods = 6
+						wantArrays = 2
 					}
-					if err := recipes.ValidateExecutionWithResults(t.Context(), planner.Chain, plan.Recipe, planner.Caller, plan.Calldata, plan.Results); err != nil || requests != 3 || arrays != 3 || methods != wantMethods {
-						t.Fatalf("Validate requests=%d arrays=%d methods=%d error=%v", requests, arrays, methods, err)
+					err = recipes.ValidateExecutionWithResults(t.Context(), planner.Chain, plan.Recipe, planner.Caller, plan.Calldata, plan.Results)
+					mu.Lock()
+					gotRequests, gotArrays, gotMethods = requests, arrays, methods
+					mu.Unlock()
+					if err != nil || gotRequests != 4 || gotArrays != wantArrays || gotMethods != wantMethods {
+						t.Fatalf("Validate requests=%d arrays=%d methods=%d error=%v", gotRequests, gotArrays, gotMethods, err)
 					}
 				})
 			}

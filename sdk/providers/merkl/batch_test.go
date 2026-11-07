@@ -62,7 +62,8 @@ func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {
 			if test == "bad proof" {
 				rows[1].Amount = "999"
 			}
-			fetches := 0
+			fetches, aggregates := 0, 0
+			getterCounts := map[string]int{}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				fetches++
 				_ = json.NewEncoder(w).Encode([]wire.MerklEntry{{Chain: wire.MerklChain{ID: 1}, Rewards: rows}})
@@ -81,6 +82,7 @@ func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {
 				if e != nil {
 					return nil, e
 				}
+				getterCounts[method.Name]++
 				switch method.Name {
 				case "getMerkleRoot":
 					return method.Outputs.Pack(root)
@@ -101,14 +103,15 @@ func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {
 				return nil, nil
 			})
 			chain := reader(func(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+				aggregates++
 				method := multicall.NewMulticall3().GetABI().Methods["aggregate3"]
 				args, err := method.Inputs.Unpack(msg.Data[4:])
 				if err != nil {
 					return nil, err
 				}
 				calls := *abi.ConvertType(args[0], new([]multicall.Multicall3Call3)).(*[]multicall.Multicall3Call3)
-				if len(calls) != 4 {
-					t.Fatal("one token per read")
+				if len(calls) != 6 {
+					t.Fatalf("shared reward reads = %d, want 6", len(calls))
 				}
 				result := make([]multicall.Multicall3Result, len(calls))
 				for i, call := range calls {
@@ -122,6 +125,10 @@ func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {
 			})
 			p := &Automatic{deps: provider.Deps{HTTP: client, Chain: chain}}
 			out, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+			if aggregates != 1 || getterCounts["getMerkleRoot"] != 1 || getterCounts["claimRecipient"] != 3 || getterCounts["claimed"] != 2 {
+				t.Fatalf("reward getters were repeated: aggregates=%d getters=%v", aggregates, getterCounts)
+			}
+
 			if test == "all claimed" || test == "bad proof" {
 				if err == nil {
 					t.Fatal("invalid or idle batch accepted")
@@ -157,8 +164,8 @@ func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {
 				}
 			}
 			for _, execution := range out {
-				if _, err = p.Advance(t.Context(), snapshot, execution, nil); err != nil {
-					t.Fatal(err)
+				if execution.Task != nil {
+					t.Fatal("synchronous claim retained settlement work")
 				}
 			}
 		})

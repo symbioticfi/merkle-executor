@@ -4,21 +4,18 @@ Normal daemon `strategies` entries are full nonzero executor addresses, directly
 used as lowercase state, log and metric identifiers. Duplicate normalized addresses
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
-The recovery fingerprint includes runtime policy version `1`, executor, account,
-caller, chain ID, curator configuration and transaction-manager fee policy. The
-daemon installs automatic CoW, Merkl, Liquid Lane RFQ and Aave V3 capacity providers,
-and 3F claim providers in a fixed order. Typed provider settings are internal
-recipe and recovery data.
+The daemon installs automatic CoW, Merkl, Liquid Lane RFQ, Aave capacity and 3F
+claim providers. Typed settings derive from authenticated recipes and remain
+process-local.
 Token pairs, amounts, minimum proceeds, action/input mappings, deployment targets
 and authorization shapes come from the
 authenticated recipe and its permission tree; they are not operator parameters.
-Unmatched adapters produce an empty durable output and finish normally.
+Unmatched adapters produce an empty output and finish normally.
 
 The operator supplies the chain RPC endpoint, curator-backend endpoint, executor
 addresses and, for send mode, the environment variable containing one private key.
 Startup derives each executor's account and common caller at a pinned block and
-checks its canonical header. The send key must match that caller before durable
-state is opened. Plan mode reads no private key and creates no signing journal.
+checks its canonical header. The send key must match that caller before sending. Plan mode reads no private key and creates no runtime files.
 Optional identity assertions must match discovery. Operational policy, standard
 Multicall3, bounded HTTP resources, cache capacity and protocol endpoints are built-in
 constants. [Minimal configuration](../config/example.yaml).
@@ -101,12 +98,11 @@ reads. Packed uint216 operands, checked arithmetic, division by zero and caller
 context follow the pinned Recipes implementation.
 
 The full original executor then simulates the complete immutable transaction. Its
-returned numeric values must equal the persisted witness for every dependency used
+returned numeric values must equal the prepared witness for every dependency used
 by signed economics or the supporting prefix. This detects override-code
 introspection or other divergence. Preparation verifies this witness against the complete transaction.
-Recovery of an already signed attempt keeps the exact saved bytes and reconciles
-canonical receipt/execution evidence; it does not rerun economic preparation,
-acquire a fresh quote or rewrite signed values. The lens targets Cancun and is reproducibly generated with pinned solc 0.8.38.
+A signed attempt retains its exact bytes in RAM until canonical confirmation.
+The lens targets Cancun and is reproducibly generated with pinned solc 0.8.38.
 `make generate` regenerates it; `make -C sdk verify-lens` checks exact artifacts.
 
 Some valid compositions are explicitly unsupported: a needed READ following an
@@ -162,13 +158,12 @@ accepts one RFQ authorization and rejects multiple authorizations before HTTP,
 even when an extra authorization is inactive. Connector acquisition and issuer
 redemption remain in vault-solver, bound to the configured asset recipe.
 
-Confirmed account authorization precedes idempotent consumer submission. Durable
-request/quote identity, signatures, usage/settlement progress and cursors survive
-restart. Fills require canonical matching input/output transfers and Reactor usage
+Confirmed account authorization precedes idempotent consumer submission. Request/quote
+identity, signatures, settlement progress and cursors remain in private RAM tasks. Fills require canonical matching input/output transfers and Reactor usage
 evidence. Cancelled orders use the backend's `/orders` status and pinned used nonce.
 No cancellation receipt or event scan is needed. Paginated lookup fails closed on
-missing or ambiguous evidence. Lookup checkpoints after 10 API pages per tick
-and resumes across restarts, preserving duplicate checks and withholding publication
+missing or ambiguous evidence. Lookup pauses after 10 API pages per tick
+and resumes across in-process ticks, preserving duplicate checks and withholding publication
 until the scan completes. No new quote is obtained for an existing job.
 [Consumer wire schema and evidence](../sdk/schemas/LIQUID_LANE_RFQ.md).
 
@@ -212,14 +207,14 @@ Order validity is 1800 seconds.
 
 Quotes use CoW's AUTO dynamic slippage policy and volume suggestions, with its
 protocol fallback when suggestions are unavailable. There is no operator slippage
-parameter. Deterministic full appData and its signed hash are persisted with the
+parameter. Deterministic full appData and its signed hash are retained in RAM with the
 selected gross amount, minimum proceeds, quote/order identity and exact sign bytes.
 The recipe's derived minimum remains binding even when AUTO proposes a lower value.
 [CoW AUTO policy and pinned provenance](../sdk/schemas/COW_AUTO.md).
 
 Advance verifies the exact confirmed account sign call before order POST. Idempotent
-lookup/POST preserves the UID through ambiguity and restart; recovery uses only
-persisted config/order and canonical execution evidence. Partial fills stay owned,
+lookup/POST preserves the UID through in-process ambiguity using the original
+prepared order and canonical execution evidence. Partial fills stay owned,
 and terminal completion requires on-chain settlement evidence as well as API state.
 
 ## Liquid Lane connector host boundary
@@ -231,27 +226,25 @@ connector swaps or verify their signatures. SDK hosts retain generic permission 
 runtime validation, complete execution simulation and canonical receipt checks.
 [Recipe compatibility](RECIPE-COMPATIBILITY.md) describes the authoring boundary.
 
-## Recovery and provider interfaces
+## Provider interfaces
 
-Automatic output envelopes persist the fully derived internal configuration, wire
-output and policy version, even for unmatched adapters. Startup adapter ordering and
-the runtime-policy fingerprint are durable identity. Recovery requires that
-identity to match; it never rewrites a fingerprint, UID, nonce or provider index. Recovery validates envelopes, bounds and target ownership before
-network mutation. Already signed attempts retain their exact saved bytes and use canonical receipt
-and execution reconciliation; they do not repeat preparation numerical
-simulation. Recovery fetches neither curator permissions nor new quotes for
-existing work.
+Providers implement authenticated `RecipeRequirements` and `PrepareRecipe`.
+Outputs contain authorized data and an optional `provider.Task`. Stateless
+providers have no settlement step. CoW/RFQ tasks own typed process-local progress
+and run only after canonical authorization. Unmatched providers return an empty
+output; there is no replay envelope or configuration serialization.
 
-Direct typed provider constructors serve recipe derivation, saved output
-validation and focused tests. They are not daemon configuration inputs. Generic static/http/rpc data providers are not included in the daemon; deterministic
-recipe-constrained inputs are resolved by the planner through the shared lens.
+Direct typed constructors support isolated integrations and focused tests; they
+are not daemon configuration inputs. Deterministic recipe-constrained inputs
+resolve through the shared lens. Restart discards all task/order tracking while
+external transactions and orders may remain live.
 
 ## Evidence and generation
 
 `make check` covers host and SDK race tests, vet and lint. `make integration` uses
 only ephemeral local Anvil, generated fixture credentials and HTTP fixtures.
-Normal automatic fixtures cover Read-derived transfer plan/send/restart, RFQ
-consumer restart/fill, and Merkl claim effects feeding later recipe balances. SDK
+Normal automatic fixtures cover Read-derived transfer plan/send, RFQ
+consumer authorization/fill, and Merkl claim effects feeding later recipe balances. SDK
 lens fixtures verify caller/origin, constrained preview Inputs, stateful effects,
 allowance reset/zero short-circuit, overflow/division errors and original-code
 introspection divergence. These are local/API-fixture results; no deployment,

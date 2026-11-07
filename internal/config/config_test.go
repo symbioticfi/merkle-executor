@@ -7,9 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/ethereum/go-ethereum/common"
 )
 
 const validConfig = `curator:
@@ -38,7 +35,7 @@ func TestConfigurationDefaultsAndPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Mode != "simulate" || c.Signer.KeyEnv != DefaultKeyEnv || c.StateDir != filepath.Join(filepath.Dir(p), "state") {
+	if c.Mode != "simulate" || c.Signer.KeyEnv != DefaultKeyEnv {
 		t.Fatal(c)
 	}
 }
@@ -59,33 +56,8 @@ func TestRejectMalformedConfiguration(t *testing.T) {
 		})
 	}
 }
-func TestFingerprintIgnoresCommentsAndPosition(t *testing.T) {
-	a, err := Load(writeConfig(t, validConfig))
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := Load(writeConfig(t, "# documentation\n\n"+validConfig))
-	if err != nil {
-		t.Fatal(err)
-	}
-	account, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01")
-	if a.StrategyFingerprint(a.Strategies[0], account, caller) != b.StrategyFingerprint(b.Strategies[0], account, caller) {
-		t.Fatal("comments changed identity")
-	}
-	if a.StrategyFingerprint(a.Strategies[0], account, caller) == a.StrategyFingerprint(common.HexToAddress("0x04").Hex(), account, caller) {
-		t.Fatal("executor did not change identity")
-	}
-}
-
-func TestTransactionHorizonDefaultsAndInvalidLimits(t *testing.T) {
+func TestTransactionLimitsAndObsoleteSettings(t *testing.T) {
 	t.Parallel()
-	defaults, err := Load(writeConfig(t, validConfig))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if defaults.TxManager.EngineConfig().Horizon.MaxBlocks != 6 || defaults.TxManager.EngineConfig().Horizon.BlockTime != 12*time.Second || defaults.TxManager.EngineConfig().PendingTimeout != 5*time.Minute {
-		t.Fatal("unexpected transaction defaults")
-	}
 	for name, block := range map[string]string{
 		"fixed confirmations":          "confirmations: 2",
 		"fixed polling":                "pollIntervalMs: 2000",
@@ -215,7 +187,6 @@ func TestRuntimeRejectsManualProviders(t *testing.T) {
 }
 
 func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
-	var fingerprint string
 	for _, tc := range []struct {
 		name, fields string
 		invalid      bool
@@ -224,7 +195,7 @@ func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := strings.Replace(validConfig, "curator:\n", "curator:\n"+tc.fields, 1)
-			cfg, err := Load(writeConfig(t, raw))
+			_, err := Load(writeConfig(t, raw))
 			if tc.invalid {
 				if err == nil {
 					t.Fatal("non-configurable curator transport setting accepted")
@@ -235,12 +206,6 @@ func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			got := cfg.StrategyFingerprint(cfg.Strategies[0], common.HexToAddress("0x03"), common.HexToAddress("0x01"))
-			if fingerprint == "" {
-				fingerprint = got
-			} else if fingerprint != got {
-				t.Fatal("equivalent curator policy changed fingerprint")
-			}
 		})
 	}
 }
@@ -285,39 +250,6 @@ func TestScalarStrategyAddressSchema(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeConfig(t, strategyConfig(body))); err == nil {
 				t.Fatal("invalid strategy accepted")
-			}
-		})
-	}
-}
-
-func TestAddressIdentityIgnoresCaseAndOrder(t *testing.T) {
-	account, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01")
-	a, err := Load(writeConfig(t, strategyConfig("  - '0xaBcDeF0000000000000000000000000000000001'\n  - '0x0000000000000000000000000000000000000002'\n")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := Load(writeConfig(t, strategyConfig("  - '0x0000000000000000000000000000000000000002'\n  - '0xabcdef0000000000000000000000000000000001'\n")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, executor := range a.Strategies {
-		if a.StrategyFingerprint(executor, account, caller) != b.StrategyFingerprint(executor, account, caller) {
-			t.Fatal("case/order changed identity")
-		}
-	}
-	original := a.StrategyFingerprint(a.Strategies[0], account, caller)
-	for name, change := range map[string]func(*Config, *common.Address, *common.Address){
-		"account":       func(_ *Config, a, _ *common.Address) { *a = common.HexToAddress("0x04") },
-		"caller":        func(_ *Config, _, c *common.Address) { *c = common.HexToAddress("0x05") },
-		"chain":         func(c *Config, _, _ *common.Address) { c.Chain.ChainID++ },
-		"source":        func(c *Config, _, _ *common.Address) { c.Curator.URL = "http://other.invalid/api/v1" },
-		"sender policy": func(c *Config, _, _ *common.Address) { c.TxManager.MaxFeeGwei++ },
-	} {
-		t.Run(name, func(t *testing.T) {
-			c, a1, c1 := *a, account, caller
-			change(&c, &a1, &c1)
-			if c.StrategyFingerprint(c.Strategies[0], a1, c1) == original {
-				t.Fatal("changed identity invisible")
 			}
 		})
 	}

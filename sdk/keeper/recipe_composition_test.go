@@ -37,9 +37,6 @@ func (p *exclusiveRecipeProvider) PrepareRecipe(context.Context, provider.Snapsh
 	p.calls++
 	return []provider.Output{{Results: p.results}}, nil
 }
-func (*exclusiveRecipeProvider) Advance(context.Context, provider.Snapshot, provider.Output, json.RawMessage) (provider.Progress, error) {
-	return provider.Progress{Done: true}, nil
-}
 func (p *exclusiveRecipeProvider) ExclusiveOutputTargets(provider.Output) (map[string]common.Address, error) {
 	return map[string]common.Address{"0:0": p.target}, nil
 }

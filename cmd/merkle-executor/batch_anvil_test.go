@@ -192,15 +192,15 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 			if !bytes.Equal(current.Calldata, plan.Calldata) || !reflect.DeepEqual(current.Leaves, plan.Leaves) {
 				t.Fatal("warm cache/head advance changed authorized bytes or leaves")
 			}
-			wantRequests, wantArrays, wantMethods := 6, 5, 9
+			wantRequests, wantArrays, wantMethods := 8, 2, 11
 			wantAggregates := []int{5, 7}
 			if advanced {
-				wantMethods, wantAggregates = 11, []int{5, 5, 2}
+				wantMethods = 13
+				wantArrays++
 			}
 			if warm {
-				wantRequests--
-				wantArrays--
 				wantMethods--
+				wantArrays--
 			}
 			mu.Lock()
 			if requests != wantRequests || arrays != wantArrays || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, wantAggregates) {
@@ -213,11 +213,13 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 				t.Fatal(err)
 			}
 			wantMethods = 5
+			wantArrays = 1
 			if advanced {
 				wantMethods = 6
+				wantArrays = 2
 			}
 			mu.Lock()
-			if requests != 3 || arrays != 3 || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, []int{5}) {
+			if requests != 4 || arrays != wantArrays || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, []int{5}) {
 				t.Errorf("Validate warm=%t advanced=%t requests=%d arrays=%d methods=%d aggregates=%v", warm, advanced, requests, arrays, methods, aggregateSizes)
 			}
 			mu.Unlock()
@@ -243,7 +245,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 		}
 	}
 	mu.Lock()
-	if requests != 1 || arrays != 1 || methods != 3 || len(aggregateSizes) != 0 {
+	if requests != 3 || arrays != 0 || methods != 3 || len(aggregateSizes) != 0 {
 		t.Errorf("isolated calls requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
 	}
 	mu.Unlock()
@@ -258,7 +260,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 	}
 
 	// The daemon's installed providers must not prevent a native recipe from
-	// batching merely because unmatched providers retain durable envelopes.
+	// batching when the installed providers have no matching runtime work.
 	query := issuerStep(t, 0, []string{"address", "bytes", "uint256[]", "uint256"}, token, tokenABI.PackBalanceOf(account), []*big.Int{}, new(big.Int))[1:]
 	result := new(big.Int).Lsh(big.NewInt(int64(recipes.Result)), 216)
 	dynamic := recipes.Recipe{Queries: [][]byte{query}, Steps: [][]byte{
@@ -291,8 +293,15 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 	if err != nil || len(args[0].([][]byte)) != 2 {
 		t.Fatalf("expected two complete executions: %v", err)
 	}
-	if len(current.Outputs) != 5 || len(current.Outputs[0][0].Data) == 0 {
-		t.Fatal("test must retain the daemon's unmatched provider envelopes")
+	if len(current.Outputs) != len(strategy.Providers) {
+		t.Fatal("provider output groups were lost")
+	}
+	for _, group := range current.Outputs {
+		for _, out := range group {
+			if len(out.Actions)+len(out.Inputs)+len(out.SkipSteps) != 0 || out.Task != nil {
+				t.Fatal("unmatched provider acquired runtime ownership")
+			}
+		}
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &target, current.Calldata)
 	if raw, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: tokenABI.PackBalanceOf(account)}, nil); err != nil || new(big.Int).SetBytes(raw).Sign() != 0 {

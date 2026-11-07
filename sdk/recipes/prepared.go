@@ -1,0 +1,428 @@
+package recipes
+
+import (
+	"context"
+	"math/big"
+	"strconv"
+
+	ethereum "github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
+)
+
+// PreparedRecipe is provisional authenticated discovery. Providers may inspect a
+// copy of Recipe; only ValidatePreparedBatch admits assembled execution bytes.
+type PreparedRecipe struct {
+	Snapshot Snapshot
+	Recipe   Recipe
+	pending  *recipeEvidence
+	cache    *RecipeCache
+}
+
+// MemberError identifies runtime data that must be deferred without discarding
+// other independent candidates. Contract and gas rejection concern the envelope.
+type MemberError struct {
+	Index int
+	// Indices contains every inactive member after a successful canonical envelope.
+	// Index remains the first member for callers handling one error at a time.
+	Indices []int
+	Err     error
+}
+
+func (e *MemberError) Error() string {
+	return "execution member " + strconv.Itoa(e.Index) + ": " + e.Err.Error()
+}
+func (e *MemberError) Unwrap() error { return e.Err }
+
+// DiscoverBatch pins every executor to one head and batches metadata, shared
+// roots and event evidence. Options supplies only ChainID and the optional cache;
+// per-execution witnesses are checked by ValidatePreparedBatch.
+func DiscoverBatch(ctx context.Context, reader Reader, executors, accounts []common.Address, caller common.Address, options PreparationOptions) ([]PreparedRecipe, error) {
+	if len(executors) == 0 || len(executors) != len(accounts) || caller == (common.Address{}) {
+		return nil, errors.New("executor batch requires matching identities and caller")
+	}
+	if options.Cache != nil && (options.ChainID == nil || options.ChainID.Sign() <= 0) {
+		return nil, errors.New("recipe cache requires a positive chain ID")
+	}
+	snapshots := make([]Snapshot, len(executors))
+	seen := map[common.Address]bool{}
+	for i, executor := range executors {
+		if executor == (common.Address{}) || accounts[i] == (common.Address{}) || seen[executor] {
+			return nil, errors.New("invalid or duplicate batch executor identity")
+		}
+		seen[executor] = true
+		snapshots[i] = Snapshot{Executor: executor, Account: accounts[i]}
+	}
+	header, err := reader.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return nil, errors.Errorf("pin recipe batch: %w", err)
+	}
+	if err = validateHeader(header, nil); err != nil {
+		return nil, err
+	}
+	requests, indices := batchSnapshotRequests(snapshots, header.Number)
+	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
+	if err != nil {
+		return nil, err
+	}
+	snapshots, err = decodeBatchSnapshots(snapshots, header, reads, indices)
+	if err != nil {
+		return nil, err
+	}
+	prepared := make([]PreparedRecipe, len(snapshots))
+	hints := make([]*recipeEvidence, len(snapshots))
+	matched := make([]bool, len(snapshots))
+	eventIndices := map[uint64]int{}
+	logIndices := map[int]int{}
+	requests = nil
+	for i, snapshot := range snapshots {
+		if snapshot.Caller != caller {
+			return nil, errors.New("batch executor caller mismatch")
+		}
+		if err = validateRecipeMetadata(snapshot); err != nil {
+			return nil, err
+		}
+		prepared[i] = PreparedRecipe{Snapshot: snapshot, cache: options.Cache}
+		if options.Cache != nil {
+			hints[i] = options.Cache.load(evidenceKey{chainID: options.ChainID.String(), executor: snapshot.Executor})
+			matched[i] = hints[i] != nil && hints[i].hash == snapshot.RecipeHash && hints[i].block == snapshot.RecipeBlock
+		}
+		if snapshot.RecipeBlock != snapshot.BlockNumber {
+			if _, exists := eventIndices[snapshot.RecipeBlock]; !exists {
+				eventIndices[snapshot.RecipeBlock] = len(requests)
+				requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(snapshot.RecipeBlock)})
+			}
+		}
+		if !matched[i] {
+			logIndices[i] = len(requests)
+			requests = append(requests, recipeLogRead(snapshot))
+		}
+	}
+	evidence, err := protocolio.ReadGroup(ctx, reader, requests...)
+	if err != nil {
+		return nil, err
+	}
+	var fallback []protocolio.ReadRequest
+	fallbackIndices := map[int]int{}
+	for i, snapshot := range snapshots {
+		eventHeader := header
+		if snapshot.RecipeBlock != snapshot.BlockNumber {
+			result := evidence.At(eventIndices[snapshot.RecipeBlock])
+			if result.Err != nil {
+				return nil, errors.Errorf("recipe event header: %w", result.Err)
+			}
+			eventHeader = result.Header
+		}
+		if err = validateHeader(eventHeader, new(big.Int).SetUint64(snapshot.RecipeBlock)); err != nil {
+			return nil, err
+		}
+		if matched[i] && eventHeader.Hash() == hints[i].eventHash {
+			hash, hashErr := HashRecipe(hints[i].recipe)
+			_, inspectErr := Inspect(hints[i].recipe)
+			if hashErr == nil && inspectErr == nil && hash == snapshot.RecipeHash {
+				setPreparedRecipe(&prepared[i], hints[i].recipe, eventHeader.Hash(), options.ChainID)
+				continue
+			}
+		}
+		options.Cache.discard(hints[i])
+		if matched[i] {
+			fallbackIndices[i] = len(fallback)
+			fallback = append(fallback, recipeLogRead(snapshot))
+			continue
+		}
+		result := evidence.At(logIndices[i])
+		if result.Err != nil {
+			return nil, errors.Errorf("read recipe events: %w", result.Err)
+		}
+		recipe, eventHash, e := recipeFromLogs(snapshot, eventHeader, result.Logs)
+		if e != nil {
+			return nil, e
+		}
+		setPreparedRecipe(&prepared[i], recipe, eventHash, options.ChainID)
+	}
+	if len(fallback) != 0 {
+		logs, e := protocolio.ReadGroup(ctx, reader, fallback...)
+		if e != nil {
+			return nil, e
+		}
+		for i := range snapshots {
+			index, exists := fallbackIndices[i]
+			if !exists {
+				continue
+			}
+			snapshot := snapshots[i]
+			eventHeader := header
+			if snapshot.RecipeBlock != snapshot.BlockNumber {
+				eventHeader = evidence.At(eventIndices[snapshot.RecipeBlock]).Header
+			}
+			result := logs.At(index)
+			if result.Err != nil {
+				return nil, errors.Errorf("read recipe events: %w", result.Err)
+			}
+			recipe, eventHash, e := recipeFromLogs(snapshot, eventHeader, result.Logs)
+			if e != nil {
+				return nil, e
+			}
+			setPreparedRecipe(&prepared[i], recipe, eventHash, options.ChainID)
+		}
+	}
+	closing, err := protocolio.ReadGroup(ctx, reader, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).Set(header.Number)})
+	if err != nil {
+		return nil, err
+	}
+	if err = verifyPins([]preparedPin{{header.Number.Uint64(), header.Hash()}}, closing.At); err != nil {
+		return nil, err
+	}
+	return prepared, nil
+}
+
+func setPreparedRecipe(prepared *PreparedRecipe, recipe Recipe, eventHash common.Hash, chainID *big.Int) {
+	prepared.Recipe = recipe
+	if prepared.cache != nil {
+		pending := &recipeEvidence{key: evidenceKey{chainID: chainID.String(), executor: prepared.Snapshot.Executor}, recipe: CloneRecipe(recipe), hash: prepared.Snapshot.RecipeHash, block: prepared.Snapshot.RecipeBlock, eventHash: eventHash}
+		if prepared.cache.retainable(pending) {
+			prepared.pending = pending
+		}
+	}
+}
+
+func recipeLogRead(snapshot Snapshot) protocolio.ReadRequest {
+	block := new(big.Int).SetUint64(snapshot.RecipeBlock)
+	return protocolio.ReadRequest{Kind: protocolio.ReadLogs, Filter: ethereum.FilterQuery{FromBlock: block, ToBlock: block, Addresses: []common.Address{snapshot.Executor}, Topics: [][]common.Hash{{executorABI.GetABI().Events["SetRecipe"].ID}}}}
+}
+
+func batchSnapshotRequests(snapshots []Snapshot, block *big.Int) ([]protocolio.ReadRequest, [][5]int) {
+	var requests []protocolio.ReadRequest
+	indices := make([][5]int, len(snapshots))
+	roots := map[common.Address]int{}
+	for i, snapshot := range snapshots {
+		for j, request := range snapshotRequests(snapshot.Executor, common.Address{}, block) {
+			indices[i][j] = len(requests)
+			requests = append(requests, request)
+		}
+		index, exists := roots[snapshot.Account]
+		if !exists {
+			index = len(requests)
+			roots[snapshot.Account] = index
+			requests = append(requests, protocolio.ContractRead(snapshot.Account, accountABI.PackRoot(), block, true))
+		}
+		indices[i][4] = index
+	}
+	return requests, indices
+}
+
+func decodeBatchSnapshots(snapshots []Snapshot, header *types.Header, reads *protocolio.ReadResults, indices [][5]int) ([]Snapshot, error) {
+	out := make([]Snapshot, len(snapshots))
+	for i, snapshot := range snapshots {
+		current, err := decodeExecutorSnapshot(snapshot.Executor, snapshot.Account, header, func(j int) ([]byte, error) { result := reads.At(indices[i][j]); return result.Data, result.Err })
+		if err != nil {
+			return nil, err
+		}
+		root := reads.At(indices[i][4])
+		out[i], err = decodeSnapshotRoot(current, root.Data, root.Err)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// ValidatePreparedBatch authenticates all selected members at one fresh head,
+// simulates the exact transaction and closes every distinct block pin together.
+// Cache entries become visible only after complete admission succeeds.
+func ValidatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller common.Address) error {
+	if len(prepared) == 0 || len(prepared) != len(calls) || len(prepared) != len(leaves) || len(prepared) != len(witnesses) || caller == (common.Address{}) {
+		return errors.New("prepared batch member count or caller mismatch")
+	}
+	snapshots := make([]Snapshot, len(prepared))
+	for i, member := range prepared {
+		snapshot := member.Snapshot
+		if snapshot.Caller != caller || snapshot.Executor != calls[i].Executor || snapshot.Account == (common.Address{}) {
+			return errors.New("prepared batch identity mismatch")
+		}
+		hash, err := HashRecipe(member.Recipe)
+		if err != nil || hash != snapshot.RecipeHash {
+			return errors.New("prepared recipe commitment mismatch")
+		}
+		entries, err := Executions(calls[i].Data)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			recipe, _, _ := decodeExecution(entry)
+			hash, _ := HashRecipe(recipe)
+			if hash != snapshot.RecipeHash {
+				return errors.New("execution differs from prepared recipe")
+			}
+		}
+		snapshots[i] = snapshot
+	}
+	current, err := reader.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err = validateHeader(current, nil); err != nil {
+		return err
+	}
+	pins, err := preparedPins(snapshots, current)
+	if err != nil {
+		return err
+	}
+	requests, indices := batchSnapshotRequests(snapshots, current.Number)
+	roleStart := len(requests)
+	type roleKey struct {
+		account, executor common.Address
+		leaf              common.Hash
+	}
+	seen := map[roleKey]bool{}
+	var roles []common.Hash
+	for i, snapshot := range snapshots {
+		for _, leaf := range leaves[i] {
+			key := roleKey{snapshot.Account, snapshot.Executor, leaf}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			roles = append(roles, leaf)
+			requests = append(requests, protocolio.ContractRead(snapshot.Account, accountABI.PackHasRole(leaf, snapshot.Executor), current.Number, true))
+		}
+	}
+	openingStart := len(requests)
+	requests = append(requests, pinReads(pins)...)
+	direct := len(calls) == 1 && !isMulticall(calls[0].Data)
+	simulationIndex := len(requests)
+	if direct {
+		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: caller, To: &calls[0].Executor, Data: calls[0].Data, Gas: current.GasLimit}, Block: current.Number})
+	}
+	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
+	if err != nil {
+		return err
+	}
+	if err = verifyPins(pins, func(i int) protocolio.ReadResult { return reads.At(openingStart + i) }); err != nil {
+		return err
+	}
+	fresh, err := decodeBatchSnapshots(snapshots, current, reads, indices)
+	if err != nil {
+		return err
+	}
+	for i, snapshot := range snapshots {
+		if fresh[i].Account != snapshot.Account || fresh[i].Caller != caller || fresh[i].RecipeHash != snapshot.RecipeHash || fresh[i].RecipeBlock != snapshot.RecipeBlock || fresh[i].Root != snapshot.Root {
+			return errors.New("executor identity, caller, recipe or root changed; prepare again")
+		}
+	}
+	if err = verifyRoleResults(roles, func(i int) protocolio.ReadResult { return reads.At(roleStart + i) }); err != nil {
+		return err
+	}
+	var results [][]byte
+	if len(calls) == 1 {
+		pin := snapshots[0]
+		pin.BlockNumber, pin.BlockHash, pin.Timestamp = current.Number.Uint64(), current.Hash(), current.Time
+		if isMulticall(calls[0].Data) {
+			backend, ok := reader.(BatchReader)
+			if !ok {
+				return errors.New("batch validation requires code-override support")
+			}
+			entries, _ := Executions(calls[0].Data)
+			returned, e := SimulateBatch(ctx, backend, pin, entries, current.GasLimit)
+			if e != nil {
+				return e
+			}
+			raw, e := batchArguments.Pack(returned)
+			if e != nil {
+				return e
+			}
+			results = [][]byte{raw}
+		} else {
+			simulation := reads.At(simulationIndex)
+			if simulation.Err != nil {
+				return simulationFailure(ctx, simulation.Err)
+			}
+			results = [][]byte{simulation.Data}
+		}
+	} else {
+		backend, ok := reader.(BatchReader)
+		if !ok {
+			return errors.New("executor batch requires code-override support")
+		}
+		results, err = SimulateExecutors(ctx, backend, caller, calls, current.Number, current.GasLimit)
+		if err != nil {
+			return err
+		}
+	}
+	var inactive []int
+	for i, call := range calls {
+		if err = VerifyResults(call.Data, results[i], witnesses[i]); err != nil {
+			return &MemberError{Index: i, Err: err}
+		}
+		work, e := HasWork(call.Data, results[i])
+		if e != nil {
+			return &MemberError{Index: i, Err: e}
+		}
+		if !work {
+			inactive = append(inactive, i)
+		}
+	}
+	closing, err := protocolio.ReadGroup(ctx, reader, pinReads(pins)...)
+	if err != nil {
+		return err
+	}
+	if err = verifyPins(pins, closing.At); err != nil {
+		return err
+	}
+	for _, member := range prepared {
+		member.cache.put(member.pending)
+	}
+	if len(inactive) != 0 {
+		return &MemberError{Index: inactive[0], Indices: inactive, Err: provider.ErrNotReady}
+	}
+	return nil
+}
+
+type preparedPin struct {
+	number uint64
+	hash   common.Hash
+}
+
+func preparedPins(snapshots []Snapshot, current *types.Header) ([]preparedPin, error) {
+	pins := []preparedPin{{current.Number.Uint64(), current.Hash()}}
+	seen := map[uint64]common.Hash{current.Number.Uint64(): current.Hash()}
+	for _, snapshot := range snapshots {
+		if snapshot.BlockNumber > current.Number.Uint64() || snapshot.BlockHash == (common.Hash{}) {
+			return nil, errors.New("invalid prepared block pin")
+		}
+		if hash, exists := seen[snapshot.BlockNumber]; exists {
+			if hash != snapshot.BlockHash {
+				return nil, errors.New("conflicting prepared block hashes")
+			}
+			continue
+		}
+		seen[snapshot.BlockNumber] = snapshot.BlockHash
+		pins = append(pins, preparedPin{snapshot.BlockNumber, snapshot.BlockHash})
+	}
+	return pins, nil
+}
+func pinReads(pins []preparedPin) []protocolio.ReadRequest {
+	requests := make([]protocolio.ReadRequest, len(pins))
+	for i, pin := range pins {
+		requests[i] = protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(pin.number)}
+	}
+	return requests
+}
+func verifyPins(pins []preparedPin, result func(int) protocolio.ReadResult) error {
+	for i, pin := range pins {
+		member := result(i)
+		if member.Err != nil {
+			return errors.Errorf("check prepared block: %w", member.Err)
+		}
+		if err := validateHeader(member.Header, new(big.Int).SetUint64(pin.number)); err != nil {
+			return err
+		}
+		if member.Header.Hash() != pin.hash {
+			return errors.New("prepared execution block was reorganized")
+		}
+	}
+	return nil
+}

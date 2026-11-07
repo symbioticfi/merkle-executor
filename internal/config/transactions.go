@@ -2,10 +2,9 @@ package config
 
 import (
 	"math"
-	"time"
 
 	"github.com/go-errors/errors"
-	engine "github.com/symbioticfi/merkle-executor/sdk/txengine"
+	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 )
 
 // TxManager exposes the deployment's absolute transaction spend limit.
@@ -20,16 +19,6 @@ func (c TxManager) validate(required bool) error {
 	return nil
 }
 
-// EngineConfig is the fixed runtime policy; only its fee ceiling is configurable.
-func (c TxManager) EngineConfig() engine.Config {
-	return engine.Config{
-		Confirmations: DefaultConfirmations, MaxFeeGwei: c.MaxFeeGwei, PollInterval: DefaultTransactionPollInterval,
-		BroadcastTimeout: 5 * time.Second, AccountPollInterval: 30 * time.Second,
-		ReplacementInterval: 30 * time.Second, PendingTimeout: 5 * time.Minute, ShutdownTimeout: time.Minute,
-		Horizon: engine.HorizonConfig{
-			MaxBlocks: 6, BlockTime: 12 * time.Second, TipFloorGwei: 0.02, FullBlockTipGwei: 0.1,
-			CongestedTipFloorGwei: 0.2, CongestedTipCapGwei: 15, CongestedRewardBlocks: 3, CongestedRewardPercentile: 50,
-			EscalateAfterFullBlocks: 2, StallAfterBlocks: 3, GasHeadroomBps: 500, FallbackGasHeadroomBps: 1000,
-		},
-	}
+func (c TxManager) SenderConfig() transaction.Config {
+	return transaction.Config{Confirmations: DefaultConfirmations, MaxFeeGwei: c.MaxFeeGwei}
 }

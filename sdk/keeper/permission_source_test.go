@@ -52,9 +52,6 @@ func (p *permissionProvider) PrepareRecipe(context.Context, provider.Snapshot, r
 	p.calls++
 	return []provider.Output{{}}, nil
 }
-func (*permissionProvider) Advance(context.Context, provider.Snapshot, provider.Output, json.RawMessage) (provider.Progress, error) {
-	return provider.Progress{Done: true}, nil
-}
 func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 	for _, mode := range []string{"valid", "local tree", "source error", "empty", "missing chain", "null chain", "wrong chain", "root", "account", "invalid unused leaf", "invalid unused proof", "mutate chain", "root during HTTP", "reorg during HTTP"} {
 		t.Run(mode, func(t *testing.T) {

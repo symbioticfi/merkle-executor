@@ -2,16 +2,13 @@ package cowswap
 
 import (
 	"context"
-	"encoding/json"
 	"math/big"
 	"strings"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	sb "github.com/symbioticfi/merkle-executor/sdk/bindings/cowsettlement"
-	ab "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
@@ -74,17 +71,11 @@ func TestAdvanceBatchesButPreservesTerminalPrecedence(t *testing.T) {
 			buf, _ := EncodeOrder(o)
 			domain := protocolio.Domain("Gnosis Protocol", "v2", s.ChainID, addr(4))
 			digest := protocolio.Digest(domain, crypto.Keccak256Hash(buf))
-			payload, err := ab.NewMerkleAccount().TryPackSign(domain, buf, []ab.IMerkleAccountHash{{Offset: big.NewInt(0), Length: big.NewInt(int64(len(buf))), Destination: big.NewInt(0)}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			d := prepared{Version: 1, FullAppData: full, SlippageBPS: defaultSlippageBPS, ChainID: "1", Account: s.Account, PreparedBlock: "12", Order: o, Digest: digest, UID: UID(digest, s.Account, uint32(o.ValidTo))}
+			d := prepared{FullAppData: full, SlippageBPS: defaultSlippageBPS, ChainID: "1", Account: s.Account, PreparedBlock: "12", Order: o, Digest: digest, UID: UID(digest, s.Account, uint32(o.ValidTo))}
 			if mode == "local identity" {
-				d.UID = "wrong"
+				d.Account = addr(99)
 			}
-			raw, _ := json.Marshal(d)
-			out := provider.Output{Data: raw, Actions: map[string]hexutil.Bytes{"1:0": payload}}
-			progress, err := p.Advance(context.Background(), s, out, nil)
+			progress, err := p.advance(context.Background(), s, d)
 			if mode == "local identity" {
 				if err == nil || r.calls != 0 {
 					t.Fatalf("local failure used RPC: %v %d", err, r.calls)

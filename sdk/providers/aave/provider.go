@@ -15,11 +15,8 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"github.com/symbioticfi/merkle-executor/sdk/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
-
-const policy = "aave-v3/native-capacity-v1"
 
 //go:embed lens/AaveBorrowProbe.json
 var artifactJSON []byte
@@ -29,9 +26,6 @@ type borrow struct {
 	Pool, Asset  common.Address
 	Floor        *big.Int
 	Before, Step uint
-}
-type saved struct {
-	Input uint `json:"input"`
 }
 
 func New(reader provider.Reader) (*Provider, error) {
@@ -59,7 +53,7 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 		return nil, err
 	}
 	if b == nil {
-		return derived.Empty(policy)
+		return []provider.Output{{}}, nil
 	}
 	if s.BlockNumber == nil || !s.BlockNumber.IsUint64() {
 		return nil, errors.New("Aave capacity requires pinned block")
@@ -82,26 +76,8 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 		return nil, errors.New("invalid Aave capacity reply")
 	}
 	out := provider.Output{Inputs: map[uint]string{0: values[0].(*big.Int).String()}, Results: recipes.ResultsWitness(witness)}
-	return derived.Encode(policy, saved{Input: 0}, out, true)
+	return []provider.Output{out}, nil
 }
-func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, _ json.RawMessage) (provider.Progress, error) {
-	if err := ctx.Err(); err != nil {
-		return provider.Progress{}, err
-	}
-	var cfg saved
-	inner, matched, err := derived.Decode(policy, out, &cfg)
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	if matched && (cfg.Input != 0 || len(inner.Inputs) != 1 || inner.Inputs[0] == "" || len(inner.Actions) != 0 || len(inner.SkipSteps) != 0) {
-		return provider.Progress{}, errors.New("persisted Aave capacity output differs")
-	}
-	if err := s.Execution.Validate(); err != nil {
-		return provider.Progress{}, err
-	}
-	return provider.Progress{Done: true}, nil
-}
-
 func derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (*borrow, error) {
 	actions, err := recipes.ManagedActions(r, t)
 	if err != nil {

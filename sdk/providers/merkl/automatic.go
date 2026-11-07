@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
-	"reflect"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -20,7 +19,6 @@ import (
 )
 
 const RewardAPI = "https://api.merkl.xyz"
-const automaticPolicy = "merkl/authenticated-claim-v1"
 
 type Automatic struct{ deps provider.Deps }
 type recipeClaim struct {
@@ -28,9 +26,6 @@ type recipeClaim struct {
 	cfg          Config
 	layout       *claimLayout
 	requirements keeper.RecipeRequirements
-}
-type automaticConfig struct {
-	Claims []Config `json:"claims"`
 }
 
 func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
@@ -132,7 +127,7 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		return nil, err
 	}
 	if len(claims) == 0 {
-		return derived.Empty(automaticPolicy)
+		return []provider.Output{{}}, nil
 	}
 	if err = protocolio.Snapshot(s); err != nil {
 		return nil, err
@@ -148,17 +143,17 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if err != nil {
 		return nil, err
 	}
+	reads := newRewardReads(ctx, p.deps, s, claims, entries)
 	if len(r.Queries) == 0 && len(r.Steps) == 1 && len(claims) == 1 && len(claims[0].action.Bindings) == 0 && len(claims[0].layout.tokens) == 1 && claims[0].action.Slot.Gate.Source == recipes.Literal && claims[0].action.Slot.Gate.Value.Cmp(big.NewInt(1)) == 0 {
-		return p.prepareAll(ctx, s, claims[0], entries)
+		return p.prepareAll(s, claims[0], entries, reads)
 	}
 	out := provider.Output{Inputs: map[uint]string{}, Actions: map[string]hexutil.Bytes{}}
-	cfg := automaticConfig{}
 	anyClaimable := false
 	allOptional := true
 	used := map[string]bool{}
 	for _, claim := range claims {
 		allOptional = allOptional && len(claim.cfg.ClaimableInputs) == 1
-		selected, prepared, err := p.prepareClaim(ctx, s, claim.cfg, entries, used)
+		selected, prepared, err := p.prepareClaim(s, claim.cfg, entries, used, reads)
 		if err != nil {
 			return nil, err
 		}
@@ -179,7 +174,6 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 			out.Inputs[index] = value
 		}
 		out.Actions[claim.cfg.Action] = payload
-		cfg.Claims = append(cfg.Claims, selected)
 		for _, token := range selected.Tokens {
 			used[selected.Distributor+token] = true
 		}
@@ -187,12 +181,12 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if !anyClaimable && !allOptional {
 		return nil, errors.Errorf("%w: Merkl rewards below minClaimable", provider.ErrNotReady)
 	}
-	return derived.Encode(automaticPolicy, cfg, out, true)
+	return []provider.Output{out}, nil
 }
 
 // A runtime reward token is chosen from proven, unclaimed API entries. The recipe
 // and permission mask still decide whether the supplied token is authorized.
-func (p *Automatic) prepareClaim(ctx context.Context, s provider.Snapshot, cfg Config, entries []wire.MerklEntry, used map[string]bool) (Config, provider.Output, error) {
+func (p *Automatic) prepareClaim(s provider.Snapshot, cfg Config, entries []wire.MerklEntry, used map[string]bool, reads *rewardReads) (Config, provider.Output, error) {
 	candidates := []string{""}
 	for _, token := range cfg.Tokens {
 		if common.HexToAddress(token) != (common.Address{}) {
@@ -224,7 +218,7 @@ func (p *Automatic) prepareClaim(ctx context.Context, s provider.Snapshot, cfg C
 		if err != nil {
 			return cfg, out, err
 		}
-		out, err = runtime.prepareRewards(s, entries, func() ([]multicall.Multicall3Result, error) { return runtime.readBatch(ctx, s) })
+		out, err = runtime.prepareRewards(s, entries, func() ([]multicall.Multicall3Result, error) { return reads.forProvider(runtime) })
 		if err != nil {
 			return cfg, out, err
 		}
@@ -240,33 +234,4 @@ func (p *Automatic) prepareClaim(ctx context.Context, s provider.Snapshot, cfg C
 		return cfg, out, errors.Errorf("%w: no Merkl reward token available", provider.ErrNotReady)
 	}
 	return cfg, out, nil
-}
-func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
-	var cfg automaticConfig
-	inner, matched, err := derived.Decode(automaticPolicy, out, &cfg)
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	if !matched {
-		return provider.Progress{Done: true}, nil
-	}
-	if len(cfg.Claims) == 0 || len(inner.SkipSteps) != 0 || len(inner.Actions) != len(cfg.Claims) {
-		return provider.Progress{}, errors.New("persisted Merkl claim shape differs")
-	}
-	seen := map[string]bool{}
-	for _, claim := range cfg.Claims {
-		actions := inner.Actions
-		if !reflect.DeepEqual(claim.HTTP, rewardHTTP()) || claim.Multicall3 != protocolio.StandardMulticall3 || claim.MinClaimable != "1" || claim.SkipIfEmpty || claim.DedicatedClaimGroup || len(claim.AmountInputs) != 0 || !claim.AllowIdle || len(claim.ClaimableInputs) > 1 || seen[claim.Action] || len(actions[claim.Action]) == 0 {
-			return provider.Progress{}, errors.New("persisted Merkl automatic constants differ")
-		}
-		seen[claim.Action] = true
-		runtime, err := New(claim, p.deps)
-		if err != nil {
-			return provider.Progress{}, err
-		}
-		if _, err = runtime.Advance(ctx, s, inner, state); err != nil {
-			return provider.Progress{}, err
-		}
-	}
-	return provider.Progress{Done: true}, nil
 }

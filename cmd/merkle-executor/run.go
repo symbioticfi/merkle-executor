@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -26,9 +27,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/providers/merkl"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/threef"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/merkle-executor/sdk/signer"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
-	"github.com/symbioticfi/merkle-executor/sdk/txmanager"
+	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 )
 
 type environment struct {
@@ -118,7 +117,7 @@ func openEnvironment(ctx context.Context, path string, httpClient *http.Client) 
 	}
 	strategies := make([]keeper.Strategy, 0, len(cfg.Strategies))
 	for _, sc := range cfg.Strategies {
-		s := keeper.Strategy{Config: keeper.Config{Name: sc, Executor: sc, Account: accounts[common.HexToAddress(sc)].Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(sc, accounts[common.HexToAddress(sc)], caller)}}
+		s := keeper.Strategy{Config: keeper.Config{Name: sc, Executor: sc, Account: accounts[common.HexToAddress(sc)].Hex(), Interval: config.DefaultStrategyInterval}}
 		for _, registration := range []struct {
 			name string
 			new  func(provider.Deps) (keeper.Provider, error)
@@ -150,56 +149,35 @@ func runBot(ctx context.Context, path string, once bool) error {
 }
 
 // runBotWithHTTP permits bounded official API fixture transports.
-func runBotWithHTTP(ctx context.Context, path string, once bool, httpClient *http.Client) error {
+func runBotWithHTTP(ctx context.Context, path string, once bool, httpClient *http.Client) (err error) {
 	env, err := openEnvironment(ctx, path, httpClient)
 	if err != nil {
 		return err
 	}
 	defer env.close()
-	cfg, client, planner, strategies, log := env.cfg, env.client, env.planner, env.strategies, env.log
-	caller, chainID := planner.Caller, planner.ChainID
-	var txSigner signer.Signer
-	if cfg.Mode == "send" {
-		txSigner, err = signerFromEnv(cfg.Signer.KeyEnv)
-		if err != nil {
-			return err
-		}
-		if txSigner.Address() != caller {
-			return errors.New("signer key does not match executor caller")
-		}
-	}
-	store, err := state.Open(cfg.StateDir)
+	cfg, strategies, log := env.cfg, env.strategies, env.log
+	metrics := observability.NewMetrics()
+	k, err := newKeeper(env)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
-	if err := bindState(store, cfg.Chain.ChainID, caller.Hex()); err != nil {
-		return err
-	}
-	metrics := observability.NewMetrics()
-	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: strategies, Mode: cfg.Mode, OperationTimeout: config.DefaultOperationTimeout, Log: log}
-	if cfg.Mode == "send" {
-		txm, err := txmanager.NewWithMetrics(client, txSigner, chainID, store, cfg.TxManager.EngineConfig(), log, metrics.Registerer())
-		if err != nil {
-			return err
+	defer func() {
+		if err != nil && k.Pending() {
+			err = errors.Errorf("runtime stopped with pending work; process-local tracking is lost: %w", err)
 		}
-		if err := txm.Start(ctx); err != nil {
-			return err
-		}
-		defer txm.Close()
-		k.Sender = txm
-	}
-	if err := k.CheckRecovery(); err != nil {
-		return err
-	}
+	}()
 	k.Observe = metrics.Observe
 	metrics.Ready(true)
 	defer metrics.Ready(false)
 	serverErrors := make(chan error, 1)
 	if cfg.Observability.Addr != "" {
 		server := metrics.Server(cfg.Observability.Addr)
+		listener, err := net.Listen("tcp", cfg.Observability.Addr)
+		if err != nil {
+			return errors.New("observability listener failed")
+		}
 		go func() {
-			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				serverErrors <- errors.New("observability server failed")
 			}
 		}()
@@ -213,17 +191,24 @@ func runBotWithHTTP(ctx context.Context, path string, once bool, httpClient *htt
 	for {
 		err := k.Tick(ctx)
 		metrics.Ready(err == nil)
-		if once {
+		if err != nil && ctx.Err() == nil {
+			log.Error(err, "runtime iteration failed", "pending", k.Pending())
+		}
+		if once && !k.Pending() {
 			return err
 		}
 		if ctx.Err() != nil {
-			return nil
+			return stopped(ctx, k)
 		}
-		timer := time.NewTimer(config.DefaultPollInterval)
+		interval := config.DefaultPollInterval
+		if k.Pending() {
+			interval = config.DefaultTransactionPollInterval
+		}
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil
+			return stopped(ctx, k)
 		case err := <-serverErrors:
 			timer.Stop()
 			return err
@@ -232,22 +217,27 @@ func runBotWithHTTP(ctx context.Context, path string, once bool, httpClient *htt
 	}
 }
 
-func bindState(store *state.Store, chainID uint64, caller string) error {
-	type identity struct {
-		ChainID uint64         `json:"chainId"`
-		Caller  common.Address `json:"caller"`
-	}
-	want := identity{ChainID: chainID, Caller: common.HexToAddress(caller)}
-	var old identity
-	found, err := store.Load("deployment.v1", &old)
-	if err != nil {
-		return err
-	}
-	if found {
-		if old != want {
-			return errors.New("state directory belongs to another chain or caller")
+func newKeeper(env *environment) (*keeper.Keeper, error) {
+	k := &keeper.Keeper{Planner: env.planner, Strategies: env.strategies, Mode: env.cfg.Mode, OperationTimeout: config.DefaultOperationTimeout, Log: env.log}
+	if env.cfg.Mode == "send" {
+		txSigner, err := signerFromEnv(env.cfg.Signer.KeyEnv)
+		if err != nil {
+			return nil, err
 		}
-		return nil
+		if txSigner.Address() != env.planner.Caller {
+			return nil, errors.New("signer key does not match executor caller")
+		}
+		k.Sender, err = transaction.New(env.client, txSigner, env.planner.ChainID, env.cfg.TxManager.SenderConfig(), env.log)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return store.Save("deployment.v1", want)
+	return k, nil
+}
+
+func stopped(ctx context.Context, k *keeper.Keeper) error {
+	if k.Pending() {
+		return ctx.Err()
+	}
+	return nil
 }
