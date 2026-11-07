@@ -3,18 +3,20 @@ package merkl
 import (
 	"context"
 	"encoding/json"
+	"math/big"
+	"strings"
+	"testing"
+
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	binding "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"math/big"
-	"strings"
-	"testing"
 )
 
 func TestAutomaticRestoreValidatesProofAndPreservesLegacyAssignmentsOffline(t *testing.T) {
@@ -39,11 +41,11 @@ func TestAutomaticRestoreValidatesProofAndPreservesLegacyAssignmentsOffline(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	records, err := ImportLegacy(deps, provider.Snapshot{ChainID: big.NewInt(1), Account: addr(3)}, legacy, provider.Progress{Done: true})
+	records, err := ImportLegacy(deps, chainio.Snapshot{ChainID: big.NewInt(1), Account: addr(3)}, legacy, provider.Progress{Done: true})
 	if err != nil || len(records) != 1 || !records[0].Progress.Done || records[0].ID != "1:0" {
 		t.Fatalf("offline import %+v %v", records, err)
 	}
-	if _, err = ImportLegacy(deps, provider.Snapshot{ChainID: big.NewInt(1), Account: addr(99)}, legacy, provider.Progress{}); err == nil {
+	if _, err = ImportLegacy(deps, chainio.Snapshot{ChainID: big.NewInt(1), Account: addr(99)}, legacy, provider.Progress{}); err == nil {
 		t.Fatal("legacy account mismatch accepted")
 	}
 	if _, err = integration.Restore(records[0]); err != nil {

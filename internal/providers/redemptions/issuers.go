@@ -12,13 +12,13 @@ import (
 	figure "github.com/symbioticfi/merkle-executor/api/bindings/figureyieldvault"
 	midas "github.com/symbioticfi/merkle-executor/api/bindings/midasredemption"
 	openeden "github.com/symbioticfi/merkle-executor/api/bindings/openedenexpress"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-func (p *Provider) midas(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {
+func (p *Provider) midas(ctx context.Context, s chainio.Snapshot, out *provider.Output) (*big.Int, error) {
 	a := midas.NewMidasRedemption()
-	group, err := protocolio.ReadGroup(ctx, p.deps.Chain, protocolio.ContractRead(p.target, a.PackMToken(), s.BlockNumber, true), protocolio.ContractRead(p.target, a.PackTokensConfig(p.asset), s.BlockNumber, true), protocolio.ContractRead(p.target, a.PackPaused(), s.BlockNumber, true), protocolio.ContractRead(p.target, a.PackMinAmount(), s.BlockNumber, true))
+	group, err := chainio.ReadGroup(ctx, p.deps.Chain, chainio.ContractRead(p.target, a.PackMToken(), s.BlockNumber, true), chainio.ContractRead(p.target, a.PackTokensConfig(p.asset), s.BlockNumber, true), chainio.ContractRead(p.target, a.PackPaused(), s.BlockNumber, true), chainio.ContractRead(p.target, a.PackMinAmount(), s.BlockNumber, true))
 	if err != nil {
 		return nil, err
 	}
@@ -51,13 +51,13 @@ func (p *Provider) midas(ctx context.Context, s provider.Snapshot, out *provider
 	return p.amount, nil
 }
 
-func (p *Provider) centrifuge(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {
+func (p *Provider) centrifuge(ctx context.Context, s chainio.Snapshot, out *provider.Output) (*big.Int, error) {
 	shares, a := share.NewCentrifugeShare(), async.NewAsyncRedeemVault()
-	requests := []protocolio.ReadRequest{protocolio.ContractRead(p.token, shares.PackVault(p.asset), s.BlockNumber, false), protocolio.ContractRead(p.target, a.PackAsset(), s.BlockNumber, false)}
+	requests := []chainio.ReadRequest{chainio.ContractRead(p.token, shares.PackVault(p.asset), s.BlockNumber, false), chainio.ContractRead(p.target, a.PackAsset(), s.BlockNumber, false)}
 	if p.cfg.Mode == "claim" {
-		requests = append(requests, protocolio.ContractRead(p.target, a.PackMaxRedeem(s.Account), s.BlockNumber, false))
+		requests = append(requests, chainio.ContractRead(p.target, a.PackMaxRedeem(s.Account), s.BlockNumber, false))
 	}
-	group, err := protocolio.ReadGroup(ctx, p.deps.Chain, requests...)
+	group, err := chainio.ReadGroup(ctx, p.deps.Chain, requests...)
 	if err != nil {
 		return nil, err
 	}
@@ -87,9 +87,9 @@ func (p *Provider) centrifuge(ctx context.Context, s provider.Snapshot, out *pro
 	return amount, nil
 }
 
-func (p *Provider) openeden(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {
+func (p *Provider) openeden(ctx context.Context, s chainio.Snapshot, out *provider.Output) (*big.Int, error) {
 	a := openeden.NewOpenEdenExpress()
-	group, err := protocolio.ReadGroup(ctx, p.deps.Chain, protocolio.ContractRead(p.target, a.PackToken(), s.BlockNumber, true), protocolio.ContractRead(p.target, a.PackRedeemAsset(), s.BlockNumber, true), protocolio.ContractRead(p.target, a.PackPausedRedeem(), s.BlockNumber, true), protocolio.ContractRead(p.target, a.PackRedeemMinimum(), s.BlockNumber, true))
+	group, err := chainio.ReadGroup(ctx, p.deps.Chain, chainio.ContractRead(p.target, a.PackToken(), s.BlockNumber, true), chainio.ContractRead(p.target, a.PackRedeemAsset(), s.BlockNumber, true), chainio.ContractRead(p.target, a.PackPausedRedeem(), s.BlockNumber, true), chainio.ContractRead(p.target, a.PackRedeemMinimum(), s.BlockNumber, true))
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (p *Provider) openeden(ctx context.Context, s provider.Snapshot, out *provi
 	return p.amount, nil
 }
 
-func (p *Provider) hastra(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {
+func (p *Provider) hastra(ctx context.Context, s chainio.Snapshot, out *provider.Output) (*big.Int, error) {
 	vault := erc4626.NewERC4626()
 	asset, err := read(ctx, p, s, p.target, vault.PackAsset(), vault.UnpackAsset)
 	if err != nil {
@@ -143,9 +143,9 @@ func (p *Provider) hastra(ctx context.Context, s provider.Snapshot, out *provide
 	return p.amount, nil
 }
 
-func (p *Provider) figure(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, *big.Int, error) {
+func (p *Provider) figure(ctx context.Context, s chainio.Snapshot, out *provider.Output) (*big.Int, *big.Int, error) {
 	a, vault := figure.NewFigureYieldVault(), erc4626.NewERC4626()
-	group, err := protocolio.ReadGroup(ctx, p.deps.Chain, protocolio.ContractRead(p.token, vault.PackAsset(), s.BlockNumber, true), protocolio.ContractRead(p.target, a.PackAsset(), s.BlockNumber, true), protocolio.ContractRead(p.target, a.PackPendingRedemptions(s.Account), s.BlockNumber, true), protocolio.ContractRead(p.token, vault.PackPreviewRedeem(p.amount), s.BlockNumber, true))
+	group, err := chainio.ReadGroup(ctx, p.deps.Chain, chainio.ContractRead(p.token, vault.PackAsset(), s.BlockNumber, true), chainio.ContractRead(p.target, a.PackAsset(), s.BlockNumber, true), chainio.ContractRead(p.target, a.PackPendingRedemptions(s.Account), s.BlockNumber, true), chainio.ContractRead(p.token, vault.PackPreviewRedeem(p.amount), s.BlockNumber, true))
 	if err != nil {
 		return nil, nil, err
 	}

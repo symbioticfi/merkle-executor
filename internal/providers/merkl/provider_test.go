@@ -16,6 +16,7 @@ import (
 	binding "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
@@ -100,7 +101,7 @@ func TestPrepareCumulativeSelfClaim(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			out, e := p.Prepare(context.Background(), provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
+			out, e := p.Prepare(context.Background(), chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
 			if test != "valid" {
 				if e == nil {
 					t.Fatalf("invalid %s accepted", test)
@@ -175,7 +176,7 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			out, e := p.Prepare(context.Background(), provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
+			out, e := p.Prepare(context.Background(), chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
 			switch test {
 			case "bad-proof", "redirected", "rpc-error", "malformed-response":
 				if e == nil || errors.Is(e, provider.ErrNotReady) {

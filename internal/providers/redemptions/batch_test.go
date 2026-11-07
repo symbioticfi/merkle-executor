@@ -18,7 +18,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretocdo"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretoqueue"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretostrategy"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
@@ -28,11 +28,11 @@ type batchIssuerReader struct {
 	failIndex int
 }
 
-func (r *batchIssuerReader) BatchRead(ctx context.Context, requests []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
+func (r *batchIssuerReader) BatchRead(ctx context.Context, requests []chainio.ReadRequest) ([]chainio.ReadResult, error) {
 	r.groups = append(r.groups, len(requests))
-	out := make([]protocolio.ReadResult, len(requests))
+	out := make([]chainio.ReadResult, len(requests))
 	for i, request := range requests {
-		if request.Kind != protocolio.ReadCall || request.Call.From != (common.Address{}) {
+		if request.Kind != chainio.ReadCall || request.Call.From != (common.Address{}) {
 			r.t.Fatal("issuer call context changed")
 		}
 		if i == r.failIndex {

@@ -18,6 +18,7 @@ import (
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -87,7 +88,7 @@ func sealAutomaticTree(t *testing.T, recipe *recipes.Recipe, tree *recipes.Tree)
 	tree.Root = crypto.Keccak256Hash(a[:], b[:])
 }
 
-func automaticRecipe(t *testing.T, cfg Config, s provider.Snapshot, reader provider.Reader) (recipes.Recipe, *recipes.Tree) {
+func automaticRecipe(t *testing.T, cfg Config, s chainio.Snapshot, reader chainio.Reader) (recipes.Recipe, *recipes.Tree) {
 	t.Helper()
 	runtime, err := New(cfg, registry.Deps{Chain: reader})
 	if err != nil {
@@ -314,7 +315,7 @@ func TestAutomaticIssuerRejectsDurablePolicyAndPayloadChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	progress, err := p.Advance(context.Background(), provider.Snapshot{}, empty, nil)
+	progress, err := p.Advance(context.Background(), chainio.Snapshot{}, empty, nil)
 	if err != nil || !progress.Done {
 		t.Fatal("unmatched issuer blocked unrelated recipe")
 	}

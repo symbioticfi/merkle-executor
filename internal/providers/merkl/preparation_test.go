@@ -16,22 +16,23 @@ import (
 	multicall "github.com/symbioticfi/merkle-executor/api/bindings/multicall3"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-type stagedBatchReader struct{ reader }
+type preparationBatchReader struct{ reader }
 
-func (r stagedBatchReader) BatchRead(ctx context.Context, qs []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
-	results := make([]protocolio.ReadResult, len(qs))
+func (r preparationBatchReader) BatchRead(ctx context.Context, qs []chainio.ReadRequest) ([]chainio.ReadResult, error) {
+	results := make([]chainio.ReadResult, len(qs))
 	for i, q := range qs {
 		results[i].Data, results[i].Err = r.CallContract(ctx, q.Call, q.Block)
 	}
 	return results, nil
 }
-func TestMerklStagedPreparationPreservesAPIEligibilityAndLazyErrors(t *testing.T) {
+func TestMerklPreparePreservesAPIEligibilityAndLazyReadErrors(t *testing.T) {
 	for _, batched := range []bool{false, true} {
-		for _, mode := range []string{"valid", "absent", "absent skip", "member error", "malformed", "wrong count", "getter failure", "pin mismatch", "cancel"} {
+		for _, mode := range []string{"valid", "absent", "absent skip", "member error", "malformed", "wrong count", "getter failure", "invalid snapshot", "cancel"} {
 			t.Run(mode+map[bool]string{false: "/single", true: "/batch"}[batched], func(t *testing.T) {
 				apiCalls, chainCalls := 0, 0
 				root := common.HexToHash("0xd98400418a73f31e4b681498ddc089b9c9b92f409942f76789590c1cae24f0ab")
@@ -51,7 +52,7 @@ func TestMerklStagedPreparationPreservesAPIEligibilityAndLazyErrors(t *testing.T
 				chain := reader(func(_ context.Context, m ethereum.CallMsg, b *big.Int) ([]byte, error) {
 					chainCalls++
 					if b == nil || b.Uint64() != 12 || m.To == nil || *m.To != addr(5) {
-						t.Fatal("staged read escaped pin")
+						t.Fatal("preparation read escaped pin")
 					}
 					if mode == "member error" || mode == "absent" || mode == "absent skip" {
 						return nil, errors.New("unused speculative getter failure")
@@ -76,41 +77,34 @@ func TestMerklStagedPreparationPreservesAPIEligibilityAndLazyErrors(t *testing.T
 					}
 					return multicall.NewMulticall3().GetABI().Methods["aggregate3"].Outputs.Pack(values)
 				})
-				p, err := New(Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: 452, AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: mode == "absent skip", DedicatedClaimGroup: mode == "absent skip"}, registry.Deps{Chain: chain, HTTP: srv.Client()})
+				var backend chainio.Reader = chain
+				if batched {
+					backend = preparationBatchReader{chain}
+				}
+				p, err := New(Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: 452, AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: mode == "absent skip", DedicatedClaimGroup: mode == "absent skip"}, registry.Deps{Chain: backend, HTTP: srv.Client()})
 				if err != nil {
 					t.Fatal(err)
 				}
-				pin := protocolio.PreparationPin{ChainID: "1", BlockNumber: 12, BlockHash: common.HexToHash("0x12"), Timestamp: 144, Executor: addr(6), Account: addr(3), Caller: addr(7)}
-				plan, err := p.PlanPreparation(pin)
-				if err != nil || chainCalls != 0 || apiCalls != 0 || len(plan.Requests) != 1 || plan.Requests[0].MulticallSafe {
-					t.Fatalf("planning performed I/O/nested aggregate: %v", err)
-				}
-				var backend any = chain
-				if batched {
-					backend = stagedBatchReader{chain}
-				}
+
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				reads, err := protocolio.ReadGroup(ctx, backend, plan.Requests...)
-				if err != nil {
-					t.Fatal(err)
+				s := chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), BlockHash: common.HexToHash("0x12"), Timestamp: 144, Executor: addr(6), Account: addr(3), Caller: addr(7)}
+				if mode == "invalid snapshot" {
+					s.BlockNumber = nil
 				}
-				s := provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), BlockHash: pin.BlockHash, Timestamp: pin.Timestamp, Executor: pin.Executor, Account: pin.Account, Caller: pin.Caller}
-				if mode == "pin mismatch" {
-					s.BlockNumber = big.NewInt(13)
-				}
+
 				if mode == "cancel" {
 					cancel()
 				}
-				out, err := plan.Resolve(ctx, s, reads.At)
+				out, err := p.Prepare(ctx, s)
 				switch mode {
 				case "valid":
 					if err != nil || out.Inputs[0] != "100" || out.Inputs[1] != "20" || chainCalls != 1 || apiCalls != 1 {
-						t.Fatalf("staged claim changed: %+v %v calls%d API%d", out, err, chainCalls, apiCalls)
+						t.Fatalf("prepared claim changed: %+v %v calls%d API%d", out, err, chainCalls, apiCalls)
 					}
 					direct, e := p.Prepare(t.Context(), s)
 					if e != nil || !reflect.DeepEqual(out, direct) {
-						t.Fatalf("direct and staged outputs differ: %v", e)
+						t.Fatalf("direct and repeated outputs differ: %v", e)
 					}
 				case "absent":
 					if !errors.Is(err, provider.ErrNotReady) {
@@ -122,17 +116,17 @@ func TestMerklStagedPreparationPreservesAPIEligibilityAndLazyErrors(t *testing.T
 					}
 				default:
 					if err == nil {
-						t.Fatal("invalid staged read accepted")
+						t.Fatal("invalid preparation read accepted")
 					}
 				}
-				if (mode == "pin mismatch" || mode == "cancel") && apiCalls != 0 {
+				if (mode == "invalid snapshot" || mode == "cancel") && apiCalls != 0 {
 					t.Fatal("invalid identity/cancellation reached API")
 				}
-				if !batched && (mode == "absent" || mode == "absent skip" || mode == "pin mismatch" || mode == "cancel") && chainCalls != 0 {
-					t.Fatal("single unused staged read executed")
+				if !batched && (mode == "absent" || mode == "absent skip" || mode == "invalid snapshot" || mode == "cancel") && chainCalls != 0 {
+					t.Fatal("unused preparation read executed")
 				}
 				if chainCalls > 1 && mode != "valid" {
-					t.Fatal("staged result retried")
+					t.Fatal("preparation result retried")
 				}
 			})
 		}

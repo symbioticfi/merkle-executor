@@ -19,9 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-
 	"github.com/symbioticfi/merkle-executor/sdk/chainio"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 // HTTPConfig never accepts literal credentials. All errors omit URLs, response bodies and headers.
@@ -120,14 +118,13 @@ func (c *Client) JSON(ctx context.Context, method, path string, in, out any) (in
 	}
 	return resp.StatusCode, nil
 }
-func Snapshot(s provider.Snapshot) error { return chainio.ValidateSnapshot(s) }
 
 // CallData performs a pinned raw read; callers use generated typed Pack/Unpack methods.
-func CallData(ctx context.Context, r provider.Reader, s provider.Snapshot, to common.Address, data []byte) ([]byte, error) {
+func CallData(ctx context.Context, r chainio.Reader, s chainio.Snapshot, to common.Address, data []byte) ([]byte, error) {
 	if r == nil {
 		return nil, errors.New("protocol chain reader required")
 	}
-	if e := Snapshot(s); e != nil {
+	if e := chainio.ValidateSnapshot(s); e != nil {
 		return nil, e
 	}
 	if len(data) < 4 {
@@ -170,10 +167,4 @@ func Domain(name, version string, chainID *big.Int, contract common.Address) com
 }
 func Digest(domain, structure common.Hash) common.Hash {
 	return crypto.Keccak256Hash([]byte{0x19, 0x01}, domain.Bytes(), structure.Bytes())
-}
-
-// Canonical checks the pinned hash after external I/O and before external mutations.
-// Numeric-block eth_call alone cannot detect an intervening reorganization.
-func Canonical(ctx context.Context, r provider.Reader, s provider.Snapshot) error {
-	return chainio.Canonical(ctx, r, s)
 }

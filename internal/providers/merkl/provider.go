@@ -14,11 +14,11 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-
 	binding "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
 	multicall "github.com/symbioticfi/merkle-executor/api/bindings/multicall3"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -161,38 +161,8 @@ func New(c Config, deps providerRegistry.Deps) (*Provider, error) {
 	}
 	return p, nil
 }
-func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.Output, error) {
-	return p.prepare(ctx, s, func() ([]multicall.Multicall3Result, error) { return p.readBatch(ctx, s) })
-}
-
-// PlanPreparation only encodes configured reads. The strict aggregate stays an
-// isolated eth_call; it must not be nested inside the host's safe-getter aggregate.
-func (p *Provider) PlanPreparation(pin protocolio.PreparationPin) (protocolio.PreparationPlan, error) {
-	if err := pin.Validate(); err != nil {
-		return protocolio.PreparationPlan{}, err
-	}
-	payload, err := p.batchPayload(pin.Account)
-	if err != nil {
-		return protocolio.PreparationPlan{}, err
-	}
-	return protocolio.PreparationPlan{
-		Requests: []protocolio.ReadRequest{protocolio.ContractRead(p.multicall, payload, new(big.Int).SetUint64(pin.BlockNumber), false)},
-		Resolve: func(ctx context.Context, s provider.Snapshot, read protocolio.ReadAccessor) (provider.Output, error) {
-			if !pin.Matches(s) {
-				return provider.Output{}, errors.New("Merkl staged identity mismatch")
-			}
-			return p.prepare(ctx, s, func() ([]multicall.Multicall3Result, error) {
-				raw, err := read(0).CallData()
-				if err != nil {
-					return nil, err
-				}
-				return p.decodeBatch(raw)
-			})
-		},
-	}, nil
-}
-func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, read func() ([]multicall.Multicall3Result, error)) (provider.Output, error) {
-	if e := protocolio.Snapshot(s); e != nil {
+func (p *Provider) Prepare(ctx context.Context, s chainio.Snapshot) (provider.Output, error) {
+	if e := chainio.ValidateSnapshot(s); e != nil {
 		return provider.Output{}, e
 	}
 	if !s.ChainID.IsInt64() {
@@ -240,7 +210,7 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, read func()
 		}
 	}
 	a := binding.NewMerklDistributor()
-	results, e := read()
+	results, e := p.readBatch(ctx, s)
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -372,19 +342,23 @@ func VerifyProof(user, token common.Address, amount *big.Int, proof [][32]byte, 
 	}
 	return h == root
 }
-func (p *Provider) Advance(_ context.Context, _ provider.Snapshot, _ provider.Output, _ json.RawMessage) (provider.Progress, error) {
+func (p *Provider) Advance(_ context.Context, _ chainio.Snapshot, _ provider.Output, _ json.RawMessage) (provider.Progress, error) {
 	return provider.Progress{Done: true}, nil
 }
 
 // readBatch fetches the entire bounded distributor snapshot in one eth_call.
 // Every getter is required to execute successfully; decoding the default recipient
 // stays lazy because explicit per-token recipients override that value.
-func (p *Provider) readBatch(ctx context.Context, s provider.Snapshot) ([]multicall.Multicall3Result, error) {
+func (p *Provider) readBatch(ctx context.Context, s chainio.Snapshot) ([]multicall.Multicall3Result, error) {
 	payload, err := p.batchPayload(s.Account)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := protocolio.CallData(ctx, p.deps.Chain, s, p.multicall, payload)
+	reads, err := chainio.ReadGroup(ctx, p.deps.Chain, chainio.ContractRead(p.multicall, payload, s.BlockNumber, false))
+	if err != nil {
+		return nil, err
+	}
+	raw, err := reads.At(0).CallData()
 	if err != nil {
 		return nil, err
 	}

@@ -19,6 +19,7 @@ import (
 	multicall "github.com/symbioticfi/merkle-executor/api/bindings/multicall3"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
@@ -160,7 +161,7 @@ func TestPrepareRejectsInvalidAggregateWithoutIndividualFallback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			out, err := p.Prepare(ctx, provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
+			out, err := p.Prepare(ctx, chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
 			if calls != 1 {
 				t.Fatalf("aggregate failure used %d RPC calls; individual fallback is unsupported", calls)
 			}
@@ -250,7 +251,7 @@ func TestPrepareValidatesWholeBatchBeforeReturningIdle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			out, err := p.Prepare(context.Background(), provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
+			out, err := p.Prepare(context.Background(), chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
 			if err == nil || len(out.Actions) != 0 || len(out.SkipSteps) != 0 {
 				t.Fatalf("incomplete batch became usable claim/skip: %+v %v", out, err)
 			}

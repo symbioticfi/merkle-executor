@@ -5,9 +5,8 @@ import (
 	"io"
 
 	"github.com/go-errors/errors"
-	"gopkg.in/yaml.v3"
-
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
+	"gopkg.in/yaml.v3"
 )
 
 // Catalog is an operator-reviewed snapshot, not permission to adopt feed changes.

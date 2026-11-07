@@ -9,9 +9,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 type executionReader struct {
@@ -29,10 +28,10 @@ func (r *executionReader) HeaderByNumber(_ context.Context, number *big.Int) (*t
 	return nil, ethereum.NotFound
 }
 
-func executionSnapshot() (provider.Snapshot, *executionReader) {
+func executionSnapshot() (chainio.Snapshot, *executionReader) {
 	receipt := &types.Header{Number: big.NewInt(10), Time: 100}
 	pinned := &types.Header{Number: big.NewInt(11), Time: 110, ParentHash: receipt.Hash()}
-	return provider.Snapshot{ChainID: big.NewInt(1), Account: common.HexToAddress("0x20"), BlockNumber: big.NewInt(11), BlockHash: pinned.Hash(), Timestamp: 110, Execution: &provider.Execution{TxHash: common.HexToHash("0xfeed"), BlockNumber: big.NewInt(10), BlockHash: receipt.Hash()}}, &executionReader{headers: map[uint64]*types.Header{10: receipt, 11: pinned}}
+	return chainio.Snapshot{ChainID: big.NewInt(1), Account: common.HexToAddress("0x20"), BlockNumber: big.NewInt(11), BlockHash: pinned.Hash(), Timestamp: 110, Execution: &chainio.Execution{TxHash: common.HexToHash("0xfeed"), BlockNumber: big.NewInt(10), BlockHash: receipt.Hash()}}, &executionReader{headers: map[uint64]*types.Header{10: receipt, 11: pinned}}
 }
 
 func TestExecutionRequiresCanonicalReceiptBeforePinnedSnapshot(t *testing.T) {
@@ -49,7 +48,7 @@ func TestExecutionRequiresCanonicalReceiptBeforePinnedSnapshot(t *testing.T) {
 			case "orphaned-snapshot":
 				reader.headers[11].Extra = []byte("fork")
 			}
-			err := Execution(context.Background(), reader, s)
+			err := chainio.VerifyExecution(context.Background(), reader, s)
 			if (err == nil) != (mode == "valid") {
 				t.Fatalf("execution validation: %v", err)
 			}
@@ -57,7 +56,7 @@ func TestExecutionRequiresCanonicalReceiptBeforePinnedSnapshot(t *testing.T) {
 	}
 }
 
-func manageEvent(t *testing.T, s provider.Snapshot, index uint, calls ...ManagedCall) types.Log {
+func manageEvent(t *testing.T, s chainio.Snapshot, index uint, calls ...ManagedCall) types.Log {
 	t.Helper()
 	a := account.NewMerkleAccount()
 	actions := make([]account.IMerkleAccountAction, len(calls))

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
-
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretocdo"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretostrategy"
 )

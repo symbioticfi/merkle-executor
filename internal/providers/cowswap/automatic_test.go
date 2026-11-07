@@ -3,6 +3,9 @@ package cowswap
 import (
 	"context"
 	"encoding/json"
+	"math/big"
+	"testing"
+
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -11,8 +14,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"math/big"
-	"testing"
 )
 
 func TestAutomaticRestoreRetainsSupportedExpiryInputBeforeIO(t *testing.T) {

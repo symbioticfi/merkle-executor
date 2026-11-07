@@ -9,11 +9,11 @@ import (
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretocdo"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretoqueue"
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretostrategy"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-func (p *Provider) pareto(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {
+func (p *Provider) pareto(ctx context.Context, s chainio.Snapshot, out *provider.Output) (*big.Int, error) {
 	queue, cdo, strategy := paretoqueue.NewParetoQueue(), paretocdo.NewParetoCDO(), paretostrategy.NewParetoStrategy()
 	type addressCheck struct {
 		target   common.Address
@@ -40,12 +40,12 @@ func (p *Provider) pareto(ctx context.Context, s provider.Snapshot, out *provide
 		)
 	}
 	base := len(checks)
-	requests := make([]protocolio.ReadRequest, 0, 14)
+	requests := make([]chainio.ReadRequest, 0, 14)
 	for _, check := range checks {
-		requests = append(requests, protocolio.ContractRead(check.target, check.data, s.BlockNumber, true))
+		requests = append(requests, chainio.ContractRead(check.target, check.data, s.BlockNumber, true))
 	}
 	add := func(target common.Address, data []byte) {
-		requests = append(requests, protocolio.ContractRead(target, data, s.BlockNumber, true))
+		requests = append(requests, chainio.ContractRead(target, data, s.BlockNumber, true))
 	}
 	switch p.cfg.Mode {
 	case "queue-request", "direct-request":
@@ -66,7 +66,7 @@ func (p *Provider) pareto(ctx context.Context, s provider.Snapshot, out *provide
 		add(p.strategy, strategy.PackInstantWithdrawsRequests(s.Account))
 		add(p.cdo, cdo.PackAllowInstantWithdraw())
 	}
-	group, err := protocolio.ReadGroup(ctx, p.deps.Chain, requests...)
+	group, err := chainio.ReadGroup(ctx, p.deps.Chain, requests...)
 	if err != nil {
 		return nil, err
 	}

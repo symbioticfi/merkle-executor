@@ -15,11 +15,11 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-
 	settlementbinding "github.com/symbioticfi/merkle-executor/api/bindings/cowsettlement"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -151,7 +151,7 @@ func New(c Config, deps providerRegistry.Deps) (*Provider, error) {
 	p.volumeBPS = volumeSuggestion(bff)
 	return p, nil
 }
-func (p *Provider) domain(ctx context.Context, s provider.Snapshot) (common.Hash, error) {
+func (p *Provider) domain(ctx context.Context, s chainio.Snapshot) (common.Hash, error) {
 	d := protocolio.Domain("Gnosis Protocol", "v2", s.ChainID, p.settlement)
 	a := settlementbinding.NewCowSettlement()
 	raw, e := protocolio.CallData(ctx, p.deps.Chain, s, p.settlement, a.PackDomainSeparator())
@@ -167,8 +167,8 @@ func (p *Provider) domain(ctx context.Context, s provider.Snapshot) (common.Hash
 	}
 	return d, nil
 }
-func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.Output, error) {
-	if e := protocolio.Snapshot(s); e != nil {
+func (p *Provider) Prepare(ctx context.Context, s chainio.Snapshot) (provider.Output, error) {
+	if e := chainio.ValidateSnapshot(s); e != nil {
 		return provider.Output{}, e
 	}
 	if s.Timestamp > uint64(^uint32(0))-p.cfg.ValiditySeconds {
@@ -256,7 +256,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if e != nil {
 		return provider.Output{}, errors.New("encode CoW account authorization")
 	}
-	if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
+	if e := chainio.Canonical(ctx, p.deps.Chain, s); e != nil {
 		return provider.Output{}, e
 	}
 	data, e := json.Marshal(prepared{Version: 1, ChainID: s.ChainID.String(), Account: s.Account, PreparedBlock: s.BlockNumber.String(), Order: o, Digest: digest, UID: uid, FullAppData: fullAppData, SlippageBPS: slippageBPS})
@@ -273,10 +273,10 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	return provider.Output{Inputs: inputs, Actions: map[string]hexutil.Bytes{p.cfg.Action: payload}, Data: data}, nil
 }
 
-// Advance is called only after the keeper confirms the authorization recipe.
+// Advance is called only after the runtime confirms the authorization recipe.
 // A current confirmed Snapshot is required; API state alone can never mark a fill done.
-func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, _ json.RawMessage) (provider.Progress, error) {
-	if e := protocolio.Snapshot(s); e != nil {
+func (p *Provider) Advance(ctx context.Context, s chainio.Snapshot, out provider.Output, _ json.RawMessage) (provider.Progress, error) {
+	if e := chainio.ValidateSnapshot(s); e != nil {
 		return provider.Progress{}, e
 	}
 	var d prepared
@@ -322,10 +322,10 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	}
 	settlement := settlementbinding.NewCowSettlement()
 	account := accountbinding.NewMerkleAccount()
-	reads, e := protocolio.ReadGroup(ctx, p.deps.Chain,
-		protocolio.ContractRead(p.settlement, settlement.PackDomainSeparator(), s.BlockNumber, true),
-		protocolio.ContractRead(p.settlement, settlement.PackFilledAmount(uidBytes), s.BlockNumber, true),
-		protocolio.ContractRead(s.Account, account.PackSignatures(d.Digest), s.BlockNumber, true))
+	reads, e := chainio.ReadGroup(ctx, p.deps.Chain,
+		chainio.ContractRead(p.settlement, settlement.PackDomainSeparator(), s.BlockNumber, true),
+		chainio.ContractRead(p.settlement, settlement.PackFilledAmount(uidBytes), s.BlockNumber, true),
+		chainio.ContractRead(s.Account, account.PackSignatures(d.Digest), s.BlockNumber, true))
 	if e != nil {
 		return provider.Progress{}, e
 	}
@@ -351,7 +351,7 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	}
 	orderSell, _ := parse.Uint256(d.Order.SellAmount)
 	if filled.Cmp(orderSell) == 0 {
-		if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
+		if e := chainio.Canonical(ctx, p.deps.Chain, s); e != nil {
 			return provider.Progress{}, e
 		}
 		return progress(d, "settled", true), nil
@@ -360,7 +360,7 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 		return progress(d, "invalidated-or-unexpected-fill", false), errors.New("CoW order invalidated or has unexpected partial fill")
 	}
 	if uint64(d.Order.ValidTo) < s.Timestamp {
-		if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
+		if e := chainio.Canonical(ctx, p.deps.Chain, s); e != nil {
 			return provider.Progress{}, e
 		}
 		return progress(d, "expired", true), nil
@@ -377,7 +377,7 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 		return progress(d, "authorization-missing", false), errors.New("CoW account digest is not approved at confirmed snapshot")
 	}
 	remote, status, e := p.client.Get(ctx, d.UID)
-	if canonicalErr := protocolio.Canonical(ctx, p.deps.Chain, s); canonicalErr != nil {
+	if canonicalErr := chainio.Canonical(ctx, p.deps.Chain, s); canonicalErr != nil {
 		return provider.Progress{}, canonicalErr
 	}
 	if e == nil {
@@ -398,7 +398,7 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	if status != http.StatusNotFound {
 		return progress(d, "lookup-uncertain", false), e
 	}
-	if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
+	if e := chainio.Canonical(ctx, p.deps.Chain, s); e != nil {
 		return provider.Progress{}, e
 	}
 	postOrder := d.Order

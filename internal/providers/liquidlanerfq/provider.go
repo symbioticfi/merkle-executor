@@ -19,6 +19,7 @@ import (
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -44,8 +45,8 @@ type Config struct {
 	EventRangeBlocks   uint64                `yaml:"eventRangeBlocks"`
 }
 type chainReader interface {
-	provider.Reader
-	provider.LogReader
+	chainio.Reader
+	chainio.LogReader
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 	TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)
 }
@@ -144,28 +145,17 @@ func New(c Config, deps registry.Deps) (*Provider, error) {
 	p.http, err = protocolio.NewHTTP(c.HTTP, deps.HTTP)
 	return p, err
 }
-func (p *Provider) PlanPreparation(pin protocolio.PreparationPin) (protocolio.PreparationPlan, error) {
-	if err := pin.Validate(); err != nil {
-		return protocolio.PreparationPlan{}, err
-	}
-	return protocolio.PreparationPlan{Requests: []protocolio.ReadRequest{protocolio.ContractRead(p.reactor, reactor.NewLiquidLaneReactor().PackEip712Domain(), new(big.Int).SetUint64(pin.BlockNumber), true)}, Resolve: func(ctx context.Context, s provider.Snapshot, at protocolio.ReadAccessor) (provider.Output, error) {
-		if !pin.Matches(s) {
-			return provider.Output{}, errors.New("RFQ staged identity mismatch")
-		}
-		return p.prepare(ctx, s, at(0))
-	}}, nil
-}
-func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.Output, error) {
-	if err := protocolio.Snapshot(s); err != nil {
+func (p *Provider) Prepare(ctx context.Context, s chainio.Snapshot) (provider.Output, error) {
+	if err := chainio.ValidateSnapshot(s); err != nil {
 		return provider.Output{}, err
 	}
-	reads, err := protocolio.ReadGroup(ctx, p.chain, protocolio.ContractRead(p.reactor, reactor.NewLiquidLaneReactor().PackEip712Domain(), s.BlockNumber, true))
+	reads, err := chainio.ReadGroup(ctx, p.chain, chainio.ContractRead(p.reactor, reactor.NewLiquidLaneReactor().PackEip712Domain(), s.BlockNumber, true))
 	if err != nil {
 		return provider.Output{}, err
 	}
 	return p.prepare(ctx, s, reads.At(0))
 }
-func (p *Provider) domain(s provider.Snapshot, result protocolio.ReadResult) (common.Hash, error) {
+func (p *Provider) domain(s chainio.Snapshot, result chainio.ReadResult) (common.Hash, error) {
 	raw, err := result.CallData()
 	if err != nil {
 		return common.Hash{}, err
@@ -176,8 +166,8 @@ func (p *Provider) domain(s provider.Snapshot, result protocolio.ReadResult) (co
 	}
 	return protocolio.Domain("Reactor", "1", s.ChainID, p.reactor), nil
 }
-func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResult protocolio.ReadResult) (provider.Output, error) {
-	if err := protocolio.Snapshot(s); err != nil {
+func (p *Provider) prepare(ctx context.Context, s chainio.Snapshot, domainResult chainio.ReadResult) (provider.Output, error) {
+	if err := chainio.ValidateSnapshot(s); err != nil {
 		return provider.Output{}, err
 	}
 	if !s.BlockNumber.IsUint64() || !s.ChainID.IsUint64() || s.ChainID.Uint64() > maxSafeInteger || s.Timestamp > maxSafeInteger-p.cfg.MaxValiditySeconds {
@@ -223,7 +213,7 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 		if deadline < s.Timestamp+p.cfg.MinValiditySeconds || deadline > s.Timestamp+p.cfg.MaxValiditySeconds || request.Outputs[0].Amount.Cmp(p.minimum) < 0 {
 			continue
 		}
-		reads, err := protocolio.ReadGroup(ctx, p.chain, protocolio.ContractRead(p.reactor, reactor.NewLiquidLaneReactor().PackIsUsedNonce(s.Account, request.Nonce), s.BlockNumber, true))
+		reads, err := chainio.ReadGroup(ctx, p.chain, chainio.ContractRead(p.reactor, reactor.NewLiquidLaneReactor().PackIsUsedNonce(s.Account, request.Nonce), s.BlockNumber, true))
 		if err != nil {
 			return provider.Output{}, err
 		}
@@ -242,7 +232,7 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 		if err != nil {
 			return provider.Output{}, err
 		}
-		if err = protocolio.Canonical(ctx, p.chain, s); err != nil {
+		if err = chainio.Canonical(ctx, p.chain, s); err != nil {
 			return provider.Output{}, err
 		}
 		saved, err := json.Marshal(prepared{Version: 1, ChainID: s.ChainID.String(), Account: s.Account, Reactor: p.reactor, Protocol: p.protocol, PreparedBlock: s.BlockNumber.Uint64(), Quote: append(json.RawMessage(nil), option.Quote...), Request: request, Digest: digest, Signature: "0x00"})
@@ -266,7 +256,7 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 	}
 	return provider.Output{}, provider.ErrNotReady
 }
-func (p *Provider) persisted(s provider.Snapshot, out provider.Output) (prepared, common.Hash, error) {
+func (p *Provider) persisted(s chainio.Snapshot, out provider.Output) (prepared, common.Hash, error) {
 	var d prepared
 	if err := strictJSON(out.Data, &d); err != nil || d.Version != 1 || d.ChainID != s.ChainID.String() || d.Account != s.Account || d.Reactor != p.reactor || d.Protocol != p.protocol || d.Signature != "0x00" || !s.BlockNumber.IsUint64() || s.BlockNumber.Uint64() < d.PreparedBlock {
 		return d, common.Hash{}, errors.New("RFQ persisted identity mismatch")
@@ -309,15 +299,15 @@ func (p *Provider) persisted(s provider.Snapshot, out provider.Output) (prepared
 	}
 	return d, domain, nil
 }
-func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
-	if err := protocolio.Snapshot(s); err != nil {
+func (p *Provider) Advance(ctx context.Context, s chainio.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+	if err := chainio.ValidateSnapshot(s); err != nil {
 		return provider.Progress{}, err
 	}
 	d, domain, err := p.persisted(s, out)
 	if err != nil {
 		return provider.Progress{}, err
 	}
-	if err = protocolio.Execution(ctx, p.chain, s); err != nil {
+	if err = chainio.VerifyExecution(ctx, p.chain, s); err != nil {
 		return provider.Progress{}, err
 	}
 	if err = authorizingSign(s.Execution, d, domain); err != nil {
@@ -332,7 +322,7 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	r := reactor.NewLiquidLaneReactor()
 	a := account.NewMerkleAccount()
 	token := erc20.NewERC20()
-	reads, err := protocolio.ReadGroup(ctx, p.chain, protocolio.ContractRead(p.reactor, r.PackEip712Domain(), s.BlockNumber, true), protocolio.ContractRead(p.reactor, r.PackIsUsedNonce(s.Account, d.Request.Nonce), s.BlockNumber, true), protocolio.ContractRead(s.Account, a.PackSignatures(d.Digest), s.BlockNumber, true), protocolio.ContractRead(p.tokenIn, token.PackBalanceOf(s.Account), s.BlockNumber, false), protocolio.ContractRead(p.tokenIn, token.PackAllowance(s.Account, p.reactor), s.BlockNumber, false))
+	reads, err := chainio.ReadGroup(ctx, p.chain, chainio.ContractRead(p.reactor, r.PackEip712Domain(), s.BlockNumber, true), chainio.ContractRead(p.reactor, r.PackIsUsedNonce(s.Account, d.Request.Nonce), s.BlockNumber, true), chainio.ContractRead(s.Account, a.PackSignatures(d.Digest), s.BlockNumber, true), chainio.ContractRead(p.tokenIn, token.PackBalanceOf(s.Account), s.BlockNumber, false), chainio.ContractRead(p.tokenIn, token.PackAllowance(s.Account, p.reactor), s.BlockNumber, false))
 	if err != nil {
 		return provider.Progress{}, err
 	}
@@ -352,7 +342,7 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 		return provider.Progress{}, err
 	}
 	finish := func(name string, done bool) (provider.Progress, error) {
-		if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
+		if err := chainio.Canonical(ctx, p.chain, s); err != nil {
 			return provider.Progress{}, err
 		}
 		if done {
@@ -401,7 +391,7 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	if err != nil {
 		return provider.Progress{}, err
 	}
-	if err = protocolio.Canonical(ctx, p.chain, s); err != nil {
+	if err = chainio.Canonical(ctx, p.chain, s); err != nil {
 		return provider.Progress{}, err
 	}
 	if !complete {
@@ -424,5 +414,3 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	st.OrderID = response.OrderID
 	return finish("published", false)
 }
-
-var _ provider.Provider = (*Provider)(nil)

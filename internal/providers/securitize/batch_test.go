@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 type securitizeBatchReader struct {
@@ -16,9 +16,9 @@ type securitizeBatchReader struct {
 	failStage, failIndex int
 }
 
-func (r *securitizeBatchReader) BatchRead(ctx context.Context, req []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
+func (r *securitizeBatchReader) BatchRead(ctx context.Context, req []chainio.ReadRequest) ([]chainio.ReadResult, error) {
 	r.groups = append(r.groups, len(req))
-	out := make([]protocolio.ReadResult, len(req))
+	out := make([]chainio.ReadResult, len(req))
 	for i, q := range req {
 		out[i].Data, out[i].Err = r.CallContract(ctx, q.Call, q.Block)
 		if len(r.groups) == r.failStage && i == r.failIndex {

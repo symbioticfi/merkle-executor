@@ -2,6 +2,7 @@ package redemptions
 
 import (
 	"bytes"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
@@ -113,6 +114,9 @@ func ImportLegacy(deps registry.Deps, snapshot chainio.Snapshot, out provider.Ou
 	}
 	var records []provider.Record
 	for i, runtime := range runtimes {
+		if snapshot.ChainID == nil || !snapshot.ChainID.IsUint64() || snapshot.ChainID.Uint64() != runtime.cfg.ChainID {
+			return nil, errors.New("legacy route chain differs from snapshot")
+		}
 
 		var cfg Config
 		for _, route := range bundle.Routes {

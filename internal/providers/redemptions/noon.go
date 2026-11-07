@@ -7,20 +7,20 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
 	"github.com/symbioticfi/merkle-executor/api/bindings/noonwithdrawalhandler"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-func (p *Provider) noon(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {
+func (p *Provider) noon(ctx context.Context, s chainio.Snapshot, out *provider.Output) (*big.Int, error) {
 	vault := erc4626.NewERC4626()
 	handler := noonwithdrawalhandler.NewNoonWithdrawalHandler()
-	requests := []protocolio.ReadRequest{protocolio.ContractRead(p.token, vault.PackAsset(), s.BlockNumber, true), protocolio.ContractRead(p.target, handler.PackUsn(), s.BlockNumber, true)}
+	requests := []chainio.ReadRequest{chainio.ContractRead(p.token, vault.PackAsset(), s.BlockNumber, true), chainio.ContractRead(p.target, handler.PackUsn(), s.BlockNumber, true)}
 	if p.cfg.Mode == "request" {
-		requests = append(requests, protocolio.ContractRead(p.target, handler.PackSTAKINGVAULTROLE(), s.BlockNumber, true))
+		requests = append(requests, chainio.ContractRead(p.target, handler.PackSTAKINGVAULTROLE(), s.BlockNumber, true))
 	} else {
-		requests = append(requests, protocolio.ContractRead(p.target, handler.PackGetWithdrawalRequest(s.Account, p.requestID), s.BlockNumber, true), protocolio.ContractRead(p.target, handler.PackWithdrawPeriod(), s.BlockNumber, true))
+		requests = append(requests, chainio.ContractRead(p.target, handler.PackGetWithdrawalRequest(s.Account, p.requestID), s.BlockNumber, true), chainio.ContractRead(p.target, handler.PackWithdrawPeriod(), s.BlockNumber, true))
 	}
-	group, err := protocolio.ReadGroup(ctx, p.deps.Chain, requests...)
+	group, err := chainio.ReadGroup(ctx, p.deps.Chain, requests...)
 	if err != nil {
 		return nil, err
 	}

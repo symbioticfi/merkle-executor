@@ -5,16 +5,16 @@ import (
 	"math/big"
 
 	"github.com/go-errors/errors"
-
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
 	figure "github.com/symbioticfi/merkle-executor/api/bindings/figureyieldvault"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 // A committed binding may request the actual PRIME redemption output instead of
 // the preparation preview. Only its own ERC4626 withdrawal can justify that change.
-func (p *Provider) figureExecuted(snapshot provider.Snapshot, output provider.Output) error {
+func (p *Provider) figureExecuted(snapshot chainio.Snapshot, output provider.Output) error {
 	vault, yield := erc4626.NewERC4626(), figure.NewFigureYieldVault()
 	first := vault.PackRedeem(p.amount, snapshot.Account, snapshot.Account)
 	second := output.Actions[p.cfg.SecondAction]

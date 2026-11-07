@@ -39,7 +39,7 @@ func NewAutomatic(deps registry.Deps) (provider.Integration, error) {
 	return &Automatic{deps: deps}, nil
 }
 
-func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (*recipeOrder, error) {
+func (p *Automatic) derive(s chainio.Snapshot, r recipes.Recipe, t *recipes.Tree) (*recipeOrder, error) {
 	actions, err := recipes.ManagedActions(r, t)
 	if err != nil {
 		return nil, err
@@ -139,6 +139,7 @@ func protocolDomain(chainID *big.Int, settlement common.Address) common.Hash {
 }
 
 type automaticOperation struct {
+	snapshot     chainio.Snapshot
 	integration  *Automatic
 	compiled     *recipeOrder
 	requirements provider.Requirements
@@ -153,13 +154,19 @@ func (p *Automatic) Compile(program provider.Program) ([]provider.Operation, err
 	if err != nil || compiled == nil {
 		return nil, err
 	}
-	return []provider.Operation{&automaticOperation{integration: p, compiled: compiled, requirements: compiled.requirements}}, nil
+	return []provider.Operation{&automaticOperation{integration: p, snapshot: program.Snapshot, compiled: compiled, requirements: compiled.requirements}}, nil
 }
 func (o *automaticOperation) ID() string                          { return provider.OperationID(o.requirements.Actions) }
 func (o *automaticOperation) Requirements() provider.Requirements { return o.requirements.Clone() }
 func (o *automaticOperation) Prepare(ctx context.Context, preparation provider.Preparation) (provider.Output, error) {
 	if o.compiled == nil {
 		return provider.Output{}, errors.New("restored operation cannot prepare")
+	}
+	if err := ctx.Err(); err != nil {
+		return provider.Output{}, err
+	}
+	if err := preparation.ValidateSnapshot(o.snapshot); err != nil {
+		return provider.Output{}, err
 	}
 	if preparation.Reader == nil {
 		return provider.Output{}, errors.New("attempt chain reader required")
@@ -335,7 +342,7 @@ func (o *automaticOperation) Advance(ctx context.Context, s chainio.Snapshot, ou
 	if err := derived.StrictJSON(inner.Data, &saved); err != nil {
 		return provider.Progress{}, err
 	}
-	if err := protocolio.Execution(ctx, o.integration.deps.Chain, s); err != nil {
+	if err := chainio.VerifyExecution(ctx, o.integration.deps.Chain, s); err != nil {
 		return provider.Progress{}, err
 	}
 	if s.Execution == nil {

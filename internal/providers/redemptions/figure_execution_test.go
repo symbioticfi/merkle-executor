@@ -10,18 +10,18 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
+	figure "github.com/symbioticfi/merkle-executor/api/bindings/figureyieldvault"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
-
-	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
-	figure "github.com/symbioticfi/merkle-executor/api/bindings/figureyieldvault"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	runtimeSDK "github.com/symbioticfi/merkle-executor/sdk/runtime"
 )
 
-func figureWithdrawLog(t *testing.T, s provider.Snapshot, token common.Address, assets, shares int64) types.Log {
+func figureWithdrawLog(t *testing.T, s chainio.Snapshot, token common.Address, assets, shares int64) types.Log {
 	t.Helper()
 	event := erc4626.NewERC4626().GetABI().Events[erc4626.ERC4626WithdrawEventName]
 	data, err := event.Inputs.NonIndexed().Pack(big.NewInt(assets), big.NewInt(shares))
@@ -145,7 +145,7 @@ func TestFigureCompositionAndActualOutputBinding(t *testing.T) {
 		account.NewMerkleAccount().PackManage([]account.IMerkleAccountAction{{Target: target, Value: new(big.Int), Data: out.Actions[cfg.SecondAction]}})[4:],
 	}
 	calldata := executor.NewRecipeExecutor().PackExecute([][]byte{query}, [][]byte{first, read, second}, nil, runtime)
-	if err := keeper.ValidateComposition(calldata, []provider.Provider{p}); err != nil {
+	if err := runtimeSDK.ValidatePlanComposition(calldata, []provider.Record{{Requirements: provider.Requirements{Actions: []string{cfg.Action, cfg.SecondAction}, ExclusiveTargets: p.ExclusiveTargets()}, Progress: provider.Progress{Done: true}}}); err != nil {
 		t.Fatal(err)
 	}
 	calls := []protocolio.ManagedCall{{Target: token, Data: out.Actions[cfg.Action]}, {Target: target, Data: figure.NewFigureYieldVault().PackRequestRedeem(big.NewInt(150))}}

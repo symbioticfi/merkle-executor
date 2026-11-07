@@ -10,13 +10,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
-
 	legacy "github.com/symbioticfi/merkle-executor/api/bindings/securitizelegacyofframp"
 	modern "github.com/symbioticfi/merkle-executor/api/bindings/securitizeofframp"
 	"github.com/symbioticfi/merkle-executor/api/bindings/securitizetoken"
 	"github.com/symbioticfi/merkle-executor/api/bindings/securitizetopology"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -114,11 +114,11 @@ func New(c Config, deps providerRegistry.Deps) (*Provider, error) {
 	return p, nil
 }
 
-func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.Output, error) {
+func (p *Provider) Prepare(ctx context.Context, s chainio.Snapshot) (provider.Output, error) {
 	if err := p.snapshot(s); err != nil {
 		return provider.Output{}, err
 	}
-	var first *protocolio.ReadResults
+	var first *chainio.ReadResults
 	var err error
 	if p.cfg.Mode != "wallet" {
 		first, err = p.initialReads(ctx, s)
@@ -169,8 +169,8 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	return provider.Output{Inputs: inputs, Actions: map[string]hexutil.Bytes{p.cfg.Action: payload}, Data: data}, nil
 }
 
-func (p *Provider) snapshot(s provider.Snapshot) error {
-	if err := protocolio.Snapshot(s); err != nil {
+func (p *Provider) snapshot(s chainio.Snapshot) error {
+	if err := chainio.ValidateSnapshot(s); err != nil {
 		return err
 	}
 	if !s.ChainID.IsUint64() || s.ChainID.Uint64() != p.cfg.ChainID || s.Account == p.target {
@@ -190,7 +190,7 @@ func (p *Provider) payload() ([]byte, error) {
 	}
 }
 
-func (p *Provider) call(ctx context.Context, s provider.Snapshot, target common.Address, a abi.ABI, method string, args ...any) ([]any, error) {
+func (p *Provider) call(ctx context.Context, s chainio.Snapshot, target common.Address, a abi.ABI, method string, args ...any) ([]any, error) {
 	data, err := a.Pack(method, args...)
 	if err != nil {
 		return nil, errors.Errorf("encode Securitize %s: %w", method, err)
@@ -206,7 +206,7 @@ func (p *Provider) call(ctx context.Context, s provider.Snapshot, target common.
 	return v, nil
 }
 
-func (p *Provider) tokenDecimals(ctx context.Context, s provider.Snapshot, token common.Address) (uint8, error) {
+func (p *Provider) tokenDecimals(ctx context.Context, s chainio.Snapshot, token common.Address) (uint8, error) {
 	v, err := p.call(ctx, s, token, securitizetoken.NewSecuritizeToken().GetABI(), "decimals")
 	if err != nil {
 		return 0, err
@@ -229,24 +229,24 @@ func (p *Provider) safeDecimals(token common.Address) bool {
 	}
 	return false
 }
-func (p *Provider) initialReads(ctx context.Context, s provider.Snapshot) (*protocolio.ReadResults, error) {
+func (p *Provider) initialReads(ctx context.Context, s chainio.Snapshot) (*chainio.ReadResults, error) {
 	token := securitizetoken.NewSecuritizeToken()
-	req := []protocolio.ReadRequest{protocolio.ContractRead(p.token, token.PackDecimals(), s.BlockNumber, p.safeDecimals(p.token))}
+	req := []chainio.ReadRequest{chainio.ContractRead(p.token, token.PackDecimals(), s.BlockNumber, p.safeDecimals(p.token))}
 	if p.cfg.Mode == "modern" {
 		a := modern.NewSecuritizeOffRamp()
 		for _, data := range [][]byte{a.PackPaused(), a.PackAssetAddress(), a.PackLiquidityProvider()} {
-			req = append(req, protocolio.ContractRead(p.target, data, s.BlockNumber, true))
+			req = append(req, chainio.ContractRead(p.target, data, s.BlockNumber, true))
 		}
 	} else {
 		a := legacy.NewSecuritizeLegacyOffRamp()
 		for _, data := range [][]byte{a.PackPaused(), a.PackAsset(), a.PackLiquidity(), a.PackSettlement()} {
-			req = append(req, protocolio.ContractRead(p.target, data, s.BlockNumber, true))
+			req = append(req, chainio.ContractRead(p.target, data, s.BlockNumber, true))
 		}
-		req = append(req, protocolio.ContractRead(p.payment, token.PackDecimals(), s.BlockNumber, p.safeDecimals(p.payment)))
+		req = append(req, chainio.ContractRead(p.payment, token.PackDecimals(), s.BlockNumber, p.safeDecimals(p.payment)))
 	}
-	return protocolio.ReadGroup(ctx, p.deps.Chain, req...)
+	return chainio.ReadGroup(ctx, p.deps.Chain, req...)
 }
-func decodeRead[T any](result protocolio.ReadResult, unpack func([]byte) (T, error), name string) (T, error) {
+func decodeRead[T any](result chainio.ReadResult, unpack func([]byte) (T, error), name string) (T, error) {
 	var zero T
 	raw, err := result.CallData()
 	if err != nil {
@@ -258,7 +258,7 @@ func decodeRead[T any](result protocolio.ReadResult, unpack func([]byte) (T, err
 	}
 	return v, nil
 }
-func (p *Provider) quote(ctx context.Context, s provider.Snapshot, decimals uint8, first *protocolio.ReadResults) (*big.Int, error) {
+func (p *Provider) quote(ctx context.Context, s chainio.Snapshot, decimals uint8, first *chainio.ReadResults) (*big.Int, error) {
 	a := modern.NewSecuritizeOffRamp()
 	old := legacy.NewSecuritizeLegacyOffRamp()
 	// paused has the same ABI in both supported ramp implementations.
@@ -287,10 +287,10 @@ func (p *Provider) quote(ctx context.Context, s provider.Snapshot, decimals uint
 			return nil, errors.New("Securitize liquidity provider is zero")
 		}
 		topology := securitizetopology.NewSecuritizeTopology()
-		reads, err := protocolio.ReadGroup(ctx, p.deps.Chain,
-			protocolio.ContractRead(payment, topology.PackLiquidityToken(), s.BlockNumber, false),
-			protocolio.ContractRead(p.target, a.PackCalculateLiquidityTokenAmount(p.amount), s.BlockNumber, true),
-			protocolio.ContractRead(p.target, a.PackAvailableLiquidity(), s.BlockNumber, true))
+		reads, err := chainio.ReadGroup(ctx, p.deps.Chain,
+			chainio.ContractRead(payment, topology.PackLiquidityToken(), s.BlockNumber, false),
+			chainio.ContractRead(p.target, a.PackCalculateLiquidityTokenAmount(p.amount), s.BlockNumber, true),
+			chainio.ContractRead(p.target, a.PackAvailableLiquidity(), s.BlockNumber, true))
 		if err != nil {
 			return nil, err
 		}
@@ -343,7 +343,7 @@ func (p *Provider) quote(ctx context.Context, s provider.Snapshot, decimals uint
 	return expected, nil
 }
 
-func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, output provider.Output, _ json.RawMessage) (provider.Progress, error) {
+func (p *Provider) Advance(ctx context.Context, s chainio.Snapshot, output provider.Output, _ json.RawMessage) (provider.Progress, error) {
 	if err := p.snapshot(s); err != nil {
 		return provider.Progress{}, err
 	}
@@ -355,7 +355,7 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, output prov
 	if err != nil {
 		return provider.Progress{}, err
 	}
-	if err = protocolio.Execution(ctx, p.deps.Chain, s); err != nil {
+	if err = chainio.VerifyExecution(ctx, p.deps.Chain, s); err != nil {
 		return provider.Progress{}, err
 	}
 	target := p.target
@@ -391,7 +391,7 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, output prov
 
 // transferred nets wallet returns, so a round trip cannot prove a pending request.
 // A zero from counts atomic payments; the recipe may subsequently move those funds.
-func (p *Provider) transferred(s provider.Snapshot, token, from, to common.Address) *big.Int {
+func (p *Provider) transferred(s chainio.Snapshot, token, from, to common.Address) *big.Int {
 	amount := new(big.Int)
 	contract := erc20.NewERC20()
 	event := contract.GetABI().Events["Transfer"].ID
@@ -413,7 +413,7 @@ func (p *Provider) transferred(s provider.Snapshot, token, from, to common.Addre
 	return amount
 }
 
-func (p *Provider) redemptionEvent(s provider.Snapshot) (*big.Int, error) {
+func (p *Provider) redemptionEvent(s chainio.Snapshot) (*big.Int, error) {
 	contract := modern.NewSecuritizeOffRamp()
 	event := contract.GetABI().Events["RedemptionCompleted"].ID
 	var received *big.Int

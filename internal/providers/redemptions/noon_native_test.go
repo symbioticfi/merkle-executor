@@ -13,6 +13,7 @@ import (
 	native "github.com/symbioticfi/merkle-executor/api/bindings/noonredeemhandlerv2"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
@@ -26,7 +27,7 @@ func nativeNoonConfig() Config {
 		Amount:      "1234567890123456789", Action: "2:0", AmountInput: &input}
 }
 
-func nativeNoonFixture(t *testing.T) (Config, provider.Snapshot, *issuerReader) {
+func nativeNoonFixture(t *testing.T) (Config, chainio.Snapshot, *issuerReader) {
 	t.Helper()
 	cfg := nativeNoonConfig()
 	s, r := issuerFixture(t, issuerConfig("noon"))
@@ -82,7 +83,7 @@ func TestNoonNativePreparesFullAmountQuoteAndBatchesReadiness(t *testing.T) {
 	if len(batch.groups) != 2 || batch.groups[0] != 9 || batch.groups[1] != 2 {
 		t.Fatalf("readiness did not retain two pinned read stages: %v", batch.groups)
 	}
-	if got := issuerProvider(t, cfg, r).(*Provider).ExclusiveTargets()[cfg.Action]; got != common.HexToAddress(cfg.Target) {
+	if got := issuerProvider(t, cfg, r).ExclusiveTargets()[cfg.Action]; got != common.HexToAddress(cfg.Target) {
 		t.Fatal("native redeemer receipt target is not exclusive")
 	}
 }
@@ -165,11 +166,11 @@ func TestNoonNativePriorBlockBudgetResetsAndBoundaryFits(t *testing.T) {
 	}
 }
 
-func noonReceiptLog(s provider.Snapshot, target common.Address, event abi.Event, from, to common.Address, data []byte) types.Log {
+func noonReceiptLog(s chainio.Snapshot, target common.Address, event abi.Event, from, to common.Address, data []byte) types.Log {
 	return types.Log{Address: target, Topics: []common.Hash{event.ID, common.BytesToHash(from.Bytes()), common.BytesToHash(to.Bytes())}, Data: data, TxHash: s.Execution.TxHash, BlockHash: s.Execution.BlockHash, BlockNumber: s.Execution.BlockNumber.Uint64()}
 }
 
-func nativeNoonReceipt(t *testing.T, cfg Config, s provider.Snapshot, out provider.Output) []types.Log {
+func nativeNoonReceipt(t *testing.T, cfg Config, s chainio.Snapshot, out provider.Output) []types.Log {
 	t.Helper()
 	h, tokens := native.NewNoonRedeemHandlerV2().GetABI(), erc20.NewERC20().GetABI()
 	amount, _ := new(big.Int).SetString(cfg.Amount, 10)

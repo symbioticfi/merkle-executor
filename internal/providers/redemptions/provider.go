@@ -10,8 +10,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
-
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -170,8 +170,8 @@ func New(cfg Config, deps providerRegistry.Deps) (*Provider, error) {
 	return p, nil
 }
 
-func (p *Provider) Prepare(ctx context.Context, snapshot provider.Snapshot) (provider.Output, error) {
-	if err := protocolio.Snapshot(snapshot); err != nil {
+func (p *Provider) Prepare(ctx context.Context, snapshot chainio.Snapshot) (provider.Output, error) {
+	if err := chainio.ValidateSnapshot(snapshot); err != nil {
 		return provider.Output{}, err
 	}
 	if snapshot.ChainID.Cmp(new(big.Int).SetUint64(p.cfg.ChainID)) != 0 {
@@ -221,12 +221,12 @@ func (p *Provider) Prepare(ctx context.Context, snapshot provider.Snapshot) (pro
 
 // Requests finish at their confirmed submission. Issuer-owned queues retain the
 // pending claim; a separate claim recipe can run without an account-lock deadlock.
-func (p *Provider) Advance(ctx context.Context, snapshot provider.Snapshot, output provider.Output, _ json.RawMessage) (provider.Progress, error) {
+func (p *Provider) Advance(ctx context.Context, snapshot chainio.Snapshot, output provider.Output, _ json.RawMessage) (provider.Progress, error) {
 	var account common.Address
 	if err := json.Unmarshal(output.Data, &account); err != nil || account != snapshot.Account || snapshot.ChainID == nil || snapshot.ChainID.Cmp(new(big.Int).SetUint64(p.cfg.ChainID)) != 0 {
 		return provider.Progress{}, errors.New("redemption execution identity mismatch")
 	}
-	if err := protocolio.Execution(ctx, p.deps.Chain, snapshot); err != nil {
+	if err := chainio.VerifyExecution(ctx, p.deps.Chain, snapshot); err != nil {
 		return provider.Progress{}, err
 	}
 	target := p.target
@@ -258,7 +258,7 @@ func (p *Provider) Advance(ctx context.Context, snapshot provider.Snapshot, outp
 	return provider.Progress{Done: true, Outcome: outcome, Reference: snapshot.Execution.TxHash.Hex()}, nil
 }
 
-func read[T any](ctx context.Context, p *Provider, s provider.Snapshot, target common.Address, data []byte, unpack func([]byte) (T, error)) (T, error) {
+func read[T any](ctx context.Context, p *Provider, s chainio.Snapshot, target common.Address, data []byte, unpack func([]byte) (T, error)) (T, error) {
 	var zero T
 	raw, err := protocolio.CallData(ctx, p.deps.Chain, s, target, data)
 	if err != nil {
@@ -271,7 +271,7 @@ func read[T any](ctx context.Context, p *Provider, s provider.Snapshot, target c
 	return value, nil
 }
 
-func readResult[T any](result protocolio.ReadResult, unpack func([]byte) (T, error)) (T, error) {
+func readResult[T any](result chainio.ReadResult, unpack func([]byte) (T, error)) (T, error) {
 	var zero T
 	raw, err := result.CallData()
 	if err != nil {
@@ -283,7 +283,7 @@ func readResult[T any](result protocolio.ReadResult, unpack func([]byte) (T, err
 	}
 	return value, nil
 }
-func checkRead(result protocolio.ReadResult, unpack func([]byte) (common.Address, error), expected common.Address) error {
+func checkRead(result chainio.ReadResult, unpack func([]byte) (common.Address, error), expected common.Address) error {
 	actual, err := readResult(result, unpack)
 	if err != nil {
 		return err

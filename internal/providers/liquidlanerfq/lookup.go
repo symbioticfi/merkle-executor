@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-errors/errors"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 // lookupState is scoped to the immutable saved quote. It is discarded after a
@@ -45,7 +45,7 @@ func knownStatus(s string) bool {
 	}
 	return false
 }
-func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, st *progressState) (bool, bool, error) {
+func (p *Provider) lookup(ctx context.Context, s chainio.Snapshot, d prepared, st *progressState) (bool, bool, error) {
 	var quote wire.RfqQuote
 	if json.Unmarshal(d.Quote, &quote) != nil {
 		return false, false, errors.New("RFQ saved quote unavailable")

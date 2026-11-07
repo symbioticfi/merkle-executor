@@ -8,6 +8,7 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 type singleBatchFixture struct {
@@ -33,12 +34,12 @@ type capableBatchFixture struct {
 	missing bool
 }
 
-func (f *capableBatchFixture) BatchRead(_ context.Context, requests []ReadRequest) ([]ReadResult, error) {
+func (f *capableBatchFixture) BatchRead(_ context.Context, requests []chainio.ReadRequest) ([]chainio.ReadResult, error) {
 	f.groups = append(f.groups, len(requests))
 	if f.failure != nil {
 		return nil, f.failure
 	}
-	results := make([]ReadResult, len(requests))
+	results := make([]chainio.ReadResult, len(requests))
 	for i, r := range requests {
 		results[i].Data = r.Call.Data
 		if r.Call.Data[0] == 2 {
@@ -50,17 +51,17 @@ func (f *capableBatchFixture) BatchRead(_ context.Context, requests []ReadReques
 	}
 	return results, nil
 }
-func batchRequests(n int) []ReadRequest {
-	out := make([]ReadRequest, n)
+func batchRequests(n int) []chainio.ReadRequest {
+	out := make([]chainio.ReadRequest, n)
 	for i := range out {
-		out[i] = ReadRequest{Kind: ReadCall, Call: ethereum.CallMsg{From: common.HexToAddress("0x01"), Data: []byte{byte(i%250 + 1)}}, Block: big.NewInt(12)}
+		out[i] = chainio.ReadRequest{Kind: chainio.ReadCall, Call: ethereum.CallMsg{From: common.HexToAddress("0x01"), Data: []byte{byte(i%250 + 1)}}, Block: big.NewInt(12)}
 	}
 	return out
 }
 func TestReadGroupDefersSingleReadsUntilConsumed(t *testing.T) {
 	sentinel := errors.New("member unavailable")
 	reader := &singleBatchFixture{fail: sentinel}
-	group, err := ReadGroup(context.Background(), reader, batchRequests(2)...)
+	group, err := chainio.ReadGroup(context.Background(), reader, batchRequests(2)...)
 	if err != nil || reader.calls != 0 {
 		t.Fatalf("single group eagerly read: %v calls=%d", err, reader.calls)
 	}
@@ -84,7 +85,7 @@ func TestReadGroupBoundsRequestsAndNeverRetriesFailedBatch(t *testing.T) {
 			if mode == "transport" {
 				reader.failure = sentinel
 			}
-			group, err := ReadGroup(context.Background(), reader, batchRequests(258)...)
+			group, err := chainio.ReadGroup(context.Background(), reader, batchRequests(258)...)
 			if mode != "members" {
 				if err == nil {
 					t.Fatal("invalid batch accepted")

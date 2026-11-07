@@ -17,6 +17,7 @@ import (
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	ab "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
@@ -46,7 +47,7 @@ func sampleQuote() wire.CowOrder {
 	q.AppData = hash.Hex()
 	return q
 }
-func fixtureProvider(c Config, deps providerRegistry.Deps) (provider.Provider, error) {
+func fixtureProvider(c Config, deps providerRegistry.Deps) (*Provider, error) {
 	p, err := New(c, deps)
 	if err != nil {
 		return nil, err
@@ -168,7 +169,7 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	snap := provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: account, Timestamp: 1000, BlockHash: testHeader(big.NewInt(12)).Hash()}
+	snap := chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: account, Timestamp: 1000, BlockHash: testHeader(big.NewInt(12)).Hash()}
 	out, e := p.Prepare(context.Background(), snap)
 	if e != nil {
 		t.Fatal(e)

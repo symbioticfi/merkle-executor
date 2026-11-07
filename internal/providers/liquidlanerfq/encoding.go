@@ -14,9 +14,9 @@ import (
 	reactor "github.com/symbioticfi/merkle-executor/api/bindings/liquidlanereactor"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 var requestTypeHash = crypto.Keccak256Hash([]byte("Request(address tokenIn,uint256 amountIn,Output[] outputs,uint256 deadline,uint256 nonce,address protocol)Output(address token,uint256 amount,address recipient)"))
@@ -87,7 +87,7 @@ type typedField struct {
 	Type string `json:"type"`
 }
 
-func (p *Provider) typedData(data wire.RfqSignatureData, s provider.Snapshot, r reactor.IReactorRequest) error {
+func (p *Provider) typedData(data wire.RfqSignatureData, s chainio.Snapshot, r reactor.IReactorRequest) error {
 	var domain struct {
 		Name              string `json:"name"`
 		Version           string `json:"version"`
@@ -159,7 +159,7 @@ func equalRequest(a, b reactor.IReactorRequest) bool {
 	}
 	return true
 }
-func authorizingSign(e *provider.Execution, d prepared, domain common.Hash) error {
+func authorizingSign(e *chainio.Execution, d prepared, domain common.Hash) error {
 	a := account.NewMerkleAccount()
 	expected, _, err := authorization(domain, d.Request)
 	if err != nil {

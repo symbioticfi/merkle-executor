@@ -13,6 +13,7 @@ import (
 	sb "github.com/symbioticfi/merkle-executor/api/bindings/cowsettlement"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	ab "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
@@ -25,12 +26,12 @@ type cowBatchReader struct {
 	badDomain bool
 }
 
-func (r *cowBatchReader) BatchRead(ctx context.Context, req []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
+func (r *cowBatchReader) BatchRead(ctx context.Context, req []chainio.ReadRequest) ([]chainio.ReadResult, error) {
 	r.calls++
 	if len(req) != 3 {
 		r.t.Fatalf("group size %d", len(req))
 	}
-	out := make([]protocolio.ReadResult, 3)
+	out := make([]chainio.ReadResult, 3)
 	for i, q := range req {
 		if !q.MulticallSafe || q.Block.Int64() < 13 {
 			r.t.Fatal("unsafe or unpinned batch")

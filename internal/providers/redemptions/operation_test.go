@@ -2,7 +2,14 @@ package redemptions
 
 import (
 	"context"
+	"maps"
+	"math/big"
+	"slices"
+	"testing"
+	"time"
+
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
@@ -10,11 +17,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	runtimeSDK "github.com/symbioticfi/merkle-executor/sdk/runtime"
-	"maps"
-	"math/big"
-	"slices"
-	"testing"
-	"time"
 )
 
 func TestIntegrationCompilesStableRouteAndRestoresWithoutRecipe(t *testing.T) {
@@ -36,6 +38,41 @@ func TestIntegrationCompilesStableRouteAndRestoresWithoutRecipe(t *testing.T) {
 		t.Fatalf("compile: %v ops=%d reads=%d", err, len(operations), reader.reads)
 	}
 	operation := operations[0]
+
+	for _, field := range []string{"chain", "block", "hash", "time", "executor", "account", "caller", "recipe", "root"} {
+		t.Run("compiled identity/"+field, func(t *testing.T) {
+			changed := snapshot
+			switch field {
+			case "chain":
+				changed.ChainID = big.NewInt(10)
+			case "block":
+				changed.BlockNumber = big.NewInt(43)
+			case "hash":
+				changed.BlockHash = common.HexToHash("0xbad")
+			case "time":
+				changed.Timestamp++
+			case "executor":
+				changed.Executor = issuerAddress(123)
+			case "account":
+				changed.Account = issuerAddress(123)
+			case "caller":
+				changed.Caller = issuerAddress(123)
+			case "recipe":
+				changed.RecipeHash = common.HexToHash("0xbad")
+			case "root":
+				changed.Root = common.HexToHash("0xbad")
+			}
+			before := reader.reads
+			if _, err := operation.Prepare(t.Context(), provider.Preparation{Program: provider.Program{Snapshot: changed}, Results: map[uint]*big.Int{0: big.NewInt(100)}, Reader: reader}); err == nil || reader.reads != before {
+				t.Fatalf("changed identity reached preparation: %v reads=%d", err, reader.reads)
+			}
+		})
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := operation.Prepare(canceled, provider.Preparation{Program: provider.Program{Snapshot: snapshot}, Results: map[uint]*big.Int{0: big.NewInt(100)}, Reader: reader}); err != context.Canceled || reader.reads != 0 {
+		t.Fatalf("canceled preparation reached I/O: %v", err)
+	}
 	if operation.ID() != cfg.Action {
 		t.Fatalf("unstable action identity %q", operation.ID())
 	}
@@ -77,7 +114,7 @@ func TestAutomaticIndependentRoutesShareSchedulerAndRecoverStableIdentity(t *tes
 	}
 	var leaves []recipes.Leaf
 	var queries [][]byte
-	var snapshot provider.Snapshot
+	var snapshot chainio.Snapshot
 	for _, asset := range assets {
 		cfg := automaticConfig(asset, "request")
 		s, reader := issuerFixture(t, cfg)
@@ -166,6 +203,11 @@ func TestAutomaticIndependentRoutesShareSchedulerAndRecoverStableIdentity(t *tes
 	if err != nil || len(imported) != 2 || initial.reads != before {
 		t.Fatalf("offline import %+v %v", imported, err)
 	}
+	wrongChain := snapshot
+	wrongChain.ChainID = big.NewInt(42161)
+	if _, err = ImportLegacy(registry.Deps{Chain: initial}, wrongChain, legacy, provider.Progress{}); err == nil || initial.reads != before {
+		t.Fatal("legacy chain mismatch accepted or reached I/O")
+	}
 	for i, record := range imported {
 		if record.ID != operations[i].ID() || !record.Progress.Done || !maps.Equal(record.Requirements.ExclusiveTargets, operations[i].Requirements().ExclusiveTargets) {
 			t.Fatalf("legacy route identity or claims changed: %+v", record)
@@ -182,7 +224,7 @@ func TestAutomaticIssuerUnmatchedHasNoOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	operations, err := raw.Compile(provider.Program{Snapshot: provider.Snapshot{ChainID: big.NewInt(1), Account: issuerAddress(99)}, Tree: &recipes.Tree{}})
+	operations, err := raw.Compile(provider.Program{Snapshot: chainio.Snapshot{ChainID: big.NewInt(1), Account: issuerAddress(99)}, Tree: &recipes.Tree{}})
 	if err != nil || len(operations) != 0 {
 		t.Fatalf("unmatched compile %+v %v", operations, err)
 	}

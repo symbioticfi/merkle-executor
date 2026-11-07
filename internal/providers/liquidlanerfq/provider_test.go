@@ -19,6 +19,7 @@ import (
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
@@ -150,7 +151,7 @@ func (c *testChain) TransactionReceipt(ctx context.Context, h common.Hash) (*typ
 type harness struct {
 	p                   *Provider
 	c                   *testChain
-	s                   provider.Snapshot
+	s                   chainio.Snapshot
 	cfg                 Config
 	option              map[string]any
 	quotes, gets, posts int
@@ -226,10 +227,10 @@ func newHarness(t *testing.T) *harness {
 	}
 	h.p = pr
 	header, _ := h.c.HeaderByNumber(t.Context(), big.NewInt(10))
-	h.s = provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(10), BlockHash: header.Hash(), Timestamp: header.Time, Account: addr(0x22), Executor: addr(0x66), Caller: addr(0x77)}
+	h.s = chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(10), BlockHash: header.Hash(), Timestamp: header.Time, Account: addr(0x22), Executor: addr(0x66), Caller: addr(0x77)}
 	return h
 }
-func (h *harness) authorized(t *testing.T) (provider.Output, provider.Snapshot) {
+func (h *harness) authorized(t *testing.T) (provider.Output, chainio.Snapshot) {
 	t.Helper()
 	out, err := h.p.Prepare(t.Context(), h.s)
 	if err != nil {
@@ -255,7 +256,7 @@ func (h *harness) authorized(t *testing.T) (provider.Output, provider.Snapshot) 
 	header, _ = h.c.HeaderByNumber(t.Context(), s.BlockNumber)
 	s.BlockHash = header.Hash()
 	s.Timestamp = header.Time
-	s.Execution = &provider.Execution{TxHash: hash, BlockNumber: big.NewInt(11), BlockHash: log.BlockHash, Logs: []types.Log{log}}
+	s.Execution = &chainio.Execution{TxHash: hash, BlockNumber: big.NewInt(11), BlockHash: log.BlockHash, Logs: []types.Log{log}}
 	return out, s
 }
 func (h *harness) addEvent(t *testing.T, d prepared, n uint64, cancel bool) {
@@ -768,11 +769,11 @@ func TestPrepareRejectsAPIIntegerOverflowBeforeHTTP(t *testing.T) {
 				s.BlockNumber = new(big.Int).Lsh(big.NewInt(1), 65)
 			}
 			// Use an already fetched staged domain result to ensure the validation itself precedes HTTP.
-			raw, err := h.c.CallContract(t.Context(), protocolio.ContractRead(h.p.reactor, reactor.NewLiquidLaneReactor().PackEip712Domain(), h.s.BlockNumber, true).Call, h.s.BlockNumber)
+			raw, err := h.c.CallContract(t.Context(), chainio.ContractRead(h.p.reactor, reactor.NewLiquidLaneReactor().PackEip712Domain(), h.s.BlockNumber, true).Call, h.s.BlockNumber)
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = h.p.prepare(t.Context(), s, protocolio.ReadResult{Data: raw})
+			_, err = h.p.prepare(t.Context(), s, chainio.ReadResult{Data: raw})
 			if err == nil || h.quotes != 0 {
 				t.Fatal("overflow reached API", err)
 			}

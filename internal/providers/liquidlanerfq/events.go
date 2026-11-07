@@ -11,8 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	reactor "github.com/symbioticfi/merkle-executor/api/bindings/liquidlanereactor"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 const maxRangeLogs = 1024
@@ -20,7 +19,7 @@ const maxRangeLogs = 1024
 func validHeader(h *types.Header, n uint64) bool {
 	return h != nil && h.Number != nil && h.Number.IsUint64() && h.Number.Uint64() == n
 }
-func (p *Provider) scan(ctx context.Context, s provider.Snapshot, d prepared, st *progressState, used bool) (string, bool, error) {
+func (p *Provider) scan(ctx context.Context, s chainio.Snapshot, d prepared, st *progressState, used bool) (string, bool, error) {
 	if st.NextBlock > d.PreparedBlock {
 		h, err := p.chain.HeaderByNumber(ctx, new(big.Int).SetUint64(st.NextBlock-1))
 		if err != nil || !validHeader(h, st.NextBlock-1) {
@@ -45,13 +44,13 @@ func (p *Provider) scan(ctx context.Context, s provider.Snapshot, d prepared, st
 	cancelTopic := abi.Events["InvalidateNonce"].ID
 	// Only a successfully read dense range is subdivided. Transport/member failures
 	// remain failures: retrying those could hide an incomplete event history.
-	var opening protocolio.ReadResult
+	var opening chainio.ReadResult
 	var logs []types.Log
 	for {
-		reads, err := protocolio.ReadGroup(ctx, p.chain,
-			protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(end)},
-			protocolio.ReadRequest{Kind: protocolio.ReadLogs, Filter: ethereum.FilterQuery{FromBlock: new(big.Int).SetUint64(st.NextBlock), ToBlock: new(big.Int).SetUint64(end), Addresses: []common.Address{p.reactor}, Topics: [][]common.Hash{{fillTopic}}}},
-			protocolio.ReadRequest{Kind: protocolio.ReadLogs, Filter: ethereum.FilterQuery{FromBlock: new(big.Int).SetUint64(st.NextBlock), ToBlock: new(big.Int).SetUint64(end), Addresses: []common.Address{p.reactor}, Topics: [][]common.Hash{{cancelTopic}, {common.BytesToHash(d.Account.Bytes())}}}},
+		reads, err := chainio.ReadGroup(ctx, p.chain,
+			chainio.ReadRequest{Kind: chainio.ReadHeader, Block: new(big.Int).SetUint64(end)},
+			chainio.ReadRequest{Kind: chainio.ReadLogs, Filter: ethereum.FilterQuery{FromBlock: new(big.Int).SetUint64(st.NextBlock), ToBlock: new(big.Int).SetUint64(end), Addresses: []common.Address{p.reactor}, Topics: [][]common.Hash{{fillTopic}}}},
+			chainio.ReadRequest{Kind: chainio.ReadLogs, Filter: ethereum.FilterQuery{FromBlock: new(big.Int).SetUint64(st.NextBlock), ToBlock: new(big.Int).SetUint64(end), Addresses: []common.Address{p.reactor}, Topics: [][]common.Hash{{cancelTopic}, {common.BytesToHash(d.Account.Bytes())}}}},
 		)
 		if err != nil {
 			return "", false, err
@@ -148,7 +147,7 @@ func (p *Provider) scan(ctx context.Context, s provider.Snapshot, d prepared, st
 	if err != nil || !validHeader(closing, end) || closing.Hash() != opening.Header.Hash() {
 		return "", false, errors.New("RFQ event range reorganized")
 	}
-	if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
+	if err := chainio.Canonical(ctx, p.chain, s); err != nil {
 		return "", false, err
 	}
 	if candidate != nil {
@@ -161,8 +160,8 @@ func (p *Provider) scan(ctx context.Context, s provider.Snapshot, d prepared, st
 	st.Anchor = closing.Hash()
 	return "", end == head, nil
 }
-func (p *Provider) eventReceipt(ctx context.Context, l types.Log, s provider.Snapshot) error {
-	reads, err := protocolio.ReadGroup(ctx, p.chain, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(l.BlockNumber)}, protocolio.ReadRequest{Kind: protocolio.ReadReceipt, Hash: l.TxHash})
+func (p *Provider) eventReceipt(ctx context.Context, l types.Log, s chainio.Snapshot) error {
+	reads, err := chainio.ReadGroup(ctx, p.chain, chainio.ReadRequest{Kind: chainio.ReadHeader, Block: new(big.Int).SetUint64(l.BlockNumber)}, chainio.ReadRequest{Kind: chainio.ReadReceipt, Hash: l.TxHash})
 	if err != nil {
 		return err
 	}

@@ -57,7 +57,7 @@ func NewAutomatic(deps registry.Deps) (provider.Integration, error) {
 func match(action recipes.ManagedAction, target common.Address, data []byte) bool {
 	return action.Leaf.Target == target && len(action.Leaf.Data) >= 4 && bytes.Equal(action.Leaf.Data[:4], data[:4])
 }
-func (p *automatic) selectRoutes(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) ([]selectedRoute, error) {
+func (p *automatic) selectRoutes(s chainio.Snapshot, r recipes.Recipe, t *recipes.Tree) ([]selectedRoute, error) {
 	if s.ChainID == nil || !s.ChainID.IsUint64() || s.ChainID.Sign() <= 0 || s.Account == (common.Address{}) {
 		return nil, errors.New("Securitize authenticated snapshot invalid")
 	}
@@ -203,6 +203,7 @@ type routeEnvelope struct {
 	Decimals uint8          `json:"decimals"`
 }
 type routeOperation struct {
+	snapshot     chainio.Snapshot
 	integration  *automatic
 	route        *selectedRoute
 	requirements provider.Requirements
@@ -224,7 +225,7 @@ func (p *automatic) Compile(program provider.Program) ([]provider.Operation, err
 		if err != nil {
 			return nil, err
 		}
-		operations = append(operations, &routeOperation{integration: p, route: &route, requirements: req})
+		operations = append(operations, &routeOperation{integration: p, snapshot: program.Snapshot, route: &route, requirements: req})
 	}
 	return operations, nil
 }
@@ -233,6 +234,12 @@ func (o *routeOperation) Requirements() provider.Requirements { return o.require
 func (o *routeOperation) Prepare(ctx context.Context, preparation provider.Preparation) (provider.Output, error) {
 	if o.route == nil {
 		return provider.Output{}, errors.New("restored operation cannot prepare")
+	}
+	if err := ctx.Err(); err != nil {
+		return provider.Output{}, err
+	}
+	if err := preparation.ValidateSnapshot(o.snapshot); err != nil {
+		return provider.Output{}, err
 	}
 	if preparation.Reader == nil {
 		return provider.Output{}, errors.New("attempt chain reader required")

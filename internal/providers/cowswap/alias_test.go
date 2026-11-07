@@ -1,12 +1,13 @@
 package cowswap
 
 import (
-	hostconfig "github.com/symbioticfi/merkle-executor/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	hostconfig "github.com/symbioticfi/merkle-executor/internal/config"
 )
 
 func TestInternalHTTPAliasCannotMoveDurableCoWOrder(t *testing.T) {

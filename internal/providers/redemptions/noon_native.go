@@ -9,6 +9,7 @@ import (
 	"github.com/go-errors/errors"
 	native "github.com/symbioticfi/merkle-executor/api/bindings/noonredeemhandlerv2"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
@@ -22,15 +23,15 @@ var (
 // The native route is independent of the staking withdrawal whitelist and delay.
 // USN balance/approval may be established earlier in the committed recipe; full
 // execution simulation checks those and the recipe's USDC output postcondition.
-func (p *Provider) noonRedeemUSN(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {
+func (p *Provider) noonRedeemUSN(ctx context.Context, s chainio.Snapshot, out *provider.Output) (*big.Int, error) {
 	h := native.NewNoonRedeemHandlerV2()
 	data := [][]byte{h.PackUsnToken(), h.PackRedeemableCollaterals(p.asset), h.PackIsWhitelisted(s.Account), h.PackTreasury(),
 		h.PackRedeemLimitPerBlock(), h.PackCurrentBlockRedeemAmount(), h.PackLastRedeemBlock(), h.PackCollateralDecimals(p.asset), h.PackCalculateCollateralAmount(p.asset, p.amount)}
-	requests := make([]protocolio.ReadRequest, len(data))
+	requests := make([]chainio.ReadRequest, len(data))
 	for i, payload := range data {
-		requests[i] = protocolio.ContractRead(p.target, payload, s.BlockNumber, true)
+		requests[i] = chainio.ContractRead(p.target, payload, s.BlockNumber, true)
 	}
-	group, err := protocolio.ReadGroup(ctx, p.deps.Chain, requests...)
+	group, err := chainio.ReadGroup(ctx, p.deps.Chain, requests...)
 	if err != nil {
 		return nil, err
 	}
@@ -101,9 +102,9 @@ func (p *Provider) noonRedeemUSN(ctx context.Context, s provider.Snapshot, out *
 	tokens := erc20.NewERC20()
 	// Keep token implementation reads isolated eth_calls inside the same JSON
 	// batch; only the source-pinned handler getters opt into EVM aggregation.
-	liquidity, err := protocolio.ReadGroup(ctx, p.deps.Chain,
-		protocolio.ContractRead(p.asset, tokens.PackBalanceOf(treasury), s.BlockNumber, false),
-		protocolio.ContractRead(p.asset, tokens.PackAllowance(treasury, p.target), s.BlockNumber, false))
+	liquidity, err := chainio.ReadGroup(ctx, p.deps.Chain,
+		chainio.ContractRead(p.asset, tokens.PackBalanceOf(treasury), s.BlockNumber, false),
+		chainio.ContractRead(p.asset, tokens.PackAllowance(treasury, p.target), s.BlockNumber, false))
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +126,7 @@ func (p *Provider) noonRedeemUSN(ctx context.Context, s provider.Snapshot, out *
 	return p.amount, nil
 }
 
-func (p *Provider) noonRedeemExecuted(s provider.Snapshot, out provider.Output) error {
+func (p *Provider) noonRedeemExecuted(s chainio.Snapshot, out provider.Output) error {
 	h, tokens := native.NewNoonRedeemHandlerV2(), erc20.NewERC20()
 	payload := h.PackRedeemOnchain(p.asset, p.amount)
 	if !bytes.Equal(out.Actions[p.cfg.Action], payload) {

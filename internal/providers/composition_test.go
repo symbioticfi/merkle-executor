@@ -11,11 +11,28 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/providers/securitize"
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/runtime"
 )
 
-func compositionProvider[C any, P provider.Provider](t *testing.T, constructor func(C, registry.Deps) (P, error), cfg C) P {
+type exclusiveClaims interface {
+	ExclusiveTargets() map[string]common.Address
+}
+
+func compositionRecords(routes ...exclusiveClaims) []provider.Record {
+	records := make([]provider.Record, len(routes))
+	for i, route := range routes {
+		targets := route.ExclusiveTargets()
+		requirements := provider.Requirements{ExclusiveTargets: targets}
+		for key := range targets {
+			requirements.Actions = append(requirements.Actions, key)
+		}
+		records[i] = provider.Record{Requirements: requirements, Progress: provider.Progress{Done: true}}
+	}
+	return records
+}
+
+func compositionProvider[C any, P exclusiveClaims](t *testing.T, constructor func(C, registry.Deps) (P, error), cfg C) P {
 	t.Helper()
 	p, err := constructor(cfg, registry.Deps{Chain: unusedReader{}})
 	if err != nil {
@@ -74,11 +91,11 @@ func TestIssuerCompositionUsesRealRouteDeclarations(t *testing.T) {
 				}
 			}
 			pr := compositionProvider(t, redemptions.New, cfg)
-			if err := keeper.ValidateComposition(testExecute(t, tc.targets...), []provider.Provider{pr}); err != nil {
+			if err := runtime.ValidatePlanComposition(testExecute(t, tc.targets...), compositionRecords(pr)); err != nil {
 				t.Fatal(err)
 			}
 			repeated := append(append([]common.Address{}, tc.targets...), tc.targets[0])
-			if err := keeper.ValidateComposition(testExecute(t, repeated...), []provider.Provider{pr}); err == nil {
+			if err := runtime.ValidatePlanComposition(testExecute(t, repeated...), compositionRecords(pr)); err == nil {
 				t.Fatal("static issuer duplicate accepted")
 			}
 		})
@@ -97,19 +114,19 @@ func TestSecuritizeRejectsRepeatedStaticAndMixedRoutes(t *testing.T) {
 				cfg.MinOutput = "90"
 			}
 			first := compositionProvider(t, securitize.New, cfg)
-			if err := keeper.ValidateComposition(testExecute(t, target, payment), []provider.Provider{first}); err != nil {
+			if err := runtime.ValidatePlanComposition(testExecute(t, target, payment), compositionRecords(first)); err != nil {
 				t.Fatalf("unrelated later payment movement: %v", err)
 			}
-			if err := keeper.ValidateComposition(testExecute(t, target, target), []provider.Provider{first}); err == nil {
+			if err := runtime.ValidatePlanComposition(testExecute(t, target, target), compositionRecords(first)); err == nil {
 				t.Fatal("static repeated route accepted")
 			}
 			cfg.Action = "1:0"
 			second := compositionProvider(t, securitize.New, cfg)
-			if err := keeper.ValidateComposition(testExecute(t, target, target), []provider.Provider{first, second}); err == nil {
+			if err := runtime.ValidatePlanComposition(testExecute(t, target, target), compositionRecords(first, second)); err == nil {
 				t.Fatal("repeated configured route accepted")
 			}
 			mixed := compositionProvider(t, redemptions.New, redemptions.Config{Family: "midas", Mode: "request", ChainID: 1, Token: token.Hex(), OutputAsset: payment.Hex(), Target: target.Hex(), Amount: "100", Action: "1:0"})
-			if err := keeper.ValidateComposition(testExecute(t, target, target), []provider.Provider{first, mixed}); err == nil {
+			if err := runtime.ValidatePlanComposition(testExecute(t, target, target), compositionRecords(first, mixed)); err == nil {
 				t.Fatal("mixed provider route accepted")
 			}
 		})

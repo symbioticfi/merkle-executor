@@ -2,26 +2,16 @@
 package provider
 
 import (
-	"context"
 	"encoding/json"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
-// Neutral chain aliases retained during the runtime migration.
-type Reader = chainio.Reader
-type CodeOverrideReader = chainio.CodeOverrideReader
-type LogReader = chainio.LogReader
-type Execution = chainio.Execution
-
 // ErrNotReady is normal idle work (no eligible rewards, budget or receipt yet).
 // It is distinct from malformed data, failed validation and transport errors.
 var ErrNotReady = errors.New("strategy is not ready")
-
-type Snapshot = chainio.Snapshot
 
 // Output is persisted before sending. Action keys are "stepIndex:actionIndex";
 // values replace calldata only, never the target, mask, proof or native value.
@@ -41,26 +31,12 @@ type Progress struct {
 	Reference string          `json:"reference,omitempty"`
 }
 
-// Provider prepares bounded inputs and optionally reconciles an asynchronous
-// operation after its authorization recipe confirms. Advance must be restart-safe:
-// persist deterministic identity in Output and reconcile before retrying a POST.
-type Provider interface {
-	Prepare(ctx context.Context, snapshot Snapshot) (Output, error)
-	Advance(ctx context.Context, snapshot Snapshot, output Output, state json.RawMessage) (Progress, error)
-}
-
-// ExclusiveTargetProvider requires sole ownership of managed calls to its
-// settlement targets. Each key is a prepared action key. Hosts must validate
-// these claims against the entire immutable execute call before submission and
-// recovery, including providers whose progress was already persisted as done.
-// This conservative boundary prevents receipt evidence being reused across
-// providers or confused with static calls when the protocol has no action ID.
-type ExclusiveTargetProvider interface {
-	ExclusiveTargets() map[string]common.Address
-}
-
-// ExclusiveOutputTargetProvider reconstructs ownership from immutable persisted
-// preparation data, including after restart and after its progress is done.
-type ExclusiveOutputTargetProvider interface {
-	ExclusiveOutputTargets(Output) (map[string]common.Address, error)
+// ValidateSnapshot fences a compiled operation to its authenticated attempt.
+// A fresh program must compile new operations rather than reuse old route data.
+func (p Preparation) ValidateSnapshot(expected chainio.Snapshot) error {
+	actual := p.Program.Snapshot
+	if expected.ChainID == nil || actual.ChainID == nil || expected.BlockNumber == nil || actual.BlockNumber == nil || expected.ChainID.Cmp(actual.ChainID) != 0 || expected.BlockNumber.Cmp(actual.BlockNumber) != 0 || expected.BlockHash != actual.BlockHash || expected.Timestamp != actual.Timestamp || expected.Executor != actual.Executor || expected.Account != actual.Account || expected.Caller != actual.Caller || expected.RecipeHash != actual.RecipeHash || expected.Root != actual.Root {
+		return errors.New("preparation identity differs from compiled program")
+	}
+	return nil
 }

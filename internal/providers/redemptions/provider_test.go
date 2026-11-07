@@ -15,8 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-	"gopkg.in/yaml.v3"
-
 	async "github.com/symbioticfi/merkle-executor/api/bindings/asyncredeemvault"
 	share "github.com/symbioticfi/merkle-executor/api/bindings/centrifugeshare"
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
@@ -29,8 +27,10 @@ import (
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretostrategy"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"gopkg.in/yaml.v3"
 )
 
 type issuerReader struct {
@@ -104,11 +104,11 @@ func issuerConfig(family string) Config {
 	return cfg
 }
 
-func issuerFixture(t *testing.T, cfg Config) (provider.Snapshot, *issuerReader) {
+func issuerFixture(t *testing.T, cfg Config) (chainio.Snapshot, *issuerReader) {
 	t.Helper()
 	receipt := &types.Header{Number: big.NewInt(41), Time: 900}
 	pinned := &types.Header{Number: big.NewInt(42), Time: 1000, ParentHash: receipt.Hash()}
-	s := provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(42), BlockHash: pinned.Hash(), Timestamp: 1000, Account: issuerAddress(99), Execution: &provider.Execution{TxHash: common.HexToHash("0xfeed"), BlockNumber: big.NewInt(41), BlockHash: receipt.Hash()}}
+	s := chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(42), BlockHash: pinned.Hash(), Timestamp: 1000, Account: issuerAddress(99), Execution: &chainio.Execution{TxHash: common.HexToHash("0xfeed"), BlockNumber: big.NewInt(41), BlockHash: receipt.Hash()}}
 	r := &issuerReader{t: t, block: big.NewInt(42), results: map[string][]byte{}, headers: map[uint64]*types.Header{41: receipt, 42: pinned}}
 	token, asset, target := common.HexToAddress(cfg.Token), common.HexToAddress(cfg.OutputAsset), common.HexToAddress(cfg.Target)
 	amount, ok := new(big.Int).SetString(cfg.Amount, 10)
@@ -186,7 +186,7 @@ func issuerFixture(t *testing.T, cfg Config) (provider.Snapshot, *issuerReader) 
 	return s, r
 }
 
-func issuerProvider(t *testing.T, cfg Config, r provider.Reader) provider.Provider {
+func issuerProvider(t *testing.T, cfg Config, r chainio.Reader) *Provider {
 	t.Helper()
 	p, err := New(cfg, providerRegistry.Deps{Chain: r})
 	if err != nil {
@@ -641,7 +641,7 @@ func TestPrepareRequiresPinnedAccountSnapshot(t *testing.T) {
 	}
 }
 
-func issuerManageLog(t *testing.T, s provider.Snapshot, calls []protocolio.ManagedCall) types.Log {
+func issuerManageLog(t *testing.T, s chainio.Snapshot, calls []protocolio.ManagedCall) types.Log {
 	t.Helper()
 	event := account.NewMerkleAccount().GetABI().Events[account.MerkleAccountManageEventName]
 	actions := make([]account.IMerkleAccountAction, len(calls))

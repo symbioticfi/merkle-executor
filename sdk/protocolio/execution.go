@@ -2,22 +2,13 @@ package protocolio
 
 import (
 	"bytes"
-	"context"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
-
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/chainio"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
-
-// Execution verifies evidence from the authorizing transaction against the pinned
-// confirmed snapshot. A later receipt or an orphaned request cannot authorize progress.
-func Execution(ctx context.Context, r provider.Reader, s provider.Snapshot) error {
-	return chainio.VerifyExecution(ctx, r, s)
-}
 
 // ManagedCall is a zero-value account call whose successful execution a provider
 // must establish before declaring its request or claim phase complete.
@@ -28,11 +19,11 @@ type ManagedCall struct {
 
 // ExecutedCalls requires the expected calls in order in the account's successful
 // Manage events. A matching event cannot be reused for another expected call.
-// Call Execution first to establish canonical confirmation of this receipt.
+// Call chainio.VerifyExecution first to establish canonical confirmation.
 // Matching is local to this invocation. Receipt-dependent providers must declare
-// provider.ExclusiveTargetProvider and use keeper composition validation to avoid
+// complete provider.Requirements.ExclusiveTargets claims and runtime composition validation to avoid
 // claiming another provider's or a static action's evidence, including on restart.
-func ExecutedCalls(s provider.Snapshot, expected []ManagedCall) error {
+func ExecutedCalls(s chainio.Snapshot, expected []ManagedCall) error {
 	if err := s.Execution.Validate(); err != nil {
 		return err
 	}

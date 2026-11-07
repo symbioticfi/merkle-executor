@@ -15,8 +15,8 @@ import (
 	binding "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 func rewardBatch(t *testing.T) ([]wire.MerklReward, common.Hash, [][][32]byte) {
@@ -118,7 +118,7 @@ func TestDefaultRecipientReadOncePerPinnedPreparation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			snap := provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: new(big.Int).Set(pinned), Account: addr(3), Timestamp: 1000}
+			snap := chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: new(big.Int).Set(pinned), Account: addr(3), Timestamp: 1000}
 			out, err := p.Prepare(context.Background(), snap)
 			if mode == "redirected" || mode == "malformed default" {
 				if err == nil {

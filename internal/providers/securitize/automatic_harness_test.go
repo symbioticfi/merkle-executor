@@ -3,18 +3,20 @@ package securitize
 import (
 	"context"
 	"encoding/json"
+	"math/big"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"math/big"
 )
 
 // Test adapter keeps behavioral fixtures at the compile/operation boundary.
 type automaticTest struct{ *automatic }
 
 func testAutomatic(p provider.Integration) *automaticTest { return &automaticTest{p.(*automatic)} }
-func (p *automaticTest) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (provider.Requirements, error) {
+func (p *automaticTest) RecipeRequirements(s chainio.Snapshot, r recipes.Recipe, t *recipes.Tree) (provider.Requirements, error) {
 	ops, err := p.Compile(provider.Program{Snapshot: s, Recipe: r, Tree: t})
 	if err != nil {
 		return provider.Requirements{}, err
@@ -31,7 +33,7 @@ func (p *automaticTest) RecipeRequirements(s provider.Snapshot, r recipes.Recipe
 	}
 	return total, nil
 }
-func (p *automaticTest) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
+func (p *automaticTest) PrepareRecipe(ctx context.Context, s chainio.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
 	program := provider.Program{Snapshot: s, Recipe: r, Tree: t}
 	ops, err := p.Compile(program)
 	if err != nil {
@@ -69,7 +71,7 @@ func (p *automaticTest) ExclusiveOutputTargets(out provider.Output) (map[string]
 	}
 	return op.Requirements().ExclusiveTargets, nil
 }
-func (p *automaticTest) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+func (p *automaticTest) Advance(ctx context.Context, s chainio.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
 	var legacy derived.Envelope
 	if json.Unmarshal(out.Data, &legacy) == nil && legacy.Version == 1 && !legacy.Matched {
 		var cfg any

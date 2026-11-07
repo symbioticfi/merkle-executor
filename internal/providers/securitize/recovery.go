@@ -2,12 +2,13 @@ package securitize
 
 import (
 	"bytes"
+	"math/big"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"math/big"
 )
 
 func (p *automatic) validateKnownRoute(cfg Config, decimals uint8) error {

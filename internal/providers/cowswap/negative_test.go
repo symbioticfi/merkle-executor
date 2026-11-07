@@ -18,8 +18,8 @@ import (
 	wire "github.com/symbioticfi/merkle-executor/api/protocoltypes"
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	ab "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 type negativeChain struct{ reorg atomic.Bool }
@@ -48,8 +48,8 @@ func (*negativeChain) CallContract(_ context.Context, m ethereum.CallMsg, _ *big
 func negativeConfig(url string) Config {
 	return Config{HTTP: protocolio.HTTPConfig{URL: url}, Settlement: addr(4).Hex(), SellToken: addr(1).Hex(), BuyToken: addr(2).Hex(), SellAmount: "1000", MinBuyAmount: "1800", ValiditySeconds: 600, Action: "1:0"}
 }
-func negativeSnapshot() provider.Snapshot {
-	return provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000, BlockHash: testHeader(big.NewInt(12)).Hash()}
+func negativeSnapshot() chainio.Snapshot {
+	return chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000, BlockHash: testHeader(big.NewInt(12)).Hash()}
 }
 
 func TestPrepareRejectsIncompatibleQuotesWithoutOrderPost(t *testing.T) {

@@ -4,10 +4,10 @@ package provider
 import (
 	"net/http"
 
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 type Deps struct {
-	Chain provider.Reader
+	Chain chainio.Reader
 	HTTP  *http.Client
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"reflect"
+	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -16,7 +17,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"strconv"
 )
 
 const RewardAPI = "https://api.merkl.xyz"
@@ -39,7 +39,7 @@ func rewardHTTP() protocolio.HTTPConfig {
 	return protocolio.HTTPConfig{URL: RewardAPI, MaxResponseBytes: 8 << 20}
 }
 
-func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (*recipeClaim, error) {
+func (p *Automatic) derive(s chainio.Snapshot, r recipes.Recipe, t *recipes.Tree) (*recipeClaim, error) {
 	actions, err := recipes.ManagedActions(r, t)
 	if err != nil {
 		return nil, err
@@ -124,6 +124,7 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 }
 
 type automaticOperation struct {
+	snapshot     chainio.Snapshot
 	integration  *Automatic
 	compiled     *recipeClaim
 	requirements provider.Requirements
@@ -138,13 +139,19 @@ func (p *Automatic) Compile(program provider.Program) ([]provider.Operation, err
 	if err != nil || compiled == nil {
 		return nil, err
 	}
-	return []provider.Operation{&automaticOperation{integration: p, compiled: compiled, requirements: compiled.requirements}}, nil
+	return []provider.Operation{&automaticOperation{integration: p, snapshot: program.Snapshot, compiled: compiled, requirements: compiled.requirements}}, nil
 }
 func (o *automaticOperation) ID() string                          { return provider.OperationID(o.requirements.Actions) }
 func (o *automaticOperation) Requirements() provider.Requirements { return o.requirements.Clone() }
 func (o *automaticOperation) Prepare(ctx context.Context, preparation provider.Preparation) (provider.Output, error) {
 	if o.compiled == nil {
 		return provider.Output{}, errors.New("restored operation cannot prepare")
+	}
+	if err := ctx.Err(); err != nil {
+		return provider.Output{}, err
+	}
+	if err := preparation.ValidateSnapshot(o.snapshot); err != nil {
+		return provider.Output{}, err
 	}
 	if preparation.Reader == nil {
 		return provider.Output{}, errors.New("attempt chain reader required")

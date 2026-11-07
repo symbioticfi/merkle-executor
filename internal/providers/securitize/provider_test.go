@@ -13,8 +13,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-	"gopkg.in/yaml.v3"
-
 	legacy "github.com/symbioticfi/merkle-executor/api/bindings/securitizelegacyofframp"
 	modern "github.com/symbioticfi/merkle-executor/api/bindings/securitizeofframp"
 	"github.com/symbioticfi/merkle-executor/api/bindings/securitizetoken"
@@ -22,8 +20,10 @@ import (
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"gopkg.in/yaml.v3"
 )
 
 type chainReader struct {
@@ -139,10 +139,10 @@ func (r *chainReader) HeaderByNumber(_ context.Context, number *big.Int) (*types
 	return h, nil
 }
 
-func fixture(t *testing.T, mode string) (Config, provider.Snapshot, *chainReader) {
+func fixture(t *testing.T, mode string) (Config, chainio.Snapshot, *chainReader) {
 	t.Helper()
 	h := &types.Header{Number: big.NewInt(12), Time: 1000}
-	s := provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: h.Number, BlockHash: h.Hash(), Timestamp: h.Time, Account: address(10)}
+	s := chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: h.Number, BlockHash: h.Hash(), Timestamp: h.Time, Account: address(10)}
 	c := Config{ChainID: 1, Mode: mode, Token: address(1).Hex(), Target: address(2).Hex(), Amount: "100", Action: "1:0", AmountInput: new(uint)}
 	if mode != "wallet" {
 		c.PaymentToken, c.MinOutput = address(3).Hex(), "90"
@@ -160,7 +160,7 @@ func (r *chainReader) configure(c Config) {
 	r.amount, _ = new(big.Int).SetString(c.Amount, 10)
 }
 
-func newProvider(t *testing.T, c Config, r provider.Reader) *Provider {
+func newProvider(t *testing.T, c Config, r chainio.Reader) *Provider {
 	t.Helper()
 	if chain, ok := r.(*chainReader); ok {
 		chain.configure(c)
@@ -272,18 +272,18 @@ func TestLegacyNormalization(t *testing.T) {
 	}
 }
 
-func receiptLog(s provider.Snapshot, emitter common.Address, topics []common.Hash, data []byte, index uint) types.Log {
+func receiptLog(s chainio.Snapshot, emitter common.Address, topics []common.Hash, data []byte, index uint) types.Log {
 	return types.Log{Address: emitter, Topics: topics, Data: data, TxHash: s.Execution.TxHash, BlockNumber: s.Execution.BlockNumber.Uint64(), BlockHash: s.Execution.BlockHash, Index: index}
 }
 
-func transferLog(s provider.Snapshot, token, from, to common.Address, value int64, index uint) types.Log {
+func transferLog(s chainio.Snapshot, token, from, to common.Address, value int64, index uint) types.Log {
 	event := erc20.NewERC20().GetABI().Events["Transfer"]
 	return receiptLog(s, token, []common.Hash{event.ID, common.BytesToHash(from.Bytes()), common.BytesToHash(to.Bytes())}, protocolio.Word(big.NewInt(value)), index)
 }
 
-func execution(t *testing.T, p *Provider, s provider.Snapshot, out provider.Output) provider.Snapshot {
+func execution(t *testing.T, p *Provider, s chainio.Snapshot, out provider.Output) chainio.Snapshot {
 	t.Helper()
-	s.Execution = &provider.Execution{TxHash: common.HexToHash("0xabc"), BlockNumber: s.BlockNumber, BlockHash: s.BlockHash}
+	s.Execution = &chainio.Execution{TxHash: common.HexToHash("0xabc"), BlockNumber: s.BlockNumber, BlockHash: s.BlockHash}
 	a := account.NewMerkleAccount()
 	event := a.GetABI().Events["Manage"]
 	target := p.target
@@ -441,7 +441,7 @@ func TestConstructorRejectsUnsafeConfiguration(t *testing.T) {
 	for _, variant := range []string{"mode", "chain", "reader", "token", "target", "amount", "payment", "minimum", "duplicate-input", "wallet-payment", "wallet-minimum", "wallet-output-input", "action"} {
 		t.Run(variant, func(t *testing.T) {
 			c, _, r := fixture(t, "modern")
-			var chain provider.Reader = r
+			var chain chainio.Reader = r
 			switch variant {
 			case "mode":
 				c.Mode = "claim"

@@ -2,11 +2,12 @@ package liquidlanerfq
 
 import (
 	"encoding/json"
+	"testing"
+
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"testing"
 )
 
 func TestAutomaticRestoreAndLegacyImportRetainExternalCursorBeforeIO(t *testing.T) {
