@@ -1,14 +1,12 @@
 package runtime
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"math/big"
-	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,27 +17,20 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-type CheckpointStore interface {
-	Load(string, any) (bool, error)
-	LoadNamespace(string, string, any) (bool, error)
-	SaveNamespace(string, string, any) error
-	DeleteNamespace(string, string) error
-	ListNamespace(string) ([]json.RawMessage, error)
-	ActivateNamespace(string, map[string]any) error
-}
 type Planning interface {
 	PrepareAll(context.Context, []Strategy) []PreparationResult
 	Validate(context.Context, Plan) error
 	ConfirmedSnapshot(context.Context, chainio.Snapshot) (chainio.Snapshot, error)
 	VerifyConfirmedSnapshot(context.Context, chainio.Snapshot) error
 }
+
 type driverWorker struct {
-	name string
 	done chan struct{}
 	err  error
 }
+
+// Runtime owns workflows and the signer lane for this process only.
 type Runtime struct {
-	Store            CheckpointStore
 	Planner          Planning
 	Driver           Driver
 	Strategies       []Strategy
@@ -51,12 +42,10 @@ type Runtime struct {
 	Observe          func(strategy, outcome string)
 	ChainID          *big.Int
 	Caller           common.Address
-	LegacyConverters map[string][]LegacyConverter
 
 	tickMu          sync.Mutex
 	mu              sync.Mutex
 	started, closed bool
-	fault           error
 	process         context.Context
 	cancel          context.CancelFunc
 	workflows       map[string]Workflow
@@ -64,25 +53,19 @@ type Runtime struct {
 	accounts        map[common.Address]string
 	owner           string
 	worker          *driverWorker
+	blockedErr      error
 	next            int
 }
 
-func (r *Runtime) saveLocked(w Workflow) error {
-	if r.fault != nil {
-		return r.fault
-	}
-	if err := r.Store.SaveNamespace(Namespace, WorkflowKey(w.Name), w); err != nil {
-		r.fault = errors.Errorf("workflow storage uncertain; restart and reload required: %w", err)
-		return r.fault
-	}
+func (r *Runtime) putLocked(w Workflow) {
 	r.workflows[w.Name] = w.Clone()
 	if w.ownsAccount() {
 		r.accounts[w.Plan.Snapshot.Account] = w.Name
 	} else if r.accounts[w.Plan.Snapshot.Account] == w.Name {
 		delete(r.accounts, w.Plan.Snapshot.Account)
 	}
-	return nil
 }
+
 func (r *Runtime) Snapshot() []Workflow {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -93,12 +76,53 @@ func (r *Runtime) Snapshot() []Workflow {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
+
 func (r *Runtime) global(err error) error {
 	if r.Observe != nil {
 		r.Observe("_global", "error")
 	}
-	r.Log.Error(errors.New("runtime state or recovery failed"), "runtime iteration failed")
+	r.Log.Error(errors.New("runtime iteration failed"), "runtime iteration failed")
 	return err
+}
+
+// Start validates the current configuration and creates empty process-local state.
+func (r *Runtime) Start(ctx context.Context) error {
+	r.tickMu.Lock()
+	defer r.tickMu.Unlock()
+	return r.start(ctx)
+}
+
+func (r *Runtime) start(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errors.New("runtime closed")
+	}
+	if r.started {
+		return nil
+	}
+	if r.Planner == nil || r.ChainID == nil || r.ChainID.Sign() <= 0 || r.ChainID.BitLen() > 256 || r.Caller == (common.Address{}) || r.OperationTimeout <= 0 || (r.Mode != "send" && r.Mode != "simulate") || r.Mode == "send" && r.Driver == nil {
+		return errors.New("runtime dependencies, identity, mode and timeout required")
+	}
+	strategies := make(map[string]Strategy, len(r.Strategies))
+	for _, s := range r.Strategies {
+		if s.Config.Name == "" || strings.TrimSpace(s.Config.Name) != s.Config.Name {
+			return errors.New("strategy name required")
+		}
+		if _, exists := strategies[s.Config.Name]; exists {
+			return errors.New("duplicate strategy identity")
+		}
+		if !common.IsHexAddress(s.Config.Executor) || common.HexToAddress(s.Config.Executor) == (common.Address{}) || !common.IsHexAddress(s.Config.Account) || common.HexToAddress(s.Config.Account) == (common.Address{}) || s.Config.Interval <= 0 {
+			return errors.New("strategy executor, account and positive interval required")
+		}
+		strategies[s.Config.Name] = s
+	}
+	r.strategies = strategies
+	r.workflows = make(map[string]Workflow)
+	r.accounts = make(map[common.Address]string)
+	r.process, r.cancel = context.WithCancel(context.WithoutCancel(ctx))
+	r.started = true
+	return nil
 }
 
 func (r *Runtime) Tick(ctx context.Context) error {
@@ -107,20 +131,24 @@ func (r *Runtime) Tick(ctx context.Context) error {
 	if err := r.start(ctx); err != nil {
 		return r.global(err)
 	}
+	operationContext, cancelOperations := context.WithCancel(ctx)
+	stop := context.AfterFunc(r.process, cancelOperations)
+	defer stop()
+	defer cancelOperations()
+	ctx = operationContext
+	var failures []error
 	r.mu.Lock()
-	if r.closed || r.fault != nil {
-		err := r.fault
-		if err == nil {
-			err = errors.New("runtime closed")
+	if worker := r.worker; worker != nil {
+		select {
+		case <-worker.done:
+			r.worker = nil
+			if worker.err != nil {
+				failures = append(failures, worker.err)
+			}
+		default:
 		}
-		r.mu.Unlock()
-		return r.global(err)
-	}
-	if r.owner != "" && r.worker == nil {
-		r.launchLocked(r.owner, true)
 	}
 	r.mu.Unlock()
-	var failures []error
 	reconciled := map[string]bool{}
 	if r.Mode != "simulate" {
 		if err := r.reconcile(ctx, reconciled); err != nil {
@@ -128,18 +156,13 @@ func (r *Runtime) Tick(ctx context.Context) error {
 		}
 	}
 	r.mu.Lock()
-	if r.fault != nil {
-		err := r.fault
-		r.mu.Unlock()
-		return r.global(err)
-	}
 	eligible := make([]Strategy, 0, len(r.Strategies))
 	eligibleIndices := make([]int, 0, len(r.Strategies))
 	for i := range r.Strategies {
 		index := (i + r.next) % len(r.Strategies)
 		s := r.Strategies[index]
 		w, found := r.workflows[s.Config.Name]
-		if found && (w.Reserved || w.Phase == "pending" || w.Phase == "authorized" || w.Phase == "failed" || w.Phase == "settled" && time.Since(w.FinishedAt) < s.Config.Interval) {
+		if found && (w.ownsAccount() || w.Phase == "failed" || w.Phase == "settled" && time.Since(w.FinishedAt) < s.Config.Interval) {
 			continue
 		}
 		account := common.HexToAddress(s.Config.Account)
@@ -173,7 +196,7 @@ func (r *Runtime) Tick(ctx context.Context) error {
 				continue
 			}
 			r.mu.Lock()
-			free := r.owner == "" && r.worker == nil && r.fault == nil
+			free := !r.closed && r.owner == "" && r.worker == nil
 			r.mu.Unlock()
 			if !free {
 				continue
@@ -181,45 +204,33 @@ func (r *Runtime) Tick(ctx context.Context) error {
 			operation, cancel = context.WithTimeout(ctx, r.OperationTimeout)
 			err := r.Planner.Validate(operation, result.Plan)
 			cancel()
+			if err == nil {
+				err = r.validatePlan(result.Plan, s)
+			}
 			if err != nil {
 				if !errors.Is(err, provider.ErrNotReady) {
 					failures = append(failures, err)
 				}
 				continue
 			}
-			if _, err = RestoreOperations(result.Plan, s.Integrations); err != nil {
-				failures = append(failures, err)
-				continue
+			if err = ctx.Err(); err != nil {
+				return errors.Join(append(failures, err)...)
 			}
 			var random [16]byte
 			if _, err = rand.Read(random[:]); err != nil {
-				return err
-			}
-			w := Workflow{Version: 2, IdentityVersion: 2, Name: s.Config.Name, ID: s.Config.Name + "-" + hex.EncodeToString(random[:]), ConfigHash: s.Config.Fingerprint(), Phase: "prepared", Plan: result.Plan.Clone()}
-			r.mu.Lock()
-			err = r.saveLocked(w)
-			r.mu.Unlock()
-			if err != nil {
 				return r.global(err)
 			}
-			if err = r.Driver.Reserve(ctx, w.ID); err != nil {
-				failures = append(failures, err)
-				continue
-			}
+			w := Workflow{Name: s.Config.Name, ID: s.Config.Name + "-" + hex.EncodeToString(random[:]), Phase: "pending", Plan: result.Plan.Clone(), StartedAt: time.Now().UTC()}
 			r.mu.Lock()
-			w.Phase = "pending"
-			w.Reserved = true
-			w.Transaction = &Transaction{Intent: Intent{ID: w.ID, To: w.Plan.Snapshot.Executor, Data: w.Plan.Calldata}, Sender: r.Caller, ChainID: new(big.Int).Set(r.ChainID), Admitted: true}
+			if r.closed {
+				r.mu.Unlock()
+				return errors.New("runtime closed")
+			}
+			r.putLocked(w)
 			r.owner = w.Name
-			err = r.saveLocked(w)
-			if err == nil {
-				r.launchLocked(w.Name, false)
-				r.next = (eligibleIndices[i] + 1) % len(r.Strategies)
-			}
+			r.launchLocked(w)
+			r.next = (eligibleIndices[i] + 1) % len(r.Strategies)
 			r.mu.Unlock()
-			if err != nil {
-				return r.global(err)
-			}
 		}
 	}
 	r.mu.Lock()
@@ -233,13 +244,8 @@ func (r *Runtime) Tick(ctx context.Context) error {
 			if r.worker == worker {
 				r.worker = nil
 			}
-			fault := r.fault
 			r.mu.Unlock()
-			if fault != nil {
-				cancel()
-				return r.global(fault)
-			}
-			if worker.err != nil && !errors.Is(worker.err, context.DeadlineExceeded) && !errors.Is(worker.err, context.Canceled) {
+			if worker.err != nil {
 				failures = append(failures, worker.err)
 			}
 		case <-wait.Done():
@@ -252,110 +258,55 @@ func (r *Runtime) Tick(ctx context.Context) error {
 		}
 	}
 	r.mu.Lock()
-	fault := r.fault
+	if r.blockedErr != nil {
+		failures = append(failures, r.blockedErr)
+	}
 	for _, w := range r.workflows {
 		if w.Phase == "failed" {
-			failures = append(failures, errors.New("strategy halted on confirmed revert; inspect durable workflow"))
+			failures = append(failures, errors.Errorf("strategy %s halted on confirmed revert", w.Name))
 		}
 	}
 	r.mu.Unlock()
-	if fault != nil {
-		return r.global(fault)
-	}
 	return errors.Join(failures...)
 }
 
-func (r *Runtime) launchLocked(name string, resume bool) {
-	w := r.workflows[name].Clone()
-	worker := &driverWorker{name: name, done: make(chan struct{})}
+func (r *Runtime) validatePlan(plan Plan, s Strategy) error {
+	if plan.Snapshot.ChainID == nil || plan.Snapshot.ChainID.Cmp(r.ChainID) != 0 || plan.Snapshot.Caller != r.Caller || plan.Snapshot.Executor != common.HexToAddress(s.Config.Executor) || plan.Snapshot.Account != common.HexToAddress(s.Config.Account) {
+		return errors.New("prepared plan differs from strategy or deployment identity")
+	}
+	_, err := RestoreOperations(plan, s.Integrations)
+	return err
+}
+
+func (r *Runtime) launchLocked(w Workflow) {
+	worker := &driverWorker{done: make(chan struct{})}
 	r.worker = worker
 	go func() {
 		defer close(worker.done)
-		persist := func(tx Transaction) error {
-			r.mu.Lock()
-			defer r.mu.Unlock()
-			current := r.workflows[name].Clone()
-			if old := current.Transaction; old != nil && len(old.Attempts) > 0 {
-				if tx.Nonce != old.Nonce || len(tx.Attempts) < len(old.Attempts) {
-					return errors.New("transaction callback discarded owned attempt")
-				}
-				for i := range old.Attempts {
-					if !bytes.Equal(tx.Attempts[i], old.Attempts[i]) {
-						return errors.New("transaction callback changed owned attempt")
-					}
-				}
-				if old.Terminal != "" && (tx.Terminal != old.Terminal || !reflect.DeepEqual(tx.Execution.Clone(), old.Execution.Clone())) {
-					return errors.New("transaction callback changed terminal evidence")
-				}
-			}
-			current.Transaction = &tx
-			current.Phase = "pending"
-			if tx.Terminal != "" {
-				current.Phase = "authorized"
-				if tx.Terminal == "confirmed" && r.workflows[name].Phase == "settled" {
-					current.Phase = "settled"
-				}
-				if tx.Terminal == "reverted" {
-					current.Phase = "failed"
-					current.FinishedAt = time.Now().UTC()
-				}
-			}
-			if err := validateTransaction(current, r.ChainID, r.Caller); err != nil {
-				return err
-			}
-			return r.saveLocked(current)
-		}
-		var result TransactionResult
-		if resume && w.Transaction == nil {
-			if err := r.Driver.Release(r.process, w.ID); err != nil {
-				worker.err = err
-				return
-			}
-			r.mu.Lock()
-			r.owner = ""
-			r.mu.Unlock()
-			return
-		} else if resume {
-			result = r.Driver.Resume(r.process, *w.Transaction, persist)
-		} else {
-			result = r.Driver.Execute(r.process, w.Transaction.Intent, persist)
-		}
-		worker.err = result.Err
-		r.mu.Lock()
-		current := r.workflows[name].Clone()
-		if r.fault != nil {
-			r.mu.Unlock()
-			return
-		}
-		terminal := current.Transaction != nil && current.Transaction.Terminal != "" && result.Err == nil && !result.Pending && result.Execution != nil && reflect.DeepEqual(result.Execution.Clone(), current.Transaction.Execution.Clone()) && result.Reverted == (current.Transaction.Terminal == "reverted")
-		unsigned := result.NotSubmitted && (current.Transaction == nil || len(current.Transaction.Attempts) == 0)
-		if unsigned {
-			current.Transaction = nil
-			current.Phase = "prepared"
-			current.Reserved = false
-			if err := r.saveLocked(current); err != nil {
-				worker.err = err
-				r.mu.Unlock()
-				return
-			}
-		}
-		r.mu.Unlock()
-		if !terminal && !unsigned {
-			return
-		}
-		if err := r.Driver.Release(r.process, current.ID); err != nil {
-			worker.err = err
-			return
-		}
+		result := r.Driver.Execute(r.process, Intent{ID: w.ID, To: w.Plan.Snapshot.Executor, Data: w.Plan.Calldata})
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		current = r.workflows[name].Clone()
-		current.Reserved = false
-		if err := r.saveLocked(current); err != nil {
-			worker.err = err
-			return
+		current := r.workflows[w.Name].Clone()
+		worker.err = result.Err
+		switch {
+		case result.NotSubmitted && result.Execution == nil && !result.Reverted:
+			current.Phase = "prepared"
+			r.owner = ""
+		case !result.NotSubmitted && result.Err == nil && result.Execution != nil && result.Execution.Validate() == nil:
+			current.Execution = result.Execution.Clone()
+			current.Phase = "authorized"
+			if result.Reverted {
+				current.Phase = "failed"
+				current.FinishedAt = time.Now().UTC()
+			}
+			r.owner = ""
+		default:
+			if worker.err == nil {
+				worker.err = errors.New("sender returned without conclusive submission evidence")
+			}
+			r.blockedErr = worker.err
 		}
-		r.owner = ""
+		r.putLocked(current)
 	}()
 }
 
@@ -363,7 +314,7 @@ func (r *Runtime) reconcile(ctx context.Context, seen map[string]bool) error {
 	r.mu.Lock()
 	var names []string
 	for name, w := range r.workflows {
-		if w.Phase == "authorized" && !w.Reserved && !seen[name] {
+		if w.Phase == "authorized" && !seen[name] {
 			names = append(names, name)
 			seen[name] = true
 		}
@@ -399,21 +350,21 @@ func (r *Runtime) reconcile(ctx context.Context, seen map[string]bool) error {
 	wg.Wait()
 	return errors.Join(failures...)
 }
+
 func (r *Runtime) reconcileOne(ctx context.Context, name string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	w := r.workflows[name].Clone()
-	fault := r.fault
 	s := r.strategies[name]
 	r.mu.Unlock()
-	if fault != nil {
-		return fault
-	}
 	operations, err := RestoreOperations(w.Plan, s.Integrations)
 	if err != nil {
 		return err
 	}
 	snapshot := w.Plan.Snapshot
-	snapshot.Execution = w.Transaction.Execution.Clone()
+	snapshot.Execution = w.Execution.Clone()
 	snapshot, err = r.Planner.ConfirmedSnapshot(ctx, snapshot)
 	if err != nil {
 		return err
@@ -421,12 +372,6 @@ func (r *Runtime) reconcileOne(ctx context.Context, name string) error {
 	for i, op := range operations {
 		if w.Plan.Operations[i].Progress.Done {
 			continue
-		}
-		r.mu.Lock()
-		fault = r.fault
-		r.mu.Unlock()
-		if fault != nil {
-			return fault
 		}
 		if err = r.Planner.VerifyConfirmedSnapshot(ctx, snapshot); err != nil {
 			return err
@@ -440,11 +385,8 @@ func (r *Runtime) reconcileOne(ctx context.Context, name string) error {
 		}
 		w.Plan.Operations[i].Progress = progress.Clone()
 		r.mu.Lock()
-		err = r.saveLocked(w)
+		r.putLocked(w)
 		r.mu.Unlock()
-		if err != nil {
-			return err
-		}
 	}
 	for _, record := range w.Plan.Operations {
 		if !record.Progress.Done {
@@ -454,32 +396,37 @@ func (r *Runtime) reconcileOne(ctx context.Context, name string) error {
 	w.Phase = "settled"
 	w.FinishedAt = time.Now().UTC()
 	r.mu.Lock()
-	err = r.saveLocked(w)
+	r.putLocked(w)
 	r.mu.Unlock()
-	return err
+	return nil
 }
+
+// Close cancels process work and waits before the host may close its RPC client.
 func (r *Runtime) Close() error {
-	r.tickMu.Lock()
-	defer r.tickMu.Unlock()
 	r.mu.Lock()
 	r.closed = true
 	if r.cancel != nil {
 		r.cancel()
 	}
+	r.mu.Unlock()
+	r.tickMu.Lock()
+	defer r.tickMu.Unlock()
+	r.mu.Lock()
 	worker := r.worker
 	r.mu.Unlock()
-	if worker != nil {
-		timeout := r.ShutdownTimeout
-		if timeout <= 0 {
-			timeout = r.OperationTimeout
-		}
-		timer := time.NewTimer(timeout)
-		defer timer.Stop()
-		select {
-		case <-worker.done:
-		case <-timer.C:
-			return errors.New("runtime worker drain timed out; state must remain owned")
-		}
+	if worker == nil {
+		return nil
 	}
-	return nil
+	timeout := r.ShutdownTimeout
+	if timeout <= 0 {
+		timeout = r.OperationTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-worker.done:
+		return nil
+	case <-timer.C:
+		return errors.New("runtime worker drain timed out")
+	}
 }

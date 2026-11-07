@@ -3,7 +3,6 @@ package runtime
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"math/big"
 	"slices"
 	"strings"
@@ -12,7 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
@@ -23,18 +21,11 @@ import (
 type Config struct {
 	Name, Executor, Account, RecipeHash, Tree string
 	Interval                                  time.Duration
-	Revision                                  string
-}
-
-func (c Config) Fingerprint() string {
-	raw, _ := json.Marshal(c)
-	return crypto.Keccak256Hash(raw).Hex()
 }
 
 type Strategy struct {
-	Config           Config
-	Integrations     []provider.Integration
-	LegacyConfigHash string
+	Config       Config
+	Integrations []provider.Integration
 }
 type Plan struct {
 	Snapshot    chainio.Snapshot  `json:"snapshot"`

@@ -23,8 +23,7 @@ var approvalPermissionArgs = func() abi.Arguments {
 	return abi.Arguments{{Type: mask}, {Type: proof}}
 }()
 
-// validatePlanIdentity binds every persisted assignment to the immutable execute
-// call. Recovery never reconstructs calldata or fetches a replacement permission tree.
+// validatePlanIdentity binds every provider assignment to the immutable execute call.
 func validatePlanIdentity(plan Plan) error {
 	s := plan.Snapshot
 	if s.ChainID == nil || s.ChainID.Sign() <= 0 || s.ChainID.BitLen() > 256 || s.BlockNumber == nil || !s.BlockNumber.IsUint64() || s.BlockHash == (common.Hash{}) || s.Executor == (common.Address{}) || s.Account == (common.Address{}) || s.Caller == (common.Address{}) || s.RecipeHash == (common.Hash{}) || plan.RecipeBlock > s.BlockNumber.Uint64() {
@@ -70,7 +69,7 @@ func validatePlanIdentity(plan Plan) error {
 				return errors.New("prepared approval proof differs from committed root")
 			}
 			// The original permission amount preimage is not encoded in this tuple.
-			// Full simulation validates amount/reset semantics; recovery keeps exact bytes.
+			// Full simulation validates amount/reset semantics; this check keeps exact bytes.
 			continue
 		}
 		if slot.Operation != recipes.Manage {
@@ -147,7 +146,7 @@ func validatePlanIdentity(plan Plan) error {
 	return ValidatePlanComposition(plan.Calldata, plan.Operations)
 }
 
-// RestoreOperations validates registration identity and complete saved claims
+// RestoreOperations validates registration identity and complete prepared claims
 // before any provider reconciliation. Completed claims remain in the Plan.
 func RestoreOperations(plan Plan, integrations []provider.Integration) ([]provider.Operation, error) {
 	if err := validatePlanIdentity(plan); err != nil {

@@ -10,31 +10,32 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 type coordinatorPlanner struct {
 	mu          sync.Mutex
 	plans       map[string]Plan
-	prepares    int
+	prepared    []string
 	verifyCalls int
 	verify      func(int) error
+	prepare     func(context.Context, []Strategy) []PreparationResult
 }
 
-func (p *coordinatorPlanner) PrepareAll(_ context.Context, ss []Strategy) []PreparationResult {
+func (p *coordinatorPlanner) PrepareAll(ctx context.Context, ss []Strategy) []PreparationResult {
+	if p.prepare != nil {
+		return p.prepare(ctx, ss)
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := make([]PreparationResult, len(ss))
 	for i, s := range ss {
-		p.prepares++
+		p.prepared = append(p.prepared, s.Config.Name)
 		plan, ok := p.plans[s.Config.Name]
 		if !ok {
 			out[i].Err = provider.ErrNotReady
@@ -59,431 +60,625 @@ func (p *coordinatorPlanner) VerifyConfirmedSnapshot(context.Context, chainio.Sn
 }
 
 type coordinatorDriver struct {
-	mu                            sync.Mutex
-	owner                         string
-	executions, resumes, releases int
-	wait                          chan struct{}
-	terminal                      bool
-	beforeRelease                 func() error
-	execute                       func(context.Context, Intent, PersistTransaction) TransactionResult
-	resume                        func(context.Context, Transaction, PersistTransaction) TransactionResult
+	mu      sync.Mutex
+	intents []Intent
+	execute func(context.Context, Intent) TransactionResult
 }
 
-func (d *coordinatorDriver) Reserve(_ context.Context, id string) error {
+func (d *coordinatorDriver) Execute(ctx context.Context, intent Intent) TransactionResult {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.owner != "" && d.owner != id {
-		return errors.New("busy")
-	}
-	d.owner = id
-	return nil
-}
-func (d *coordinatorDriver) Release(_ context.Context, id string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.beforeRelease != nil {
-		if err := d.beforeRelease(); err != nil {
-			return err
-		}
-	}
-	if d.owner != id {
-		return errors.New("wrong owner")
-	}
-	d.owner = ""
-	d.releases++
-	return nil
-}
-func (d *coordinatorDriver) Execute(ctx context.Context, intent Intent, persist PersistTransaction) TransactionResult {
-	d.mu.Lock()
-	d.executions++
+	d.intents = append(d.intents, intent)
 	d.mu.Unlock()
 	if d.execute != nil {
-		return d.execute(ctx, intent, persist)
+		return d.execute(ctx, intent)
 	}
-	tx := Transaction{Intent: intent, Sender: common.HexToAddress("0x30"), ChainID: big.NewInt(1), Admitted: true}
-	if err := persist(tx); err != nil {
-		return TransactionResult{Err: err}
-	}
-	if d.wait != nil {
-		select {
-		case <-d.wait:
-		case <-ctx.Done():
-			return TransactionResult{Pending: true, Err: ctx.Err()}
-		}
-	}
-	if !d.terminal {
-		return TransactionResult{NotSubmitted: true}
-	}
-	return TransactionResult{Pending: true}
+	return TransactionResult{NotSubmitted: true}
 }
-func (d *coordinatorDriver) Resume(ctx context.Context, tx Transaction, persist PersistTransaction) TransactionResult {
+func (d *coordinatorDriver) calls() []Intent {
 	d.mu.Lock()
-	d.resumes++
-	d.mu.Unlock()
-	if d.resume != nil {
-		return d.resume(ctx, tx, persist)
-	}
-	if d.wait != nil {
-		select {
-		case <-d.wait:
-		case <-ctx.Done():
-			return TransactionResult{Pending: true, Err: ctx.Err()}
-		}
-	}
-	return TransactionResult{NotSubmitted: len(tx.Attempts) == 0, Pending: len(tx.Attempts) > 0}
+	defer d.mu.Unlock()
+	return append([]Intent(nil), d.intents...)
 }
-
-type coordinatorStore struct {
-	*state.Store
-	fail      bool
-	after     bool
-	lists     int
-	failPhase string
-	failDone  bool
-}
-
-func (s *coordinatorStore) SaveNamespace(n, k string, v any) error {
-	if w, ok := v.(Workflow); ok && s.failDone {
-		for _, record := range w.Plan.Operations {
-			if record.Progress.Done {
-				return errors.New("injected progress checkpoint failure")
-			}
-		}
-	}
-	if w, ok := v.(Workflow); ok && s.failPhase != "" && w.Phase == s.failPhase {
-		return errors.New("injected phase checkpoint failure")
-	}
-	if s.fail {
-		if s.after {
-			_ = s.Store.SaveNamespace(n, k, v)
-		}
-		return errors.New("injected uncertain checkpoint")
-	}
-	return s.Store.SaveNamespace(n, k, v)
-}
-func (s *coordinatorStore) ListNamespace(n string) ([]json.RawMessage, error) {
-	s.lists++
-	return s.Store.ListNamespace(n)
-}
-func coordinatorPlan(t *testing.T, name string) Plan {
+func coordinatorPlan(t *testing.T, executorAddress string) Plan {
 	t.Helper()
-	var steps [][]byte
-	recipe := recipes.Recipe{Steps: steps}
+	recipe := recipes.Recipe{}
 	hash, err := recipes.HashRecipe(recipe)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Plan{Snapshot: chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(10), BlockHash: common.HexToHash("0x10"), Executor: common.HexToAddress(name), Account: common.HexToAddress("0x20"), Caller: common.HexToAddress("0x30"), RecipeHash: hash}, Calldata: executor.NewRecipeExecutor().PackExecute(nil, steps, nil, nil)}
+	return Plan{Snapshot: chainio.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(10), BlockHash: common.HexToHash("0x10"), Executor: common.HexToAddress(executorAddress), Account: common.HexToAddress("0x20"), Caller: common.HexToAddress("0x30"), RecipeHash: hash}, Calldata: executor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil)}
 }
-func coordinatorHarness(t *testing.T) (*Runtime, *coordinatorStore, *coordinatorDriver) {
+func coordinatorExecution() *chainio.Execution {
+	return &chainio.Execution{TxHash: common.HexToHash("0xa1"), BlockNumber: big.NewInt(11), BlockHash: common.HexToHash("0x11")}
+}
+func coordinatorHarness(t *testing.T) (*Runtime, *coordinatorPlanner, *coordinatorDriver) {
 	t.Helper()
-	st, err := state.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := &coordinatorStore{Store: st}
-	d := &coordinatorDriver{}
 	name := common.HexToAddress("0x10").Hex()
 	p := &coordinatorPlanner{plans: map[string]Plan{name: coordinatorPlan(t, name)}}
-	r := &Runtime{Store: s, Planner: p, Driver: d, Strategies: []Strategy{{Config: Config{Name: name, Executor: name, Account: common.HexToAddress("0x20").Hex(), Interval: time.Hour}}}, ChainID: big.NewInt(1), Caller: common.HexToAddress("0x30"), Mode: "send", OperationTimeout: time.Second}
-	t.Cleanup(func() { _ = r.Close(); _ = st.Close() })
-	return r, s, d
+	d := &coordinatorDriver{}
+	r := &Runtime{Planner: p, Driver: d, Strategies: []Strategy{{Config: Config{Name: name, Executor: name, Account: common.HexToAddress("0x20").Hex(), Interval: time.Hour}}}, ChainID: big.NewInt(1), Caller: common.HexToAddress("0x30"), Mode: "send", OperationTimeout: time.Second, ShutdownTimeout: time.Second}
+	t.Cleanup(func() {
+		if err := r.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return r, p, d
+}
+func addCoordinatorStrategy(t *testing.T, r *Runtime, p *coordinatorPlanner, name, account string) {
+	t.Helper()
+	s := Strategy{Config: Config{Name: name, Executor: common.HexToAddress(name).Hex(), Account: common.HexToAddress(account).Hex(), Interval: time.Hour}}
+	r.Strategies = append(r.Strategies, s)
+	plan := coordinatorPlan(t, s.Config.Executor)
+	plan.Snapshot.Account = common.HexToAddress(account)
+	p.plans[name] = plan
 }
 
-func TestCoordinatorPersistsReservationBeforeDriverAndNeverRescansIdleHistory(t *testing.T) {
-	r, s, d := coordinatorHarness(t)
-	if err := r.Start(context.Background()); err != nil {
-		t.Fatal(err)
+func TestCoordinatorValidatesCurrentConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*Runtime)
+	}{
+		{"chain", func(r *Runtime) { r.ChainID = nil }},
+		{"caller", func(r *Runtime) { r.Caller = common.Address{} }},
+		{"mode", func(r *Runtime) { r.Mode = "other" }},
+		{"driver", func(r *Runtime) { r.Driver = nil }},
+		{"timeout", func(r *Runtime) { r.OperationTimeout = 0 }},
+		{"name", func(r *Runtime) { r.Strategies[0].Config.Name = " " }},
+		{"duplicate", func(r *Runtime) { r.Strategies = append(r.Strategies, r.Strategies[0]) }},
+		{"executor", func(r *Runtime) { r.Strategies[0].Config.Executor = "bad" }},
+		{"account", func(r *Runtime) { r.Strategies[0].Config.Account = common.Address{}.Hex() }},
+		{"interval", func(r *Runtime) { r.Strategies[0].Config.Interval = 0 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _, d := coordinatorHarness(t)
+			tc.change(r)
+			if err := r.Start(context.Background()); err == nil {
+				t.Fatal("invalid current configuration accepted")
+			}
+			if len(d.calls()) != 0 {
+				t.Fatal("configuration failure submitted work")
+			}
+		})
 	}
-	d.beforeRelease = func() error {
-		var w Workflow
-		found, err := s.LoadNamespace(Namespace, WorkflowKey(r.Strategies[0].Config.Name), &w)
-		if err != nil || !found || w.Transaction != nil {
-			return errors.New("unsigned release preceded durable checkpoint")
-		}
-		return nil
-	}
+}
+
+func TestCoordinatorFreshRuntimeStartsEmpty(t *testing.T) {
+	r, _, _ := coordinatorHarness(t)
 	if err := r.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if d.executions != 1 || d.releases != 1 {
-		t.Fatal(d.executions, d.releases)
+	if len(r.Snapshot()) != 1 {
+		t.Fatal("missing in-process workflow")
 	}
-	before := s.lists
-	for range 3 {
+	fresh, _, _ := coordinatorHarness(t)
+	if err := fresh.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fresh.Snapshot()) != 0 {
+		t.Fatal("new process inherited workflow state")
+	}
+}
+
+func TestCoordinatorNotSubmittedReleasesAccountAndRotatesFairly(t *testing.T) {
+	r, p, d := coordinatorHarness(t)
+	addCoordinatorStrategy(t, r, p, "0x40", "0x20")
+	for range 4 {
 		if err := r.Tick(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if s.lists != before {
-		t.Fatal("history rescanned per tick")
+	calls := d.calls()
+	if len(calls) != 4 {
+		t.Fatal(len(calls))
+	}
+	for i, intent := range calls {
+		expected := common.HexToAddress(r.Strategies[i%2].Config.Executor)
+		if intent.To != expected {
+			t.Fatal("unfair signer admission", i, intent.To, expected)
+		}
+		if i > 0 && intent.ID == calls[i-1].ID {
+			t.Fatal("new attempt reused previous workflow identity")
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.owner != "" || len(r.accounts) != 0 {
+		t.Fatal("prebroadcast outcome retained ownership")
 	}
 }
-func TestCoordinatorWorkerOutlivesWaitAndHasSingleObserver(t *testing.T) {
+
+func TestCoordinatorWorkerSurvivesTickCancellation(t *testing.T) {
 	r, _, d := coordinatorHarness(t)
-	r.OperationTimeout = 20 * time.Millisecond
-	d.wait = make(chan struct{})
-	if err := r.Tick(context.Background()); err != nil {
+	r.OperationTimeout = 10 * time.Millisecond
+	started := make(chan struct{})
+	release := make(chan struct{})
+	d.execute = func(ctx context.Context, _ Intent) TransactionResult {
+		close(started)
+		select {
+		case <-release:
+			return TransactionResult{NotSubmitted: true}
+		case <-ctx.Done():
+			return TransactionResult{Err: ctx.Err()}
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	tick := make(chan error, 1)
+	go func() { tick <- r.Tick(ctx) }()
+	<-started
+	cancel()
+	if err := <-tick; err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Tick(context.Background()); err != nil {
-		t.Fatal(err)
+	for range 2 {
+		if err := r.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
-	d.mu.Lock()
-	calls, owner := d.executions, d.owner
-	d.mu.Unlock()
-	if calls != 1 || owner == "" {
-		t.Fatal("worker replaced or reservation lost", calls, owner)
+	if len(d.calls()) != 1 || r.Snapshot()[0].Phase != "pending" {
+		t.Fatal("canceled Tick replaced the active sender")
 	}
-	close(d.wait)
+	close(release)
 }
-func TestCoordinatorStorageUncertaintyStopsAdmissionAfterRename(t *testing.T) {
-	for _, after := range []bool{false, true} {
-		t.Run(big.NewInt(int64(btoi(after))).String(), func(t *testing.T) {
-			r, s, d := coordinatorHarness(t)
-			if err := r.Start(context.Background()); err != nil {
-				t.Fatal(err)
+
+func TestCoordinatorAmbiguousOrInvalidResultRetainsSignerAndAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result TransactionResult
+	}{
+		{"ambiguous", TransactionResult{Err: errors.New("broadcast uncertain")}},
+		{"empty", TransactionResult{}},
+		{"revert-without-evidence", TransactionResult{Reverted: true}},
+		{"invalid-evidence", TransactionResult{Execution: &chainio.Execution{}}},
+		{"error-with-evidence", TransactionResult{Execution: coordinatorExecution(), Err: errors.New("canonical evidence changed")}},
+		{"contradictory", TransactionResult{NotSubmitted: true, Execution: coordinatorExecution()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, p, d := coordinatorHarness(t)
+			addCoordinatorStrategy(t, r, p, "0x40", "0x50")
+			d.execute = func(context.Context, Intent) TransactionResult { return tc.result }
+			for range 3 {
+				if err := r.Tick(context.Background()); err == nil {
+					t.Fatal("ambiguous ownership not reported")
+				}
 			}
-			s.fail, s.after = true, after
-			if err := r.Tick(context.Background()); err == nil {
-				t.Fatal("uncertain write ignored")
+			if len(d.calls()) != 1 {
+				t.Fatal("ambiguous result allocated another send")
 			}
-			s.fail = false
-			if err := r.Tick(context.Background()); err == nil {
-				t.Fatal("poisoned runtime admitted work")
+			w := r.Snapshot()[0]
+			if w.Phase != "pending" || w.Execution != nil {
+				t.Fatal("ambiguous workflow became terminal", w)
 			}
-			if d.executions != 0 {
-				t.Fatal("network after uncertain storage")
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if r.owner == "" || r.accounts[w.Plan.Snapshot.Account] != w.Name {
+				t.Fatal("ambiguous signer/account ownership lost")
 			}
 		})
 	}
 }
-func btoi(v bool) int {
-	if v {
-		return 1
+
+func TestCoordinatorCanonicalOutcomesAndStickyRevert(t *testing.T) {
+	for _, reverted := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "revert"}[reverted], func(t *testing.T) {
+			r, p, d := coordinatorHarness(t)
+			addCoordinatorStrategy(t, r, p, "0x40", "0x20")
+			d.execute = func(context.Context, Intent) TransactionResult {
+				return TransactionResult{Reverted: reverted, Execution: coordinatorExecution()}
+			}
+			err := r.Tick(context.Background())
+			if (err != nil) != reverted {
+				t.Fatal(err)
+			}
+			first := r.Snapshot()[0]
+			phase := "settled"
+			if reverted {
+				phase = "failed"
+			}
+			if first.Phase != phase || first.Execution == nil || first.FinishedAt.IsZero() {
+				t.Fatal(first)
+			}
+			_ = r.Tick(context.Background())
+			if len(d.calls()) != 2 || d.calls()[1].To != common.HexToAddress("0x40") {
+				t.Fatal("canonical outcome did not release signer/account")
+			}
+			_ = r.Tick(context.Background())
+			if len(d.calls()) != 2 {
+				t.Fatal("terminal interval/failure reexecuted")
+			}
+		})
 	}
-	return 0
 }
-func TestCoordinatorRejectsRemovedActiveWorkflowBeforeReservation(t *testing.T) {
-	r, s, d := coordinatorHarness(t)
+
+type progressOperation struct {
+	mu      sync.Mutex
+	states  []string
+	done    bool
+	advance func(context.Context, chainio.Snapshot, provider.Output, json.RawMessage) (provider.Progress, error)
+}
+
+func (*progressOperation) ID() string                          { return "stable" }
+func (*progressOperation) Requirements() provider.Requirements { return provider.Requirements{} }
+func (*progressOperation) Prepare(context.Context, provider.Preparation) (provider.Output, error) {
+	return provider.Output{}, nil
+}
+func (o *progressOperation) Advance(ctx context.Context, s chainio.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+	if o.advance != nil {
+		return o.advance(ctx, s, out, state)
+	}
+	if string(out.Data) != `{"order":"external-id"}` || s.Execution == nil {
+		return provider.Progress{}, errors.New("external or canonical identity missing")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.states = append(o.states, string(state))
+	return provider.Progress{Done: o.done, Reference: "external-id", State: json.RawMessage(`{"cursor":24}`)}, nil
+}
+func attachCoordinatorOperation(r *Runtime, p *coordinatorPlanner, op *progressOperation) {
+	integration := &testIntegration{name: "operation", ops: []provider.Operation{op}}
+	r.Strategies[0].Integrations = []provider.Integration{integration}
+	name := r.Strategies[0].Config.Name
+	plan := p.plans[name]
+	plan.Operations = []provider.Record{{Integration: integration.ID(), Policy: integration.Policy(), ID: op.ID(), Output: provider.Output{Data: json.RawMessage(`{"order":"external-id"}`)}, Progress: provider.Progress{State: json.RawMessage(`{"cursor":23}`)}}}
+	p.plans[name] = plan
+}
+
+func TestCoordinatorExternalProgressRetainsIdentityWithoutRepreparation(t *testing.T) {
+	r, p, d := coordinatorHarness(t)
+	op := &progressOperation{}
+	attachCoordinatorOperation(r, p, op)
+	d.execute = func(context.Context, Intent) TransactionResult {
+		return TransactionResult{Execution: coordinatorExecution()}
+	}
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first := r.Snapshot()[0]
+	if first.Phase != "authorized" {
+		t.Fatal("unfinished external work released account")
+	}
+	op.done = true
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	last := r.Snapshot()[0]
+	if first.ID != last.ID || last.Phase != "settled" || len(d.calls()) != 1 || len(p.prepared) != 1 {
+		t.Fatal("external progress recompiled/resubmitted the workflow")
+	}
+	if len(op.states) != 2 || op.states[0] != `{"cursor":23}` || op.states[1] != `{"cursor":24}` {
+		t.Fatal("external progress identity changed", op.states)
+	}
+	if p.verifyCalls != 4 {
+		t.Fatal("canonical verification did not surround external progress", p.verifyCalls)
+	}
+}
+
+func TestCoordinatorReconcilesExternalWorkWhileSignerOccupied(t *testing.T) {
+	r, p, d := coordinatorHarness(t)
+	r.OperationTimeout = 10 * time.Millisecond
+	op := &progressOperation{}
+	attachCoordinatorOperation(r, p, op)
+	addCoordinatorStrategy(t, r, p, "0x40", "0x50")
+	release := make(chan struct{})
+	d.execute = func(ctx context.Context, intent Intent) TransactionResult {
+		if intent.To == common.HexToAddress("0x10") {
+			return TransactionResult{Execution: coordinatorExecution()}
+		}
+		select {
+		case <-release:
+			return TransactionResult{NotSubmitted: true}
+		case <-ctx.Done():
+			return TransactionResult{Err: ctx.Err()}
+		}
+	}
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	op.done = true
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.Snapshot()[0].Phase != "settled" || len(d.calls()) != 2 {
+		t.Fatal("occupied signer blocked external progress")
+	}
+	close(release)
+}
+
+func TestCoordinatorAccountOwnershipPreventsConflictingPreparation(t *testing.T) {
+	r, p, d := coordinatorHarness(t)
+	op := &progressOperation{}
+	attachCoordinatorOperation(r, p, op)
+	addCoordinatorStrategy(t, r, p, "0x40", "0x20")
+	d.execute = func(context.Context, Intent) TransactionResult {
+		return TransactionResult{Execution: coordinatorExecution()}
+	}
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := len(p.prepared)
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.prepared) != before || len(d.calls()) != 1 {
+		t.Fatal("authorized account admitted a conflicting workflow")
+	}
+}
+
+func TestCoordinatorCanonicalChangeDoesNotAcceptExternalProgress(t *testing.T) {
+	r, p, d := coordinatorHarness(t)
+	op := &progressOperation{done: true}
+	attachCoordinatorOperation(r, p, op)
+	p.verify = func(call int) error {
+		if call%2 == 0 {
+			return errors.New("canonical block changed")
+		}
+		return nil
+	}
+	d.execute = func(context.Context, Intent) TransactionResult {
+		return TransactionResult{Execution: coordinatorExecution()}
+	}
+	if err := r.Tick(context.Background()); err == nil {
+		t.Fatal("canonical change ignored")
+	}
+	w := r.Snapshot()[0]
+	if w.Phase != "authorized" || w.Plan.Operations[0].Progress.Done || string(w.Plan.Operations[0].Progress.State) != `{"cursor":23}` {
+		t.Fatal("progress accepted after canonical change")
+	}
+}
+
+func TestCoordinatorSimulateNeverAdvancesExternalWork(t *testing.T) {
+	r, p, d := coordinatorHarness(t)
+	op := &progressOperation{done: true}
+	attachCoordinatorOperation(r, p, op)
+	r.Mode = "simulate"
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.calls()) != 0 || len(op.states) != 0 || len(r.Snapshot()) != 0 || len(p.prepared) != 1 {
+		t.Fatal("simulation admitted/advanced external work")
+	}
+}
+
+func TestCoordinatorSnapshotClonesExecutionAndOperationData(t *testing.T) {
+	r, p, d := coordinatorHarness(t)
+	op := &progressOperation{}
+	attachCoordinatorOperation(r, p, op)
+	evidence := coordinatorExecution()
+	evidence.Logs = []types.Log{{TxHash: evidence.TxHash, BlockHash: evidence.BlockHash, BlockNumber: 11, Topics: []common.Hash{{1}}, Data: []byte{2}}}
+	d.execute = func(context.Context, Intent) TransactionResult { return TransactionResult{Execution: evidence} }
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := r.Snapshot()[0]
+	changed := r.Snapshot()[0]
+	changed.Plan.Calldata[0] ^= 255
+	changed.Plan.Snapshot.ChainID.SetInt64(55)
+	changed.Plan.Operations[0].Output.Data[0] = 'x'
+	changed.Plan.Operations[0].Progress.State[0] = 'x'
+	changed.Execution.BlockNumber.SetInt64(55)
+	changed.Execution.Logs[0].Topics[0] = common.Hash{}
+	changed.Execution.Logs[0].Data[0] = 55
+	after := r.Snapshot()[0]
+	a, _ := json.Marshal(before)
+	b, _ := json.Marshal(after)
+	if !bytes.Equal(a, b) {
+		t.Fatal("snapshot mutation changed live workflow")
+	}
+}
+
+func TestCoordinatorCloseTimeoutKeepsWaitingOnRepeatedClose(t *testing.T) {
+	r, _, d := coordinatorHarness(t)
+	r.OperationTimeout = 10 * time.Millisecond
+	r.ShutdownTimeout = 10 * time.Millisecond
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	d.execute = func(ctx context.Context, _ Intent) TransactionResult {
+		<-ctx.Done()
+		close(canceled)
+		<-release
+		return TransactionResult{Err: ctx.Err()}
+	}
+	if err := r.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err == nil {
+		t.Fatal("Close returned before sender drained")
+	}
+	<-canceled
+	if err := r.Close(); err == nil {
+		t.Fatal("repeated Close forgot the active worker")
+	}
+	close(release)
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Tick(context.Background()); err == nil {
+		t.Fatal("closed runtime restarted")
+	}
+}
+
+func TestCoordinatorPreparationAndReconciliationHaveDeadlines(t *testing.T) {
+	r, p, d := coordinatorHarness(t)
+	r.OperationTimeout = 10 * time.Millisecond
+	p.prepare = func(ctx context.Context, ss []Strategy) []PreparationResult {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("preparation has no deadline")
+		}
+		<-ctx.Done()
+		return []PreparationResult{{Err: ctx.Err()}}
+	}
+	if err := r.Tick(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("preparation cancellation lost", err)
+	}
+	p.prepare = nil
+	op := &progressOperation{advance: func(ctx context.Context, _ chainio.Snapshot, _ provider.Output, _ json.RawMessage) (provider.Progress, error) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("reconciliation has no deadline")
+		}
+		<-ctx.Done()
+		return provider.Progress{}, ctx.Err()
+	}}
+	attachCoordinatorOperation(r, p, op)
+	// Start has captured the configured integrations already.
+	r.mu.Lock()
+	r.strategies[r.Strategies[0].Config.Name] = r.Strategies[0]
+	r.mu.Unlock()
+	d.execute = func(context.Context, Intent) TransactionResult {
+		return TransactionResult{Execution: coordinatorExecution()}
+	}
+	if err := r.Tick(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("reconciliation cancellation lost", err)
+	}
+	if r.Snapshot()[0].Phase != "authorized" {
+		t.Fatal("timed out reconciliation lost account ownership")
+	}
+}
+
+func TestCoordinatorRejectsPreparedPlanOutsideConfiguredIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*Plan)
+	}{
+		{"chain", func(p *Plan) { p.Snapshot.ChainID = big.NewInt(2) }},
+		{"caller", func(p *Plan) { p.Snapshot.Caller = common.HexToAddress("0x31") }},
+		{"executor", func(p *Plan) { p.Snapshot.Executor = common.HexToAddress("0x11") }},
+		{"account", func(p *Plan) { p.Snapshot.Account = common.HexToAddress("0x21") }},
+		{"calldata", func(p *Plan) { p.Calldata = []byte{1} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, p, d := coordinatorHarness(t)
+			name := r.Strategies[0].Config.Name
+			plan := p.plans[name]
+			tc.change(&plan)
+			p.plans[name] = plan
+			if err := r.Tick(context.Background()); err == nil {
+				t.Fatal("invalid prepared plan accepted")
+			}
+			if len(d.calls()) != 0 || len(r.Snapshot()) != 0 {
+				t.Fatal("invalid plan reached admission")
+			}
+		})
+	}
+}
+
+func TestCoordinatorCanceledTickCannotAdmitNewWork(t *testing.T) {
+	r, _, d := coordinatorHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := r.Tick(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("cancellation ignored", err)
+	}
+	if len(d.calls()) != 0 || len(r.Snapshot()) != 0 {
+		t.Fatal("canceled tick admitted work")
+	}
+}
+
+func TestCoordinatorReconciliationBoundsActiveOperations(t *testing.T) {
+	r, p, _ := coordinatorHarness(t)
+	r.MaxConcurrent = 2
+	for _, name := range []string{"0x40", "0x50", "0x60"} {
+		addCoordinatorStrategy(t, r, p, name, name)
+	}
+	started := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var countMu sync.Mutex
+	active, peak := 0, 0
+	for i := range r.Strategies {
+		op := &progressOperation{advance: func(ctx context.Context, _ chainio.Snapshot, _ provider.Output, _ json.RawMessage) (provider.Progress, error) {
+			countMu.Lock()
+			active++
+			peak = max(peak, active)
+			countMu.Unlock()
+			started <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			countMu.Lock()
+			active--
+			countMu.Unlock()
+			return provider.Progress{Done: true}, nil
+		}}
+		integration := &testIntegration{name: "operation", ops: []provider.Operation{op}}
+		r.Strategies[i].Integrations = []provider.Integration{integration}
+		name := r.Strategies[i].Config.Name
+		plan := p.plans[name]
+		plan.Operations = []provider.Record{{Integration: integration.ID(), Policy: integration.Policy(), ID: op.ID()}}
+		p.plans[name] = plan
+	}
 	if err := r.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	w := Workflow{Version: 2, IdentityVersion: 2, Name: "removed", ID: "saved", ConfigHash: "legacy", Phase: "prepared", Plan: coordinatorPlan(t, "0x11")}
-	if err := s.SaveNamespace(Namespace, WorkflowKey(w.Name), w); err != nil {
+	r.mu.Lock()
+	for _, s := range r.Strategies {
+		r.putLocked(Workflow{Name: s.Config.Name, ID: s.Config.Name, Phase: "authorized", Plan: p.plans[s.Config.Name], Execution: coordinatorExecution()})
+	}
+	r.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- r.reconcile(context.Background(), map[string]bool{}) }()
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatal("bounded workers did not start")
+		}
+	}
+	select {
+	case <-started:
+		close(release)
+		t.Fatal("reconciliation exceeded concurrency bound")
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(release)
+	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	restarted := &Runtime{Store: s, Planner: r.Planner, Driver: d, ChainID: r.ChainID, Caller: r.Caller, Mode: "send", OperationTimeout: r.OperationTimeout}
-	if err := restarted.Start(context.Background()); err == nil {
-		t.Fatal("removed active owner accepted")
+	if peak != 2 {
+		t.Fatal("unexpected reconciliation concurrency", peak)
 	}
-	if d.owner != "" {
-		t.Fatal("reservation before complete recovery validation")
+	for _, w := range r.Snapshot() {
+		if w.Phase != "settled" {
+			t.Fatal("bounded worker skipped workflow", w.Name)
+		}
 	}
 }
 
-func signedCoordinatorWorkflow(t *testing.T, r *Runtime, name, phase string) Workflow {
-	t.Helper()
-	key, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.Caller = crypto.PubkeyToAddress(key.PublicKey)
-	plan := coordinatorPlan(t, name)
-	plan.Snapshot.Caller = r.Caller
-	if p, ok := r.Planner.(*coordinatorPlanner); ok {
-		p.plans[name] = plan.Clone()
-	}
-	intent := Intent{ID: "durable-" + name, To: plan.Snapshot.Executor, Data: plan.Calldata}
-	unsigned := types.NewTx(&types.DynamicFeeTx{ChainID: r.ChainID, Nonce: 7, To: &intent.To, Gas: 100000, GasFeeCap: big.NewInt(10), GasTipCap: big.NewInt(1), Data: intent.Data})
-	signed, err := types.SignTx(unsigned, types.LatestSignerForChainID(r.ChainID), key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := signed.MarshalBinary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tx := Transaction{Intent: intent, Sender: r.Caller, ChainID: new(big.Int).Set(r.ChainID), Nonce: 7, Admitted: true, Attempts: []hexutil.Bytes{raw}}
-	w := Workflow{Version: 2, IdentityVersion: 2, Name: name, ID: intent.ID, ConfigHash: r.Strategies[0].Config.Fingerprint(), Phase: phase, Plan: plan, Transaction: &tx, Reserved: phase == "pending"}
-	if phase != "pending" {
-		tx.Terminal = "confirmed"
-		if phase == "failed" {
-			tx.Terminal = "reverted"
-		}
-		tx.Execution = &chainio.Execution{TxHash: signed.Hash(), BlockNumber: big.NewInt(11), BlockHash: common.HexToHash("0x11")}
-		if phase == "failed" || phase == "settled" {
-			w.FinishedAt = time.Now().UTC()
-		}
-	}
-	return w
-}
-
-func TestCoordinatorReceiptAndPhaseAreOneCheckpointBeforeRelease(t *testing.T) {
-	for _, fail := range []bool{false, true} {
-		t.Run(big.NewInt(int64(btoi(fail))).String(), func(t *testing.T) {
-			r, s, d := coordinatorHarness(t)
-			name := r.Strategies[0].Config.Name
-			w := signedCoordinatorWorkflow(t, r, name, "authorized")
-			d.execute = func(_ context.Context, intent Intent, persist PersistTransaction) TransactionResult {
-				tx := cloneTransaction(*w.Transaction)
-				tx.Intent = intent
-				tx.Terminal = ""
-				tx.Execution = nil
-				if err := persist(tx); err != nil {
-					return TransactionResult{Err: err}
-				}
-				tx.Terminal = "confirmed"
-				tx.Execution = w.Transaction.Execution.Clone()
-				if err := persist(tx); err != nil {
-					return TransactionResult{Err: err}
-				}
-				return TransactionResult{Execution: tx.Execution}
-			}
-			d.beforeRelease = func() error {
-				var saved Workflow
-				if found, err := s.LoadNamespace(Namespace, WorkflowKey(name), &saved); err != nil || !found || saved.Phase != "authorized" || saved.Transaction.Execution == nil {
-					return errors.New("release preceded complete canonical checkpoint")
-				}
-				return nil
-			}
-			if err := r.Start(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			if fail {
-				s.failPhase = "authorized"
-			}
-			err := r.Tick(context.Background())
-			if fail {
-				if err == nil || d.releases != 0 {
-					t.Fatal("failed receipt persistence released signer", err, d.releases)
+func TestCoordinatorCloseCancelsActiveTickBeforeWaiting(t *testing.T) {
+	for _, phase := range []string{"preparation", "sender"} {
+		t.Run(phase, func(t *testing.T) {
+			r, p, d := coordinatorHarness(t)
+			r.OperationTimeout = time.Minute
+			started := make(chan struct{})
+			if phase == "preparation" {
+				p.prepare = func(ctx context.Context, _ []Strategy) []PreparationResult {
+					close(started)
+					<-ctx.Done()
+					return []PreparationResult{{Err: ctx.Err()}}
 				}
 			} else {
+				d.execute = func(ctx context.Context, _ Intent) TransactionResult {
+					close(started)
+					<-ctx.Done()
+					return TransactionResult{Err: ctx.Err()}
+				}
+			}
+			tick := make(chan error, 1)
+			go func() { tick <- r.Tick(context.Background()) }()
+			<-started
+			closed := make(chan error, 1)
+			go func() { closed <- r.Close() }()
+			select {
+			case err := <-closed:
 				if err != nil {
 					t.Fatal(err)
 				}
-				if d.releases != 1 || r.Snapshot()[0].Phase != "settled" {
-					t.Fatal("canonical workflow not completed", r.Snapshot())
-				}
+			case <-time.After(time.Second):
+				t.Fatal("Close waited for Tick before canceling process work")
 			}
+			<-tick
 		})
 	}
-}
-
-func TestCoordinatorSignedRestartNeverReplansOrExecutes(t *testing.T) {
-	r, s, d := coordinatorHarness(t)
-	name := r.Strategies[0].Config.Name
-	w := signedCoordinatorWorkflow(t, r, name, "pending")
-	if err := s.ActivateNamespace(Namespace, map[string]any{"deployment": Deployment{Kind: "deployment", Version: 2, ChainID: r.ChainID, Caller: r.Caller}, WorkflowKey(name): w}); err != nil {
-		t.Fatal(err)
-	}
-	d.resume = func(_ context.Context, saved Transaction, _ PersistTransaction) TransactionResult {
-		if saved.Nonce != 7 || len(saved.Attempts) != 1 || !bytes.Equal(saved.Attempts[0], w.Transaction.Attempts[0]) {
-			t.Error("signed identity changed")
-		}
-		return TransactionResult{Pending: true}
-	}
-	if err := r.Tick(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if d.executions != 0 || d.resumes != 1 || r.Planner.(*coordinatorPlanner).prepares != 0 {
-		t.Fatal("signed recovery replayed/recompiled work")
-	}
-}
-
-func TestCoordinatorSavedTerminalRevalidationFailureRetainsReservation(t *testing.T) {
-	r, s, d := coordinatorHarness(t)
-	name := r.Strategies[0].Config.Name
-	w := signedCoordinatorWorkflow(t, r, name, "authorized")
-	w.Reserved = true
-	if err := s.ActivateNamespace(Namespace, map[string]any{"deployment": Deployment{Kind: "deployment", Version: 2, ChainID: r.ChainID, Caller: r.Caller}, WorkflowKey(name): w}); err != nil {
-		t.Fatal(err)
-	}
-	d.resume = func(context.Context, Transaction, PersistTransaction) TransactionResult {
-		return TransactionResult{Pending: true, Err: errors.New("canonical receipt changed")}
-	}
-	if err := r.Tick(context.Background()); err == nil {
-		t.Fatal("changed canonical receipt ignored")
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.releases != 0 || d.owner != w.ID {
-		t.Fatal("saved terminal record released before fresh driver proof")
-	}
-}
-
-func TestCoordinatorTerminalIntervalAndStickyFailure(t *testing.T) {
-	for _, phase := range []string{"settled", "failed"} {
-		t.Run(phase, func(t *testing.T) {
-			r, s, d := coordinatorHarness(t)
-			name := r.Strategies[0].Config.Name
-			w := signedCoordinatorWorkflow(t, r, name, phase)
-			if err := s.ActivateNamespace(Namespace, map[string]any{"deployment": Deployment{Kind: "deployment", Version: 2, ChainID: r.ChainID, Caller: r.Caller}, WorkflowKey(name): w}); err != nil {
-				t.Fatal(err)
-			}
-			err := r.Tick(context.Background())
-			if (err != nil) != (phase == "failed") {
-				t.Fatal(phase, err)
-			}
-			if d.executions != 0 || r.Planner.(*coordinatorPlanner).prepares != 0 {
-				t.Fatal("terminal checkpoint reexecuted")
-			}
-		})
-	}
-}
-
-type checkpointOperation struct {
-	state json.RawMessage
-	calls int
-	done  bool
-}
-
-func (*checkpointOperation) ID() string                          { return "stable" }
-func (*checkpointOperation) Requirements() provider.Requirements { return provider.Requirements{} }
-func (*checkpointOperation) Prepare(context.Context, provider.Preparation) (provider.Output, error) {
-	return provider.Output{}, nil
-}
-func (o *checkpointOperation) Advance(_ context.Context, _ chainio.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
-	o.calls++
-	if !bytes.Equal(state, o.state) || string(out.Data) != `{"order":"external-id"}` {
-		return provider.Progress{}, errors.New("external identity/cursor changed")
-	}
-	return provider.Progress{Done: o.done, Reference: "external-id", State: append(json.RawMessage(nil), state...)}, nil
-}
-func TestCoordinatorReconcilesExternalWorkWhileSignerOccupied(t *testing.T) {
-	r, s, d := coordinatorHarness(t)
-	r.OperationTimeout = 20 * time.Millisecond
-	name := r.Strategies[0].Config.Name
-	authorized := signedCoordinatorWorkflow(t, r, name, "authorized")
-	op := &checkpointOperation{state: json.RawMessage(`{"cursor":23}`)}
-	integration := &testIntegration{name: "operation", ops: []provider.Operation{op}}
-	r.Strategies[0].Integrations = []provider.Integration{integration}
-	authorized.Plan.Operations = []provider.Record{{Integration: integration.ID(), Policy: integration.Policy(), ID: op.ID(), Output: provider.Output{Data: json.RawMessage(`{"order":"external-id"}`)}, Progress: provider.Progress{State: op.state, Reference: "external-id"}}}
-	other := r.Strategies[0]
-	other.Config.Name = "other"
-	other.Config.Executor = common.HexToAddress("0x40").Hex()
-	other.Config.Account = common.HexToAddress("0x50").Hex()
-	other.Integrations = nil
-	r.Strategies = append(r.Strategies, other)
-	pending := authorized.Clone()
-	pending.Name = "other"
-	pending.ID = "other-pending"
-	pending.ConfigHash = other.Config.Fingerprint()
-	pending.Plan = coordinatorPlan(t, other.Config.Executor)
-	pending.Plan.Snapshot.Caller = r.Caller
-	pending.Plan.Snapshot.Account = common.HexToAddress(other.Config.Account)
-	pending.Phase = "pending"
-	pending.Reserved = true
-	pending.Transaction = &Transaction{Intent: Intent{ID: pending.ID, To: pending.Plan.Snapshot.Executor, Data: pending.Plan.Calldata}, Sender: r.Caller, ChainID: r.ChainID, Admitted: true}
-	d.wait = make(chan struct{})
-	if err := s.ActivateNamespace(Namespace, map[string]any{"deployment": Deployment{Kind: "deployment", Version: 2, ChainID: r.ChainID, Caller: r.Caller}, WorkflowKey(name): authorized, WorkflowKey("other"): pending}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Tick(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if op.calls == 0 || d.executions != 0 || d.owner != pending.ID {
-		t.Fatal("external reconciliation blocked by occupied signer")
-	}
-	close(d.wait)
 }
