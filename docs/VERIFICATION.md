@@ -1,82 +1,88 @@
-# Runtime rewrite verification
+# RAM-only runtime verification
 
-Validated locally on 2026-11-07 with Go 1.27.1, macOS arm64. Implementation is on
-`codex/runtime-rewrite`; baseline `a0168ac` preserves the original dirty checkout.
-Implementation stayed in the isolated worktree, preserving the original checkout's
-production source and existing edits. The final code was built at `baca57b`;
-subsequent verification-record changes contain documentation only.
+Validated locally on 2026-11-07 with Go 1.27.1, macOS arm64. Runtime code and
+application fixtures are committed at `e11a4d8` on `codex/runtime-rewrite`;
+subsequent verification-record changes contain documentation only. This record
+supersedes the earlier durable runtime verification. The original checkout and
+its unrelated edits remain separate from this worktree.
 
 | Gate | Observed result |
 | --- | --- |
-| `make check` | Both modules build; full race/coverage tests, vet and lint pass. Both linters report zero issues. SDK checks use `GOWORK=off`; the daemon resolves the checked-out SDK through `replace .../sdk => ./sdk`. |
-| `make integration` | All 12 top-level local Anvil tests pass without skips, including their lifecycle subcases. |
-| `make generate` | Lens, ABI bindings and protocol wire types reproduce without changes under `api`, `sdk/bindings` and `sdk/recipes/lens`. |
-| Docker build and version smoke | Image builds without a private SDK token. Running `version` returns `runtime-rewrite (baca57b, 2026-11-07)`. |
+| `make check` | Both modules build; full race/coverage tests, vet and lint pass. Both linters report zero issues. SDK checks use `GOWORK=off`; the daemon resolves the checked-out SDK through its local replacement. |
+| `make integration` | All 12 top-level ephemeral local Anvil tests pass without skips, including lifecycle subcases. |
+| `make generate` | Lens, ABI bindings and protocol wire types reproduce without changes under `api/bindings`, `api/protocoltypes`, `sdk/bindings` and `sdk/recipes/lens`. |
+| Docker build and version smoke | Image builds without a private SDK token. Running `version` returns `ram-runtime (e11a4d8, 2026-11-07)`. |
 | `git diff --check` | Pass. |
 
 ## Local EVM evidence
 
-The integration target starts owned ephemeral loopback Anvil processes. It uses
-local accounts and generated test credentials, with no external chain or mainnet
-fork. The source-pinned Noon fixture sets local chain ID 1 and installs reviewed
-runtime at its configured addresses; that remains a local fixture.
+Integration starts owned ephemeral loopback Anvil processes with local accounts
+and generated test credentials. It uses no external chain or mainnet fork. The
+source-pinned Noon fixture uses local chain ID 1 and installs reviewed runtime at
+its configured addresses; that remains a local fixture.
 
 Four SDK tests cover all twelve recipe operations, packed values, permission
-proofs, result bindings, prefix lenses, stateful preceding effects and rejection
-of divergent full-execution witnesses. Seven application tests cover:
+proofs, result bindings, numerical prefix lenses, preceding stateful effects and
+rejection of divergent full-execution witnesses. Seven application tests cover:
 
 - Shared metadata/role batching with isolated caller-sensitive calls.
-- Liquid Lane authorization, accepted-but-502 publication, observation after
-  restart, canonical Fill evidence and no duplicate order or transfer.
+- Liquid Lane authorization, accepted-but-502 publication, stable order identity
+  across ticks, canonical Fill evidence and no duplicate order or transfer.
 - Pinned Merkl distributor reads and automatic claim → READ → transfer composition.
-- Source-pinned native Noon burn/payment, exact allowance cleanup and reverting
-  readiness/postcondition cases.
+- Native Noon burn/payment, exact allowance cleanup and reverting readiness and
+  postcondition cases against source-pinned local artifacts.
 - Independent issuer request → fulfillment → claim workflows on one account.
-- The production service entrypoint's plan/send/restart flow, including curator
-  failure, wrong-chain permissions and root changes preventing submission.
+- The production service entrypoint's plan/send flow, curator failures,
+  wrong-chain permissions and changed roots preventing submission. A fresh
+  service must acquire permissions again; its previous workflow is forgotten.
+  The fixture directory contains exactly its two input YAML files after execution.
 
-The transaction-driver Anvil test covers fresh execution and observation-only
-signed recovery. Unit regressions separately cover replacements, older signed
-variants winning, ambiguous sends, nonce consumption, canonical reorg/depth checks,
-fee/gas policy, bounded observation and persistence before network mutation.
+The sender's Anvil test verifies fresh canonical execution. Unit regressions
+cover complete signer payload binding, prebroadcast errors, ambiguous sends,
+mined-nonce floors, nonce consumption, canonical reorg/depth checks, fixed fee/gas
+policy, concurrent admission and cancellation. No recovery/replacement engine or
+signed restart path is tested or provided.
 
-## API and transport fixture evidence
+## API and batching fixture evidence
 
-Local HTTP/RPC fixtures retain protocol encoding, identity, readiness, permission,
-error/redaction and settlement tests for the five automatic integrations. Protocol
-wire provenance and deliberate support limits remain under `api/schemas` and in
-[provider boundaries](PROVIDERS.md). Fixtures do not establish live endpoint or
-issuer availability.
+Local HTTP/RPC fixtures cover protocol encoding, identity, readiness, permission,
+error/redaction and settlement for the five automatic integrations. Their wire
+provenance and deliberate support limits remain under `api/schemas` and in
+[provider boundaries](PROVIDERS.md). Fixtures do not prove live API availability.
 
 Actual default registrations and the full CLI/service planning path pass at
-1, 16, 64, 256 and 1,024 executors. Cold/warm planning, mixed Merkl/numerical recipes,
-shared accounts, a slow API, failed partitions without single-call fallback and
-simulation-output limits are exercised. [Batching measurements](RUNTIME-BATCHING.md)
-record wire calls, Multicall members, lenses/simulations, sharing, queue peaks,
-latency and allocations with their fixture limitations. At 1,024 executors the
-sample's queue peak is about 17 MiB; cumulative benchmark allocations including
-fixture servers are about 1 GiB. This is bounded-batching evidence, not a claim of
-optimal production throughput or low total allocation.
+1, 16, 64, 256 and 1,024 executors. Tests exercise cold/warm preparation, mixed
+Merkl/numerical recipes, shared accounts, a slow API, failed partitions without
+single-call fallback and simulation-output limits. A race-dependent fixture
+assumption about RPC arrival order was replaced with semantic fault injection
+into an executor metadata batch; that regression passes 200 race-enabled runs.
+A fresh one-pass benchmark at `e11a4d8` also passes for all five sizes, cold and
+warm. At 1,024 executors it records 1.13 s cold and 0.99 s warm, including local
+fixture handling; cumulative allocation remains about 1 GiB.
+[Batching measurements](RUNTIME-BATCHING.md) explain budgets, wire calls, sharing,
+queue peaks, allocations and the limits of local throughput evidence.
 
-## Recovery and independent review
+## RAM lifetime and independent review
 
-Failure-injection and restart tests cover the unified v2 checkpoint, offline v1
-import, external order/cursor preservation, immutable assignments, whole-inventory
-validation and process ownership. Unknown active state, orphan signed journals,
-changed identities and conflicting owners reject before namespace activation.
-Save uncertainty retains ownership and poisons admission until restart. Simulate
-mode does not advance saved external operations.
+The state package, workflow store, transaction journal, importer, recovery APIs,
+configuration fingerprints and state CLI commands are removed. A production Go
+source scan found no runtime filesystem write or state-store path. Configuration
+and optional permission artifacts are still read from files; output uses streams.
 
-Separate reviews of the scheduler, operations/planner, transaction driver and
-coordinator led to permanent regressions and fixes. A fresh whole-change review
-found two additional boundary bugs: canonical reverts retained the signer lane,
-and definitely unsigned preparations retained account ownership. Both fixes were
-independently rechecked with race tests. Reverted strategies remain halted while
-unrelated work can continue; signed, ambiguous and externally authorized work
-retain their reservations. No additional concrete blocker was established in that
-review pass. Final broad gates above were run after those fixes.
+Runtime tests cover ownership/admission, in-process external identity and progress,
+immutable assignment validation, fair preparation, Tick cancellation, simulate
+mode and shutdown. Separate reviews of the coordinator, sender, service fixtures
+and current documentation found and corrected shutdown cancellation ordering:
+Close now signals cancellation before waiting behind an active Tick. Focused
+race tests independently rechecked it; final broad gates ran after the fix.
 
-No hosted CI, live protocol API, production permission/configuration, deployment or
-live signing result is claimed. No live order or transaction was submitted. See
-[migration](MIGRATION.md) before adopting the breaking Go/YAML changes or activating
-existing state with the new runtime.
+All workflow, transaction and external-order evidence lives only in RAM. Ambiguous
+submissions retain the in-process signer lane. Process exit discards it without
+canceling submitted work, and restart may repeat earlier work. There is no
+cross-process ownership or restart idempotency guarantee. See [migration](MIGRATION.md).
+
+No hosted CI, live protocol API, production permission/configuration, deployment
+or live-signing result is claimed. No live order or transaction was submitted.
+Current `stage` diverges and the PR has merge conflicts; these checks validate
+this branch, and the combined target result still requires reconciliation and
+validation before merge.

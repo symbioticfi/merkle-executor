@@ -28,11 +28,11 @@ Minimal transaction.Config: MaxFeeGwei, PriorityFeeGwei, GasHeadroomBps, Confirm
 
 ## Tasks
 
-- [ ] 1. Replace driver with one in-process send/observe implementation; table tests for prebroadcast errors, signer mutation, ambiguous send, canonical success/revert, reorgs and cancellation; local Anvil canonical execution.
-- [ ] 2. Replace durable coordinator with direct RAM maps; remove SDK state/import/recovery APIs and fingerprint identity; tests for active ownership, fair admission, Tick cancellation, external progression, simulate and drain.
-- [ ] 3. Remove stateDir and sender lifecycle config, service disk/legacy plumbing, CLI state commands and their tests. Reject removed YAML fields; no fs writes from runtime.
-- [ ] 4. Remove protocol legacy converters and recovery-only adapters. Port application Anvil fixtures to inspect an injected RAM runtime snapshot and reuse one process for pending external work. Fresh process forgets work explicitly.
-- [ ] 5. Reconcile AGENTS/current docs/migration/PR description; run make check, make integration, generated diff and container smoke; inspect whole change and push PR update.
+- [x] 1. Replace driver with one in-process send/observe implementation; table tests for prebroadcast errors, signer mutation, ambiguous send, canonical success/revert, reorgs and cancellation; local Anvil canonical execution.
+- [x] 2. Replace durable coordinator with direct RAM maps; remove SDK state/import/recovery APIs and fingerprint identity; tests for active ownership, fair admission, Tick cancellation, external progression, simulate and drain.
+- [x] 3. Remove stateDir and sender lifecycle config, service disk/legacy plumbing, CLI state commands and their tests. Reject removed YAML fields; no fs writes from runtime.
+- [x] 4. Remove protocol legacy converters and recovery-only adapters. Port application Anvil fixtures to inspect an injected RAM runtime snapshot and reuse one process for pending external work. Fresh process forgets work explicitly.
+- [x] 5. Reconcile AGENTS/current docs/migration/PR description; run make check, make integration, generated diff and container smoke; inspect whole change and push PR update.
 
 ## Review focus
 

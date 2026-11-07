@@ -102,7 +102,9 @@ rewards or full simulations:
 | 256 | 256 / 128 | 256 / 128 | 256 / 0 |
 | 1,024 | 1,024 / 512 | 1,024 / 512 | 1,024 / 0 |
 
-Transport and scheduler counters from one `TestAutomaticRegistryScale` run:
+Transport and scheduler counters from one `TestAutomaticRegistryScale` run of the
+earlier rewrite, retained as a separate sample. The RAM-only follow-up reran all
+scale regressions; its fresh benchmark results are recorded below:
 
 | Executors | Cache | RPC arrays / wire members | Multicall calls / members | Cross-executor aggregates | Dispatched logical reads / shared deliveries | Ready waves |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: |
@@ -131,21 +133,21 @@ The queue returned to zero outstanding requests/bytes after every preparation.
 | 256 | 256 | 17,069,568 |
 | 1,024 | 256 | 17,069,568 |
 
-One-pass `BenchmarkAutomaticRegistryScale` results, collected separately from the
-race run and the preceding counter sample:
+One-pass `BenchmarkAutomaticRegistryScale` results for RAM-only source `e11a4d8`,
+collected separately from the race run and the preceding counter sample:
 
 | Executors | Cache | Time / op | Bytes / op | Allocations / op | RPC HTTP / op | Distinct observed read keys |
 | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 | cold | 12.57 ms | 1,495,264 | 13,134 | 7 | 15 |
-| 1 | warm | 9.66 ms | 1,057,008 | 8,394 | 6 | 14 |
-| 16 | cold | 26.71 ms | 17,338,120 | 122,433 | 26 | 135 |
-| 16 | warm | 21.88 ms | 16,380,040 | 117,783 | 23 | 119 |
-| 64 | cold | 93.42 ms | 68,408,400 | 486,210 | 89 | 531 |
-| 64 | warm | 82.50 ms | 63,688,224 | 465,484 | 86 | 467 |
-| 256 | cold | 327.42 ms | 271,583,768 | 1,955,971 | 377 | 2,115 |
-| 256 | warm | 289.58 ms | 252,174,248 | 1,873,814 | 356 | 1,859 |
-| 1,024 | cold | 1,156.97 ms | 1,044,937,456 | 7,748,533 | 1,456 | 8,451 |
-| 1,024 | warm | 1,105.89 ms | 966,653,936 | 7,418,165 | 1,402 | 7,427 |
+| 1 | cold | 13.76 ms | 1,661,992 | 13,184 | 7 | 15 |
+| 1 | warm | 9.50 ms | 941,880 | 8,305 | 6 | 14 |
+| 16 | cold | 27.09 ms | 17,673,256 | 123,200 | 25 | 135 |
+| 16 | warm | 23.62 ms | 16,087,640 | 116,317 | 21 | 119 |
+| 64 | cold | 79.17 ms | 68,803,768 | 487,107 | 86 | 531 |
+| 64 | warm | 76.66 ms | 65,167,992 | 469,952 | 91 | 467 |
+| 256 | cold | 297.51 ms | 271,038,944 | 1,951,464 | 359 | 2,115 |
+| 256 | warm | 277.78 ms | 255,208,184 | 1,883,641 | 369 | 1,859 |
+| 1,024 | cold | 1,132.44 ms | 1,042,425,704 | 7,740,151 | 1,454 | 8,451 |
+| 1,024 | warm | 987.99 ms | 969,391,504 | 7,421,462 | 1,359 | 7,427 |
 
 Benchmark timing/allocation excludes fixture construction, startup discovery and
 warm-up preparation. It includes production planning plus concurrent local server
