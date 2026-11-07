@@ -14,7 +14,8 @@ import (
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -28,17 +29,14 @@ type recipeOrder struct {
 	cfg          Config
 	budget       recipes.EconomicValue
 	floors       []recipes.EconomicValue
-	requirements keeper.RecipeRequirements
+	requirements provider.Requirements
 }
 
-func NewAutomatic(deps registry.Deps) (provider.Provider, error) {
+func NewAutomatic(deps registry.Deps) (provider.Integration, error) {
 	if deps.Chain == nil {
 		return nil, errors.New("automatic CoW requires chain reader")
 	}
 	return &Automatic{deps: deps}, nil
-}
-func (*Automatic) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("CoW requires an authenticated recipe")
 }
 
 func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (*recipeOrder, error) {
@@ -140,21 +138,37 @@ func protocolDomain(chainID *big.Int, settlement common.Address) common.Hash {
 	return protocolio.Domain("Gnosis Protocol", "v2", chainID, settlement)
 }
 
-func (p *Automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (keeper.RecipeRequirements, error) {
-	order, err := p.derive(s, r, t)
-	if err != nil || order == nil {
-		return keeper.RecipeRequirements{}, err
-	}
-	return order.requirements, nil
+type automaticOperation struct {
+	integration  *Automatic
+	compiled     *recipeOrder
+	requirements provider.Requirements
+	saved        *provider.Record
 }
-func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
-	order, err := p.derive(s, r, t)
-	if err != nil {
-		return provider.Output{}, err
+
+func (*Automatic) ID() string     { return "cowswap" }
+func (*Automatic) Policy() string { return automaticPolicy + "/operation-v2" }
+func (p *Automatic) Compile(program provider.Program) ([]provider.Operation, error) {
+	program = program.Clone()
+	compiled, err := p.derive(program.Snapshot, program.Recipe, program.Tree)
+	if err != nil || compiled == nil {
+		return nil, err
 	}
-	if order == nil {
-		return derived.Empty(automaticPolicy)
+	return []provider.Operation{&automaticOperation{integration: p, compiled: compiled, requirements: compiled.requirements}}, nil
+}
+func (o *automaticOperation) ID() string                          { return provider.OperationID(o.requirements.Actions) }
+func (o *automaticOperation) Requirements() provider.Requirements { return o.requirements.Clone() }
+func (o *automaticOperation) Prepare(ctx context.Context, preparation provider.Preparation) (provider.Output, error) {
+	if o.compiled == nil {
+		return provider.Output{}, errors.New("restored operation cannot prepare")
 	}
+	if preparation.Reader == nil {
+		return provider.Output{}, errors.New("attempt chain reader required")
+	}
+	order := *o.compiled
+	s, results := preparation.Program.Snapshot, preparation.Results
+	deps := o.integration.deps
+	deps.Chain = preparation.Reader
+
 	amount, err := recipes.EconomicResult(order.budget, results)
 	if err != nil {
 		return provider.Output{}, err
@@ -174,7 +188,7 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	}
 	order.cfg.SellAmount = amount.String()
 	order.cfg.MinBuyAmount = minimum.String()
-	runtime, err := New(order.cfg, p.deps)
+	runtime, err := New(order.cfg, deps)
 	if err != nil {
 		return provider.Output{}, err
 	}
@@ -198,17 +212,114 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if err = derived.BindOutput(order.template, payload, results, &out); err != nil {
 		return provider.Output{}, err
 	}
-	return derived.Encode(automaticPolicy, order.cfg, out, true)
+	return provider.EncodeOperation(o.integration.Policy(), order.cfg, out)
 }
-func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+
+func (p *Automatic) Restore(record provider.Record) (provider.Operation, error) {
 	var cfg Config
-	inner, matched, err := derived.Decode(automaticPolicy, out, &cfg)
+	inner, err := provider.DecodeOperation(p.Policy(), record.Output, &cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	var saved prepared
+	if err := derived.StrictJSON(inner.Data, &saved); err != nil {
+		return nil, err
+	}
+	chainID, err := parse.Uint256(saved.ChainID)
+	if err != nil || chainID.Sign() == 0 {
+		return nil, errors.New("persisted CoW chain invalid")
+	}
+	s := chainio.Snapshot{ChainID: chainID}
+
+	http, settlement, _, err := ChainDefaults(s.ChainID)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Settlement != settlement.Hex() || !reflect.DeepEqual(cfg.HTTP, http) || cfg.ValiditySeconds != DefaultValiditySeconds {
+		return nil, errors.New("persisted CoW automatic constants differ")
+	}
+	runtime, err := New(cfg, p.deps)
+	if err != nil {
+		return nil, err
+	}
+
+	if saved.Version != 1 || saved.Account == (common.Address{}) || saved.SlippageBPS == 0 || saved.SlippageBPS > 10000 || saved.Order.QuoteID < 0 || saved.Order.AppDataHash != "" {
+		return nil, errors.New("persisted CoW identity or policy invalid")
+	}
+	if _, err := parse.Uint256(saved.PreparedBlock); err != nil {
+		return nil, err
+	}
+	full, app := appData(saved.SlippageBPS)
+	if full != saved.FullAppData {
+		return nil, errors.New("persisted CoW appData differs")
+	}
+	if err := runtime.validateOrder(saved.Order, saved.Account, app); err != nil {
+		return nil, err
+	}
+	buffer, err := EncodeOrder(saved.Order)
+	if err != nil {
+		return nil, err
+	}
+	domain := protocolDomain(chainID, runtime.settlement)
+	digest := protocolio.Digest(domain, crypto.Keccak256Hash(buffer))
+	payload, err := account.NewMerkleAccount().TryPackSign(domain, buffer, []account.IMerkleAccountHash{{Offset: big.NewInt(0), Length: big.NewInt(int64(len(buffer))), Destination: big.NewInt(0)}})
+	if err != nil || digest != saved.Digest || UID(digest, saved.Account, uint32(saved.Order.ValidTo)) != saved.UID || !bytes.Equal(payload, inner.Actions[cfg.Action]) {
+		return nil, errors.New("persisted CoW authorization identity differs")
+	}
+	expectedInputs := map[uint]string{}
+	if cfg.SellAmountInput != nil {
+		expectedInputs[*cfg.SellAmountInput] = saved.Order.SellAmount
+	}
+	if cfg.BuyAmountInput != nil {
+		expectedInputs[*cfg.BuyAmountInput] = saved.Order.BuyAmount
+	}
+	for index, value := range expectedInputs {
+		if inner.Inputs[index] != value {
+			return nil, errors.New("persisted CoW input differs")
+		}
+	}
+	// Expiry and appData may also be authorized Input bindings. They are
+	// selected protocol values rather than financial configuration fields.
+	extra := map[string]bool{new(big.Int).SetBytes(buffer[192:224]).String(): true, new(big.Int).SetBytes(buffer[224:256]).String(): true}
+	for index, value := range inner.Inputs {
+		if _, known := expectedInputs[index]; known {
+			continue
+		}
+		if !extra[value] {
+			return nil, errors.New("persisted CoW input scope differs")
+		}
+		delete(extra, value)
+	}
+
+	if record.Progress.Reference != "" && record.Progress.Reference != saved.UID {
+		return nil, errors.New("CoW progress UID differs")
+	}
+
+	expected := provider.OutputRequirements(inner, nil)
+	if len(expected.Actions) != 1 || expected.Actions[0] != cfg.Action {
+		return nil, errors.New("persisted operation action scope differs")
+	}
+	if err = provider.ValidateRecord(record, p.ID(), p.Policy(), expected); err != nil {
+		return nil, err
+	}
+	savedRecord := record.Clone()
+	return &automaticOperation{integration: p, requirements: record.Requirements.Clone(), saved: &savedRecord}, nil
+}
+func (o *automaticOperation) Advance(ctx context.Context, s chainio.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+	if _, err := o.integration.Restore(provider.Record{Integration: o.integration.ID(), Policy: o.integration.Policy(), ID: o.ID(), Requirements: o.Requirements(), Output: out}); err != nil {
+		return provider.Progress{}, err
+	}
+
+	if o.saved != nil && !provider.EqualOutput(o.saved.Output, out) {
+		return provider.Progress{}, errors.New("operation output differs from restored record")
+	}
+	var cfg Config
+	inner, err := provider.DecodeOperation(o.integration.Policy(), out, &cfg)
 	if err != nil {
 		return provider.Progress{}, err
 	}
-	if !matched {
-		return provider.Progress{Done: true}, nil
-	}
+
 	http, settlement, _, err := ChainDefaults(s.ChainID)
 	if err != nil {
 		return provider.Progress{}, err
@@ -216,7 +327,7 @@ func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provid
 	if cfg.Settlement != settlement.Hex() || !reflect.DeepEqual(cfg.HTTP, http) || cfg.ValiditySeconds != DefaultValiditySeconds {
 		return provider.Progress{}, errors.New("persisted CoW automatic constants differ")
 	}
-	runtime, err := New(cfg, p.deps)
+	runtime, err := New(cfg, o.integration.deps)
 	if err != nil {
 		return provider.Progress{}, err
 	}
@@ -224,7 +335,7 @@ func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provid
 	if err := derived.StrictJSON(inner.Data, &saved); err != nil {
 		return provider.Progress{}, err
 	}
-	if err := protocolio.Execution(ctx, p.deps.Chain, s); err != nil {
+	if err := protocolio.Execution(ctx, o.integration.deps.Chain, s); err != nil {
 		return provider.Progress{}, err
 	}
 	if s.Execution == nil {

@@ -11,14 +11,13 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	legacy "github.com/symbioticfi/merkle-executor/api/bindings/securitizelegacyofframp"
 	modern "github.com/symbioticfi/merkle-executor/api/bindings/securitizeofframp"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
@@ -40,17 +39,8 @@ type selectedRoute struct {
 	Amount   recipes.EconomicValue
 	Floors   []recipes.EconomicValue
 }
-type durableRoute struct {
-	Config   Config          `json:"config"`
-	Decimals uint8           `json:"decimals"`
-	Output   provider.Output `json:"output"`
-}
-type durableRoutes struct {
-	Account common.Address `json:"account"`
-	Routes  []durableRoute `json:"routes"`
-}
 
-func NewAutomatic(deps registry.Deps) (provider.Provider, error) {
+func NewAutomatic(deps registry.Deps) (provider.Integration, error) {
 	if deps.Chain == nil {
 		return nil, errors.New("Securitize chain reader required")
 	}
@@ -63,9 +53,6 @@ func NewAutomatic(deps registry.Deps) (provider.Provider, error) {
 		return nil, err
 	}
 	return &automatic{deps: deps, assets: catalogue.Assets}, nil
-}
-func (p *automatic) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("Securitize requires authenticated recipe")
 }
 func match(action recipes.ManagedAction, target common.Address, data []byte) bool {
 	return action.Leaf.Target == target && len(action.Leaf.Data) >= 4 && bytes.Equal(action.Leaf.Data[:4], data[:4])
@@ -168,14 +155,10 @@ func (p *automatic) selectRoutes(s provider.Snapshot, r recipes.Recipe, t *recip
 	}
 	return selected, nil
 }
-func (p *automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (keeper.RecipeRequirements, error) {
-	routes, err := p.selectRoutes(s, r, t)
-	if err != nil {
-		return keeper.RecipeRequirements{}, err
-	}
-	requirements := keeper.RecipeRequirements{ExclusiveTargets: map[string]common.Address{}}
+func routeRequirements(route selectedRoute) (provider.Requirements, error) {
+	requirements := provider.Requirements{ExclusiveTargets: map[string]common.Address{}}
 	seen := map[uint]bool{}
-	for _, route := range routes {
+	{
 		requirements.ExclusiveTargets[route.Action.Key] = route.Action.Leaf.Target
 		requirements.Actions = append(requirements.Actions, route.Action.Key)
 		requirements.Values = append(requirements.Values, recipes.EconomicExpressions(route.Amount)...)
@@ -213,228 +196,188 @@ func (p *automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t 
 	}
 	return requirements, nil
 }
-func (p *automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
-	routes, err := p.selectRoutes(s, r, t)
-	if err != nil {
-		return provider.Output{}, err
-	}
-	if len(routes) == 0 {
-		return derived.Empty(PolicyVersion)
-	}
-	bundle := durableRoutes{Account: s.Account}
-	merged := provider.Output{Inputs: map[uint]string{}, Actions: map[string]hexutil.Bytes{}}
-	for _, route := range routes {
-		cfg := route.Config
-		amount, err := recipes.EconomicResult(route.Amount, results)
-		if err != nil {
-			return provider.Output{}, err
-		}
-		cfg.Amount = amount.String()
-		cfg.AmountInput = route.Amount.Input
-		minimum := new(big.Int)
-		var exact *big.Int
-		for _, floor := range route.Floors {
-			value, err := recipes.EconomicResult(floor, results)
-			if err != nil {
-				return provider.Output{}, err
-			}
-			if value.Cmp(minimum) > 0 {
-				minimum.Set(value)
-			}
-			if floor.Exact {
-				if exact != nil && exact.Cmp(value) != 0 {
-					return provider.Output{}, errors.New("Securitize has conflicting exact proceeds")
-				}
-				exact = value
-			}
-		}
-		if exact != nil && exact.Cmp(minimum) != 0 {
-			return provider.Output{}, errors.New("Securitize exact proceeds are below another recipe floor")
-		}
-		if cfg.Mode != "wallet" {
-			cfg.MinOutput = minimum.String()
-			for _, floor := range route.Floors {
-				if floor.Input != nil {
-					if cfg.Mode == "legacy" {
-						if cfg.GuardMinimumInput != nil && *cfg.GuardMinimumInput != *floor.Input {
-							return provider.Output{}, errors.New("legacy Securitize has multiple guard input identities")
-						}
-						cfg.GuardMinimumInput = floor.Input
-					} else {
-						cfg.MinOutputInput = floor.Input
-					}
-				}
-			}
-		}
-		runtime, err := New(cfg, p.deps)
-		if err != nil {
-			return provider.Output{}, err
-		}
-		decimals := route.Decimals
-		runtime.decimals = &decimals
-		out, err := runtime.Prepare(ctx, s)
-		if err != nil {
-			return provider.Output{}, err
-		}
-		if err = derived.BindOutput(derived.SignTemplate{Action: route.Action}, out.Actions[cfg.Action], results, &out); err != nil {
-			return provider.Output{}, err
-		}
-		for i, v := range out.Inputs {
-			if _, ok := merged.Inputs[i]; ok {
-				return provider.Output{}, errors.New("Securitize duplicated input")
-			}
-			merged.Inputs[i] = v
-		}
-		for key, data := range out.Actions {
-			if _, ok := merged.Actions[key]; ok {
-				return provider.Output{}, errors.New("Securitize duplicated action")
-			}
-			merged.Actions[key] = data
-		}
-		bundle.Routes = append(bundle.Routes, durableRoute{Config: cfg, Decimals: decimals, Output: out})
-	}
-	return derived.Encode(PolicyVersion, bundle, merged, true)
+
+type routeEnvelope struct {
+	Config   Config         `json:"config"`
+	Account  common.Address `json:"account"`
+	Decimals uint8          `json:"decimals"`
 }
-func (p *automatic) restore(out provider.Output) ([]*Provider, []provider.Output, error) {
-	var bundle durableRoutes
-	inner, matched, err := derived.Decode(PolicyVersion, out, &bundle)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !matched {
-		return nil, nil, nil
-	}
-	if bundle.Account == (common.Address{}) {
-		return nil, nil, errors.New("persisted issuer account missing")
-	}
-	if len(bundle.Routes) == 0 {
-		return nil, nil, errors.New("Securitize envelope has no routes")
-	}
-	var runtimes []*Provider
-	var outputs []provider.Output
-	inputs := map[uint]string{}
-	actions := map[string]hexutil.Bytes{}
-	targets := map[common.Address]bool{}
-	for _, route := range bundle.Routes {
-		if route.Decimals > 77 {
-			return nil, nil, errors.New("persisted Securitize route has invalid decimals")
-		}
-		if err := p.validateKnownRoute(route.Config, route.Decimals); err != nil {
-			return nil, nil, err
-		}
-		runtime, err := New(route.Config, p.deps)
-		if err != nil {
-			return nil, nil, err
-		}
-		if _, err = runtime.validatePersisted(route.Output, bundle.Account); err != nil {
-			return nil, nil, err
-		}
-		decimals := route.Decimals
-		runtime.decimals = &decimals
-		for _, target := range runtime.ExclusiveTargets() {
-			if targets[target] {
-				return nil, nil, errors.New("persisted Securitize target repeated")
-			}
-			targets[target] = true
-		}
-		if len(route.Output.Actions) != 1 || len(route.Output.SkipSteps) != 0 {
-			return nil, nil, errors.New("persisted Securitize action scope mismatch")
-		}
-		payload, err := runtime.payload()
-		if err != nil || !bytes.Equal(route.Output.Actions[runtime.cfg.Action], payload) {
-			return nil, nil, errors.New("persisted Securitize payload differs from derived policy")
-		}
-		expectedInputs := map[uint]string{}
-		if runtime.cfg.AmountInput != nil {
-			expectedInputs[*runtime.cfg.AmountInput] = runtime.amount.String()
-		}
-		if runtime.cfg.MinOutputInput != nil {
-			expectedInputs[*runtime.cfg.MinOutputInput] = runtime.minimum.String()
-		}
-		if runtime.cfg.GuardMinimumInput != nil {
-			expectedInputs[*runtime.cfg.GuardMinimumInput] = runtime.minimum.String()
-		}
-		if len(route.Output.Inputs) != len(expectedInputs) {
-			return nil, nil, errors.New("persisted Securitize input scope differs from derived fields")
-		}
-		for index, value := range expectedInputs {
-			if route.Output.Inputs[index] != value {
-				return nil, nil, errors.New("persisted Securitize input differs from payload")
-			}
-		}
-		for i, v := range route.Output.Inputs {
-			if _, ok := inputs[i]; ok {
-				return nil, nil, errors.New("persisted Securitize input repeated")
-			}
-			inputs[i] = v
-		}
-		for key, data := range route.Output.Actions {
-			if _, ok := actions[key]; ok {
-				return nil, nil, errors.New("persisted Securitize action repeated")
-			}
-			actions[key] = data
-		}
-		runtimes = append(runtimes, runtime)
-		outputs = append(outputs, route.Output)
-	}
-	if len(inner.Actions) != len(actions) || len(inner.Inputs) != len(inputs) || len(inner.SkipSteps) != 0 || len(inner.Data) != 0 {
-		return nil, nil, errors.New("persisted Securitize aggregate shape mismatch")
-	}
-	for key, data := range actions {
-		if !bytes.Equal(inner.Actions[key], data) {
-			return nil, nil, errors.New("persisted Securitize action aggregate mismatch")
-		}
-	}
-	for i, v := range inputs {
-		if inner.Inputs[i] != v {
-			return nil, nil, errors.New("persisted Securitize input aggregate mismatch")
-		}
-	}
-	return runtimes, outputs, nil
+type routeOperation struct {
+	integration  *automatic
+	route        *selectedRoute
+	requirements provider.Requirements
+	saved        *provider.Record
 }
-func (p *automatic) ExclusiveOutputTargets(out provider.Output) (map[string]common.Address, error) {
-	runtimes, _, err := p.restore(out)
+
+func (*automatic) ID() string     { return "securitize" }
+func (*automatic) Policy() string { return PolicyVersion + "/operation-v2" }
+func (p *automatic) Compile(program provider.Program) ([]provider.Operation, error) {
+	program = program.Clone()
+	routes, err := p.selectRoutes(program.Snapshot, program.Recipe, program.Tree)
 	if err != nil {
 		return nil, err
 	}
-	claims := map[string]common.Address{}
-	for _, runtime := range runtimes {
-		for key, target := range runtime.ExclusiveTargets() {
-			if _, ok := claims[key]; ok {
-				return nil, errors.New("persisted Securitize ownership repeated")
+	var operations []provider.Operation
+	for i := range routes {
+		route := routes[i]
+		req, err := routeRequirements(route)
+		if err != nil {
+			return nil, err
+		}
+		operations = append(operations, &routeOperation{integration: p, route: &route, requirements: req})
+	}
+	return operations, nil
+}
+func (o *routeOperation) ID() string                          { return provider.OperationID(o.requirements.Actions) }
+func (o *routeOperation) Requirements() provider.Requirements { return o.requirements.Clone() }
+func (o *routeOperation) Prepare(ctx context.Context, preparation provider.Preparation) (provider.Output, error) {
+	if o.route == nil {
+		return provider.Output{}, errors.New("restored operation cannot prepare")
+	}
+	if preparation.Reader == nil {
+		return provider.Output{}, errors.New("attempt chain reader required")
+	}
+	route := *o.route
+	results := preparation.Results
+	s := preparation.Program.Snapshot
+	deps := o.integration.deps
+	deps.Chain = preparation.Reader
+	cfg := route.Config
+	amount, err := recipes.EconomicResult(route.Amount, results)
+	if err != nil {
+		return provider.Output{}, err
+	}
+	cfg.Amount = amount.String()
+	cfg.AmountInput = route.Amount.Input
+	minimum := new(big.Int)
+	var exact *big.Int
+	for _, floor := range route.Floors {
+		value, err := recipes.EconomicResult(floor, results)
+		if err != nil {
+			return provider.Output{}, err
+		}
+		if value.Cmp(minimum) > 0 {
+			minimum.Set(value)
+		}
+		if floor.Exact {
+			if exact != nil && exact.Cmp(value) != 0 {
+				return provider.Output{}, errors.New("Securitize has conflicting exact proceeds")
 			}
-			claims[key] = target
+			exact = value
 		}
 	}
-	return claims, nil
+	if exact != nil && exact.Cmp(minimum) != 0 {
+		return provider.Output{}, errors.New("Securitize exact proceeds are below another recipe floor")
+	}
+	if cfg.Mode != "wallet" {
+		cfg.MinOutput = minimum.String()
+		for _, floor := range route.Floors {
+			if floor.Input != nil {
+				if cfg.Mode == "legacy" {
+					if cfg.GuardMinimumInput != nil && *cfg.GuardMinimumInput != *floor.Input {
+						return provider.Output{}, errors.New("legacy Securitize has multiple guard input identities")
+					}
+					cfg.GuardMinimumInput = floor.Input
+				} else {
+					cfg.MinOutputInput = floor.Input
+				}
+			}
+		}
+	}
+	runtime, err := New(cfg, deps)
+	if err != nil {
+		return provider.Output{}, err
+	}
+	decimals := route.Decimals
+	runtime.decimals = &decimals
+	out, err := runtime.Prepare(ctx, s)
+	if err != nil {
+		return provider.Output{}, err
+	}
+	if err = derived.BindOutput(derived.SignTemplate{Action: route.Action}, out.Actions[cfg.Action], results, &out); err != nil {
+		return provider.Output{}, err
+	}
+	return provider.EncodeOperation(o.integration.Policy(), routeEnvelope{Config: cfg, Account: s.Account, Decimals: route.Decimals}, out)
 }
-func (p *automatic) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, _ json.RawMessage) (provider.Progress, error) {
-	runtimes, outputs, err := p.restore(out)
+
+func (p *automatic) Restore(record provider.Record) (provider.Operation, error) {
+	var envelope routeEnvelope
+	inner, err := provider.DecodeOperation(p.Policy(), record.Output, &envelope)
+	if err != nil {
+		return nil, err
+	}
+	if envelope.Account == (common.Address{}) {
+		return nil, errors.New("persisted route account missing")
+	}
+
+	if envelope.Decimals > 77 {
+		return nil, errors.New("persisted route decimals invalid")
+	}
+	if err := p.validateKnownRoute(envelope.Config, envelope.Decimals); err != nil {
+		return nil, err
+	}
+	runtime, err := New(envelope.Config, p.deps)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = runtime.validatePersisted(inner, envelope.Account); err != nil {
+		return nil, err
+	}
+	decimals := envelope.Decimals
+	runtime.decimals = &decimals
+	if len(inner.Actions) != 1 || len(inner.SkipSteps) != 0 {
+		return nil, errors.New("persisted Securitize action scope mismatch")
+	}
+	expectedInputs := map[uint]string{}
+	for _, index := range []*uint{runtime.cfg.AmountInput, runtime.cfg.MinOutputInput, runtime.cfg.GuardMinimumInput} {
+		if index != nil {
+			value := runtime.minimum
+			if runtime.cfg.AmountInput == index {
+				value = runtime.amount
+			}
+			expectedInputs[*index] = value.String()
+		}
+	}
+	if len(inner.Inputs) != len(expectedInputs) {
+		return nil, errors.New("persisted Securitize input scope differs")
+	}
+	for index, value := range expectedInputs {
+		if inner.Inputs[index] != value {
+			return nil, errors.New("persisted Securitize input differs")
+		}
+	}
+	expected := provider.OutputRequirements(inner, runtime.ExclusiveTargets())
+
+	if err = provider.ValidateRecord(record, p.ID(), p.Policy(), expected); err != nil {
+		return nil, err
+	}
+	saved := record.Clone()
+	return &routeOperation{integration: p, requirements: record.Requirements.Clone(), saved: &saved}, nil
+}
+func (o *routeOperation) Advance(ctx context.Context, s chainio.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+	if _, err := o.integration.Restore(provider.Record{Integration: o.integration.ID(), Policy: o.integration.Policy(), ID: o.ID(), Requirements: o.Requirements(), Output: out}); err != nil {
+		return provider.Progress{}, err
+	}
+
+	if o.saved != nil && !provider.EqualOutput(o.saved.Output, out) {
+		return provider.Progress{}, errors.New("operation output differs from restored record")
+	}
+	var envelope routeEnvelope
+	inner, err := provider.DecodeOperation(o.integration.Policy(), out, &envelope)
 	if err != nil {
 		return provider.Progress{}, err
 	}
-	if len(runtimes) == 0 {
-		return provider.Progress{Done: true, Outcome: "not-applicable"}, nil
+	if envelope.Account != s.Account {
+		return provider.Progress{}, errors.New("operation account differs from snapshot")
 	}
-	outcome := "redeemed"
-	for i, runtime := range runtimes {
-		if _, err := runtime.validatePersisted(outputs[i], s.Account); err != nil {
-			return provider.Progress{}, err
-		}
-		progress, err := runtime.Advance(ctx, s, outputs[i], nil)
-		if err != nil {
-			return provider.Progress{}, err
-		}
-		if !progress.Done {
-			return provider.Progress{}, errors.New("Securitize route unresolved")
-		}
-		if runtime.cfg.Mode == "wallet" {
-			outcome = "requested"
-		}
+	runtime, err := New(envelope.Config, o.integration.deps)
+	if err != nil {
+		return provider.Progress{}, err
 	}
-	return provider.Progress{Done: true, Outcome: outcome, Reference: s.Execution.TxHash.Hex()}, nil
+	decimals := envelope.Decimals
+	runtime.decimals = &decimals
+	return runtime.Advance(ctx, s, inner, state)
 }
-
 func argumentType(name string) abi.Type {
 	t, err := abi.NewType(name, "", nil)
 	if err != nil {

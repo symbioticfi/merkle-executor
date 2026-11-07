@@ -8,10 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	async "github.com/symbioticfi/merkle-executor/api/bindings/asyncredeemvault"
 	"github.com/symbioticfi/merkle-executor/api/bindings/erc4626"
@@ -24,7 +22,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/api/bindings/paretoqueue"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -67,16 +65,8 @@ type selectedRoute struct {
 	Index        *recipes.EconomicValue
 	LiteralIndex *big.Int
 }
-type durableRoute struct {
-	Config Config          `json:"config"`
-	Output provider.Output `json:"output"`
-}
-type durableRoutes struct {
-	Account common.Address `json:"account"`
-	Routes  []durableRoute `json:"routes"`
-}
 
-func NewAutomatic(deps registry.Deps) (provider.Provider, error) {
+func NewAutomatic(deps registry.Deps) (provider.Integration, error) {
 	if deps.Chain == nil {
 		return nil, errors.New("issuer chain reader required")
 	}
@@ -104,10 +94,6 @@ func NewAutomatic(deps registry.Deps) (provider.Provider, error) {
 		return nil, errors.New("invalid issuer catalogue metadata")
 	}
 	return &automatic{deps: deps, assets: document.Assets}, nil
-}
-
-func (p *automatic) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("issuer automatic provider requires authenticated recipe")
 }
 
 func exactAmount(recipe recipes.Recipe, action recipes.ManagedAction, offset int) (*recipes.EconomicValue, error) {
@@ -337,8 +323,8 @@ func protocolSnapshot(s provider.Snapshot) error {
 	}
 	return nil
 }
-func routeRequirements(route selectedRoute) (keeper.RecipeRequirements, error) {
-	req := keeper.RecipeRequirements{ExclusiveTargets: map[string]common.Address{}}
+func routeRequirements(route selectedRoute) (provider.Requirements, error) {
+	req := provider.Requirements{ExclusiveTargets: map[string]common.Address{}}
 	for _, e := range []*recipes.EconomicValue{route.Amount, route.Intermediate, route.Index} {
 		if e != nil {
 			req.Values = append(req.Values, recipes.EconomicExpressions(*e)...)
@@ -361,226 +347,152 @@ func routeRequirements(route selectedRoute) (keeper.RecipeRequirements, error) {
 	}
 	return req, nil
 }
-func (p *automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (keeper.RecipeRequirements, error) {
-	routes, err := p.selectRoutes(s, r, t)
-	if err != nil {
-		return keeper.RecipeRequirements{}, err
-	}
-	total := keeper.RecipeRequirements{ExclusiveTargets: map[string]common.Address{}}
-	seen := map[uint]bool{}
-	for _, route := range routes {
-		req, err := routeRequirements(route)
-		if err != nil {
-			return total, err
-		}
-		for key, target := range req.ExclusiveTargets {
-			total.ExclusiveTargets[key] = target
-		}
-		total.Values = append(total.Values, req.Values...)
-		total.Actions = append(total.Actions, req.Actions...)
-		for _, i := range req.Inputs {
-			if seen[i] {
-				return total, errors.New("issuer routes share numerical input ownership")
-			}
-			seen[i] = true
-			total.Inputs = append(total.Inputs, i)
-		}
-	}
-	return total, nil
+
+type routeEnvelope struct {
+	Config  Config         `json:"config"`
+	Account common.Address `json:"account"`
 }
-func (p *automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
-	routes, err := p.selectRoutes(s, r, t)
-	if err != nil {
-		return provider.Output{}, err
-	}
-	if len(routes) == 0 {
-		return derived.Empty(PolicyVersion)
-	}
-	bundle := durableRoutes{Account: s.Account}
-	merged := provider.Output{Inputs: map[uint]string{}, Actions: map[string]hexutil.Bytes{}}
-	for _, route := range routes {
-		cfg := route.Config
-		if route.Amount != nil {
-			amount, err := recipes.EconomicResult(*route.Amount, results)
-			if err != nil {
-				return provider.Output{}, err
-			}
-			cfg.Amount = amount.String()
-			cfg.AmountInput = route.Amount.Input
-		}
-		if route.Intermediate != nil {
-			intermediate, err := recipes.EconomicResult(*route.Intermediate, results)
-			if err != nil {
-				return provider.Output{}, err
-			}
-			cfg.IntermediateAmount = intermediate.String()
-			cfg.IntermediateInput = route.Intermediate.Input
-		}
-		if route.Index != nil || route.LiteralIndex != nil {
-			value := route.LiteralIndex
-			if route.Index != nil {
-				value, err = recipes.EconomicResult(*route.Index, results)
-				if err != nil {
-					return provider.Output{}, err
-				}
-			}
-			if cfg.Family == "noon" {
-				cfg.RequestID = value.String()
-				if route.Index != nil {
-					cfg.RequestIDInput = route.Index.Input
-				}
-			} else {
-				cfg.Epoch = value.String()
-				if route.Index != nil {
-					cfg.EpochInput = route.Index.Input
-				}
-			}
-		}
-		runtime, err := New(cfg, p.deps)
-		if err != nil {
-			return provider.Output{}, err
-		}
-		out, err := runtime.Prepare(ctx, s)
-		if err != nil {
-			return provider.Output{}, err
-		}
-		for _, action := range route.Actions {
-			if err = derived.BindOutput(derived.SignTemplate{Action: action}, out.Actions[action.Key], results, &out); err != nil {
-				return provider.Output{}, err
-			}
-		}
-		for i, v := range out.Inputs {
-			if _, ok := merged.Inputs[i]; ok {
-				return provider.Output{}, errors.New("issuer routes duplicate input")
-			}
-			merged.Inputs[i] = v
-		}
-		for key, data := range out.Actions {
-			if _, ok := merged.Actions[key]; ok {
-				return provider.Output{}, errors.New("issuer routes duplicate action")
-			}
-			merged.Actions[key] = data
-		}
-		bundle.Routes = append(bundle.Routes, durableRoute{Config: cfg, Output: out})
-	}
-	return derived.Encode(PolicyVersion, bundle, merged, true)
+type routeOperation struct {
+	integration  *automatic
+	route        *selectedRoute
+	requirements provider.Requirements
+	saved        *provider.Record
 }
-func (p *automatic) restore(out provider.Output) ([]*Provider, []provider.Output, error) {
-	var bundle durableRoutes
-	inner, matched, err := derived.Decode(PolicyVersion, out, &bundle)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !matched {
-		return nil, nil, nil
-	}
-	if bundle.Account == (common.Address{}) {
-		return nil, nil, errors.New("persisted issuer account missing")
-	}
-	if len(bundle.Routes) == 0 {
-		return nil, nil, errors.New("issuer envelope has no routes")
-	}
-	var runtimes []*Provider
-	var outputs []provider.Output
-	inputs := map[uint]string{}
-	actions := map[string]hexutil.Bytes{}
-	targets := map[common.Address]bool{}
-	for _, route := range bundle.Routes {
-		if err := p.validateKnownRoute(route.Config); err != nil {
-			return nil, nil, err
-		}
-		runtime, err := New(route.Config, p.deps)
-		if err != nil {
-			return nil, nil, err
-		}
-		if err = runtime.validatePersisted(route.Output, bundle.Account); err != nil {
-			return nil, nil, err
-		}
-		for _, target := range runtime.ExclusiveTargets() {
-			if targets[target] {
-				return nil, nil, errors.New("persisted issuer target is repeated")
-			}
-			targets[target] = true
-		}
-		for i, v := range route.Output.Inputs {
-			if _, ok := inputs[i]; ok {
-				return nil, nil, errors.New("persisted issuer input is repeated")
-			}
-			inputs[i] = v
-		}
-		for key, data := range route.Output.Actions {
-			if _, ok := actions[key]; ok {
-				return nil, nil, errors.New("persisted issuer action is repeated")
-			}
-			actions[key] = data
-		}
-		if len(route.Output.Actions) != len(runtime.ExclusiveTargets()) || len(route.Output.SkipSteps) != 0 {
-			return nil, nil, errors.New("persisted issuer action scope mismatch")
-		}
-		runtimes = append(runtimes, runtime)
-		outputs = append(outputs, route.Output)
-	}
-	if len(inner.Actions) != len(actions) || len(inner.Inputs) != len(inputs) || len(inner.SkipSteps) != 0 || len(inner.Data) != 0 {
-		return nil, nil, errors.New("persisted issuer aggregate shape mismatch")
-	}
-	for key, data := range actions {
-		if !bytes.Equal(inner.Actions[key], data) {
-			return nil, nil, errors.New("persisted issuer aggregate action mismatch")
-		}
-	}
-	for i, v := range inputs {
-		if inner.Inputs[i] != v {
-			return nil, nil, errors.New("persisted issuer aggregate input mismatch")
-		}
-	}
-	return runtimes, outputs, nil
-}
-func (p *automatic) ExclusiveOutputTargets(out provider.Output) (map[string]common.Address, error) {
-	runtimes, _, err := p.restore(out)
+
+func (*automatic) ID() string     { return "redemptions" }
+func (*automatic) Policy() string { return PolicyVersion + "/operation-v2" }
+func (p *automatic) Compile(program provider.Program) ([]provider.Operation, error) {
+	program = program.Clone()
+	routes, err := p.selectRoutes(program.Snapshot, program.Recipe, program.Tree)
 	if err != nil {
 		return nil, err
 	}
-	targets := map[string]common.Address{}
-	for _, runtime := range runtimes {
-		for key, target := range runtime.ExclusiveTargets() {
-			if _, ok := targets[key]; ok {
-				return nil, errors.New("persisted issuer action ownership duplicated")
+	var operations []provider.Operation
+	for i := range routes {
+		route := routes[i]
+		req, err := routeRequirements(route)
+		if err != nil {
+			return nil, err
+		}
+		operations = append(operations, &routeOperation{integration: p, route: &route, requirements: req})
+	}
+	return operations, nil
+}
+func (o *routeOperation) ID() string                          { return provider.OperationID(o.requirements.Actions) }
+func (o *routeOperation) Requirements() provider.Requirements { return o.requirements.Clone() }
+func (o *routeOperation) Prepare(ctx context.Context, preparation provider.Preparation) (provider.Output, error) {
+	if o.route == nil {
+		return provider.Output{}, errors.New("restored operation cannot prepare")
+	}
+	if preparation.Reader == nil {
+		return provider.Output{}, errors.New("attempt chain reader required")
+	}
+	route := *o.route
+	var err error
+	results := preparation.Results
+	s := preparation.Program.Snapshot
+	deps := o.integration.deps
+	deps.Chain = preparation.Reader
+	cfg := route.Config
+	if route.Amount != nil {
+		amount, err := recipes.EconomicResult(*route.Amount, results)
+		if err != nil {
+			return provider.Output{}, err
+		}
+		cfg.Amount = amount.String()
+		cfg.AmountInput = route.Amount.Input
+	}
+	if route.Intermediate != nil {
+		intermediate, err := recipes.EconomicResult(*route.Intermediate, results)
+		if err != nil {
+			return provider.Output{}, err
+		}
+		cfg.IntermediateAmount = intermediate.String()
+		cfg.IntermediateInput = route.Intermediate.Input
+	}
+	if route.Index != nil || route.LiteralIndex != nil {
+		value := route.LiteralIndex
+		if route.Index != nil {
+			value, err = recipes.EconomicResult(*route.Index, results)
+			if err != nil {
+				return provider.Output{}, err
 			}
-			targets[key] = target
+		}
+		if cfg.Family == "noon" {
+			cfg.RequestID = value.String()
+			if route.Index != nil {
+				cfg.RequestIDInput = route.Index.Input
+			}
+		} else {
+			cfg.Epoch = value.String()
+			if route.Index != nil {
+				cfg.EpochInput = route.Index.Input
+			}
 		}
 	}
-	return targets, nil
+	runtime, err := New(cfg, deps)
+	if err != nil {
+		return provider.Output{}, err
+	}
+	out, err := runtime.Prepare(ctx, s)
+	if err != nil {
+		return provider.Output{}, err
+	}
+	for _, action := range route.Actions {
+		if err = derived.BindOutput(derived.SignTemplate{Action: action}, out.Actions[action.Key], results, &out); err != nil {
+			return provider.Output{}, err
+		}
+	}
+	return provider.EncodeOperation(o.integration.Policy(), routeEnvelope{Config: cfg, Account: s.Account}, out)
 }
-func (p *automatic) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, _ json.RawMessage) (provider.Progress, error) {
-	runtimes, outputs, err := p.restore(out)
+
+func (p *automatic) Restore(record provider.Record) (provider.Operation, error) {
+	var envelope routeEnvelope
+	inner, err := provider.DecodeOperation(p.Policy(), record.Output, &envelope)
+	if err != nil {
+		return nil, err
+	}
+	if envelope.Account == (common.Address{}) {
+		return nil, errors.New("persisted route account missing")
+	}
+
+	if err := p.validateKnownRoute(envelope.Config); err != nil {
+		return nil, err
+	}
+	runtime, err := New(envelope.Config, p.deps)
+	if err != nil {
+		return nil, err
+	}
+	if err = runtime.validatePersisted(inner, envelope.Account); err != nil {
+		return nil, err
+	}
+	expected := provider.OutputRequirements(inner, runtime.ExclusiveTargets())
+
+	if err = provider.ValidateRecord(record, p.ID(), p.Policy(), expected); err != nil {
+		return nil, err
+	}
+	saved := record.Clone()
+	return &routeOperation{integration: p, requirements: record.Requirements.Clone(), saved: &saved}, nil
+}
+func (o *routeOperation) Advance(ctx context.Context, s chainio.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+	if _, err := o.integration.Restore(provider.Record{Integration: o.integration.ID(), Policy: o.integration.Policy(), ID: o.ID(), Requirements: o.Requirements(), Output: out}); err != nil {
+		return provider.Progress{}, err
+	}
+
+	if o.saved != nil && !provider.EqualOutput(o.saved.Output, out) {
+		return provider.Progress{}, errors.New("operation output differs from restored record")
+	}
+	var envelope routeEnvelope
+	inner, err := provider.DecodeOperation(o.integration.Policy(), out, &envelope)
 	if err != nil {
 		return provider.Progress{}, err
 	}
-	if len(runtimes) == 0 {
-		return provider.Progress{Done: true, Outcome: "not-applicable"}, nil
+	if envelope.Account != s.Account {
+		return provider.Progress{}, errors.New("operation account differs from snapshot")
 	}
-	outcome := "requested"
-	nativeOnly := true
-	for i, runtime := range runtimes {
-		if err := runtime.validatePersisted(outputs[i], s.Account); err != nil {
-			return provider.Progress{}, err
-		}
-		progress, err := runtime.Advance(ctx, s, outputs[i], nil)
-		if err != nil {
-			return provider.Progress{}, err
-		}
-		if !progress.Done {
-			return provider.Progress{}, errors.New("issuer route remains unresolved")
-		}
-		if progress.Outcome != "redeemed" {
-			nativeOnly = false
-		}
-		if strings.HasSuffix(runtime.cfg.Mode, "claim") {
-			outcome = "claimed"
-		}
+	runtime, err := New(envelope.Config, o.integration.deps)
+	if err != nil {
+		return provider.Progress{}, err
 	}
-	if nativeOnly {
-		outcome = "redeemed"
-	}
-	return provider.Progress{Done: true, Outcome: outcome, Reference: s.Execution.TxHash.Hex()}, nil
+	return runtime.Advance(ctx, s, inner, state)
 }

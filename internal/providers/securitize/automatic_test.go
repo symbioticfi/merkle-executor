@@ -15,9 +15,9 @@ import (
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	runtimeSDK "github.com/symbioticfi/merkle-executor/sdk/runtime"
 )
 
 func packedStep(t *testing.T, op uint8, args abi.Arguments, values ...any) []byte {
@@ -132,7 +132,7 @@ func TestAutomaticSecuritizeAllEmbeddedRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalogue := raw.(*automatic)
+	catalogue := testAutomatic(raw)
 
 	for _, asset := range catalogue.assets {
 		routes := append([]Route{}, asset.Offramps...)
@@ -162,12 +162,12 @@ func TestAutomaticSecuritizeAllEmbeddedRoutes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				p := runtime.(*automatic)
+				p := testAutomatic(runtime)
 				req, err := p.RecipeRequirements(s, recipe, tree)
 				if err != nil || len(req.Inputs) != 0 {
 					t.Fatalf("extract issuer route: %+v %v", req, err)
 				}
-				if err := keeper.ValidateRecipeComposition(recipe, tree, []keeper.RecipeRequirements{req}); err != nil {
+				if err := runtimeSDK.ValidateComposition(recipe, tree, []provider.Requirements{req}); err != nil {
 					t.Fatalf("pure valid composition rejected: %v", err)
 				}
 				out, err := p.PrepareRecipe(context.Background(), s, recipe, tree, map[uint]*big.Int{0: big.NewInt(100), 1: big.NewInt(50), 2: big.NewInt(50)})
@@ -190,7 +190,7 @@ func TestAutomaticSecuritizeAllEmbeddedRoutes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				progress, err := restarted.Advance(context.Background(), s, out, nil)
+				progress, err := testAutomatic(restarted).Advance(context.Background(), s, out, nil)
 				if err != nil || !progress.Done {
 					t.Fatalf("durable issuer receipt: %+v %v", progress, err)
 				}
@@ -207,7 +207,7 @@ func TestAutomaticSecuritizeRejectsFreeFieldsAndMissingLegacyFloor(t *testing.T)
 				if err != nil {
 					t.Fatal(err)
 				}
-				p := raw.(*automatic)
+				p := testAutomatic(raw)
 				asset := p.assets[0]
 				cfg.Token = asset.Token
 				cfg.AmountInput, cfg.MinOutputInput = nil, nil
@@ -275,7 +275,7 @@ func TestAutomaticSecuritizeRejectsPersistedRouteAndFieldMutation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := raw.(*automatic)
+	p := testAutomatic(raw)
 	asset := p.assets[0]
 	cfg.Token, cfg.Target = asset.Token, asset.RedemptionWallet
 	cfg.AmountInput = nil
@@ -286,7 +286,7 @@ func TestAutomaticSecuritizeRejectsPersistedRouteAndFieldMutation(t *testing.T) 
 		t.Fatal(err)
 	}
 	var bundle durableRoutes
-	inner, _, err := derived.Decode(PolicyVersion, out, &bundle)
+	inner, _, err := decodeTestBundle(out, &bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestAutomaticSecuritizeRejectsPersistedRouteAndFieldMutation(t *testing.T) 
 				identity.Expected = "1"
 				changed.Routes[0].Output.Data, _ = json.Marshal(identity)
 			}
-			corrupt, err := derived.Encode(PolicyVersion, changed, inner, true)
+			corrupt, err := encodeTestBundle(PolicyVersion, changed, inner)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -345,7 +345,7 @@ func TestAutomaticSecuritizeBoundedAmount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := raw.(*automatic)
+	p := testAutomatic(raw)
 	asset := p.assets[0]
 	cfg.Token, cfg.Target = asset.Token, asset.RedemptionWallet
 	cfg.AmountInput = nil
@@ -372,7 +372,7 @@ func TestAutomaticSecuritizeLeavesUnrelatedGenericRedemptionUnclaimed(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := raw.(*automatic)
+	p := testAutomatic(raw)
 	_ = cfg
 	data := append(bytes.Clone(crypto.Keccak256([]byte("redeem(uint256)"))[:4]), common.LeftPadBytes(big.NewInt(100).Bytes(), 32)...)
 	leaf := recipes.Leaf{Target: address(987), Value: new(big.Int), Data: data, DataMask: make([]byte, len(data))}
@@ -397,7 +397,7 @@ func TestAutomaticSecuritizeLegacyGuardMinimumInput(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p := raw.(*automatic)
+			p := testAutomatic(raw)
 			asset := p.assets[0]
 			cfg.Token = asset.Token
 			for _, route := range asset.Offramps {
@@ -421,7 +421,7 @@ func TestAutomaticSecuritizeLegacyGuardMinimumInput(t *testing.T) {
 				t.Fatalf("legacy guard output %+v %v", out, err)
 			}
 			var bundle durableRoutes
-			_, _, err = derived.Decode(PolicyVersion, out, &bundle)
+			_, _, err = decodeTestBundle(out, &bundle)
 			if err != nil || bundle.Routes[0].Config.MinOutputInput != nil || bundle.Routes[0].Config.GuardMinimumInput == nil || *bundle.Routes[0].Config.GuardMinimumInput != 7 {
 				t.Fatalf("guard durable policy %+v %v", bundle, err)
 			}
@@ -447,7 +447,7 @@ func TestAutomaticSecuritizeLegacyCombinesPaymentFloors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := raw.(*automatic)
+	p := testAutomatic(raw)
 	asset := p.assets[0]
 	cfg.Token = asset.Token
 	for _, route := range asset.Offramps {
@@ -467,7 +467,7 @@ func TestAutomaticSecuritizeLegacyCombinesPaymentFloors(t *testing.T) {
 		t.Fatal(err)
 	}
 	var bundle durableRoutes
-	_, _, err = derived.Decode(PolicyVersion, out, &bundle)
+	_, _, err = decodeTestBundle(out, &bundle)
 	if err != nil || bundle.Routes[0].Config.MinOutput != "70" {
 		t.Fatalf("combined floors %+v %v", bundle, err)
 	}
@@ -492,7 +492,7 @@ func TestAutomaticSecuritizeExclusiveCompositionRejectsBeforeReads(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			p := raw.(*automatic)
+			p := testAutomatic(raw)
 			asset := p.assets[0]
 			cfg.Token, cfg.Target = asset.Token, asset.RedemptionWallet
 			cfg.AmountInput = nil
@@ -517,11 +517,11 @@ func TestAutomaticSecuritizeExclusiveCompositionRejectsBeforeReads(t *testing.T)
 			if err != nil || len(req.ExclusiveTargets) != 1 {
 				t.Fatalf("pure route claims %+v %v", req, err)
 			}
-			requirements := []keeper.RecipeRequirements{req}
+			requirements := []provider.Requirements{req}
 			if fault == "another provider" {
 				requirements = append(requirements, req)
 			}
-			if err = keeper.ValidateRecipeComposition(r, tree, requirements); err == nil || counter.reads != 0 {
+			if err = runtimeSDK.ValidateComposition(r, tree, requirements); err == nil || counter.reads != 0 {
 				t.Fatalf("composition conflict reached reads: %v reads=%d", err, counter.reads)
 			}
 		})

@@ -13,7 +13,8 @@ import (
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
+	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -31,17 +32,14 @@ type recipeRequest struct {
 	cfg          Config
 	budget       recipes.EconomicValue
 	floors       []recipes.EconomicValue
-	requirements keeper.RecipeRequirements
+	requirements provider.Requirements
 }
 
-func NewAutomatic(deps registry.Deps) (provider.Provider, error) {
+func NewAutomatic(deps registry.Deps) (provider.Integration, error) {
 	if _, ok := deps.Chain.(chainReader); !ok {
 		return nil, errors.New("automatic RFQ requires contract, log, receipt and header reads")
 	}
 	return &Automatic{deps: deps}, nil
-}
-func (*Automatic) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("RFQ requires authenticated recipe")
 }
 
 func consumerHTTP() protocolio.HTTPConfig {
@@ -182,21 +180,38 @@ func sameHashPlan(actual []account.IMerkleAccountHash) bool {
 	}
 	return true
 }
-func (p *Automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (keeper.RecipeRequirements, error) {
-	request, err := p.derive(s, r, t)
-	if err != nil || request == nil {
-		return keeper.RecipeRequirements{}, err
-	}
-	return request.requirements, nil
+
+type automaticOperation struct {
+	integration  *Automatic
+	compiled     *recipeRequest
+	requirements provider.Requirements
+	saved        *provider.Record
 }
-func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
-	request, err := p.derive(s, r, t)
-	if err != nil {
-		return provider.Output{}, err
+
+func (*Automatic) ID() string     { return "liquidlanerfq" }
+func (*Automatic) Policy() string { return automaticPolicy + "/operation-v2" }
+func (p *Automatic) Compile(program provider.Program) ([]provider.Operation, error) {
+	program = program.Clone()
+	compiled, err := p.derive(program.Snapshot, program.Recipe, program.Tree)
+	if err != nil || compiled == nil {
+		return nil, err
 	}
-	if request == nil {
-		return derived.Empty(automaticPolicy)
+	return []provider.Operation{&automaticOperation{integration: p, compiled: compiled, requirements: compiled.requirements}}, nil
+}
+func (o *automaticOperation) ID() string                          { return provider.OperationID(o.requirements.Actions) }
+func (o *automaticOperation) Requirements() provider.Requirements { return o.requirements.Clone() }
+func (o *automaticOperation) Prepare(ctx context.Context, preparation provider.Preparation) (provider.Output, error) {
+	if o.compiled == nil {
+		return provider.Output{}, errors.New("restored operation cannot prepare")
 	}
+	if preparation.Reader == nil {
+		return provider.Output{}, errors.New("attempt chain reader required")
+	}
+	request := *o.compiled
+	s, results := preparation.Program.Snapshot, preparation.Results
+	deps := o.integration.deps
+	deps.Chain = preparation.Reader
+
 	amount, err := recipes.EconomicResult(request.budget, results)
 	if err != nil {
 		return provider.Output{}, err
@@ -216,7 +231,7 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	}
 	request.cfg.AmountIn = amount.String()
 	request.cfg.MinAmountOut = minimum.String()
-	runtime, err := New(request.cfg, p.deps)
+	runtime, err := New(request.cfg, deps)
 	if err != nil {
 		return provider.Output{}, err
 	}
@@ -240,21 +255,79 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if err = derived.BindOutput(request.template, payload, results, &out); err != nil {
 		return provider.Output{}, err
 	}
-	return derived.Encode(automaticPolicy, request.cfg, out, true)
+	return provider.EncodeOperation(o.integration.Policy(), request.cfg, out)
 }
-func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+
+func (p *Automatic) Restore(record provider.Record) (provider.Operation, error) {
 	var cfg Config
-	inner, matched, err := derived.Decode(automaticPolicy, out, &cfg)
+	inner, err := provider.DecodeOperation(p.Policy(), record.Output, &cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if !reflect.DeepEqual(cfg.HTTP, consumerHTTP()) || cfg.MinValiditySeconds != minValidity || cfg.MaxValiditySeconds != maxValidity || cfg.MaxLookupPages != 10 || cfg.EventRangeBlocks != 2000 || len(cfg.SolverIDs) != 0 {
+		return nil, errors.New("persisted RFQ automatic constants differ")
+	}
+	runtime, err := New(cfg, p.deps)
+	if err != nil {
+		return nil, err
+	}
+
+	var saved prepared
+	if err := derived.StrictJSON(inner.Data, &saved); err != nil {
+		return nil, err
+	}
+	chainID, err := parse.Uint256(saved.ChainID)
+	if err != nil || chainID.Sign() == 0 {
+		return nil, errors.New("persisted RFQ chain invalid")
+	}
+	if _, _, err := runtime.persisted(chainio.Snapshot{ChainID: chainID, Account: saved.Account, BlockNumber: new(big.Int).SetUint64(saved.PreparedBlock)}, inner); err != nil {
+		return nil, err
+	}
+
+	if len(record.Progress.State) > 0 {
+		var state progressState
+		if err := strictJSON(record.Progress.State, &state); err != nil || state.Version != 1 || state.Digest != saved.Digest || state.NextBlock < saved.PreparedBlock || (state.NextBlock == saved.PreparedBlock && state.Anchor != (common.Hash{})) || (state.NextBlock > saved.PreparedBlock && state.Anchor == (common.Hash{})) || (state.OrderID != "" && !uuid.MatchString(state.OrderID)) {
+			return nil, errors.New("RFQ invalid persisted scan cursor")
+		}
+		if state.Lookup != nil {
+			if err := state.Lookup.validate(); err != nil {
+				return nil, err
+			}
+		}
+		if record.Progress.Reference != "" && record.Progress.Reference != state.OrderID {
+			return nil, errors.New("RFQ progress order identity differs")
+		}
+	}
+
+	expected := provider.OutputRequirements(inner, nil)
+	if len(expected.Actions) != 1 || expected.Actions[0] != cfg.Action {
+		return nil, errors.New("persisted operation action scope differs")
+	}
+	if err = provider.ValidateRecord(record, p.ID(), p.Policy(), expected); err != nil {
+		return nil, err
+	}
+	savedRecord := record.Clone()
+	return &automaticOperation{integration: p, requirements: record.Requirements.Clone(), saved: &savedRecord}, nil
+}
+func (o *automaticOperation) Advance(ctx context.Context, s chainio.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+	if _, err := o.integration.Restore(provider.Record{Integration: o.integration.ID(), Policy: o.integration.Policy(), ID: o.ID(), Requirements: o.Requirements(), Output: out}); err != nil {
+		return provider.Progress{}, err
+	}
+
+	if o.saved != nil && !provider.EqualOutput(o.saved.Output, out) {
+		return provider.Progress{}, errors.New("operation output differs from restored record")
+	}
+	var cfg Config
+	inner, err := provider.DecodeOperation(o.integration.Policy(), out, &cfg)
 	if err != nil {
 		return provider.Progress{}, err
 	}
-	if !matched {
-		return provider.Progress{Done: true}, nil
-	}
+
 	if !reflect.DeepEqual(cfg.HTTP, consumerHTTP()) || cfg.MinValiditySeconds != minValidity || cfg.MaxValiditySeconds != maxValidity || cfg.MaxLookupPages != 10 || cfg.EventRangeBlocks != 2000 || len(cfg.SolverIDs) != 0 {
 		return provider.Progress{}, errors.New("persisted RFQ automatic constants differ")
 	}
-	runtime, err := New(cfg, p.deps)
+	runtime, err := New(cfg, o.integration.deps)
 	if err != nil {
 		return provider.Progress{}, err
 	}

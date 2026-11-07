@@ -11,7 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
@@ -142,8 +141,8 @@ func WordAddress(word []byte) (common.Address, error) {
 // Requirements owns only full-word input bindings inside an authenticated
 // protocol buffer. Result bindings declare numerical dependencies and are later
 // compared to the final payload before original-code full simulation.
-func Requirements(template SignTemplate, economic []recipes.EconomicValue, mutableWords map[int]bool) (keeper.RecipeRequirements, error) {
-	requirements := keeper.RecipeRequirements{Actions: []string{template.Action.Key}}
+func Requirements(template SignTemplate, economic []recipes.EconomicValue, mutableWords map[int]bool) (provider.Requirements, error) {
+	requirements := provider.Requirements{Actions: []string{template.Action.Key}}
 	for _, value := range economic {
 		requirements.Values = append(requirements.Values, recipes.EconomicExpressions(value)...)
 	}

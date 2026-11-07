@@ -12,10 +12,11 @@ import (
 	binding "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"strconv"
 )
 
 const RewardAPI = "https://api.merkl.xyz"
@@ -25,17 +26,14 @@ type Automatic struct{ deps registry.Deps }
 type recipeClaim struct {
 	action       recipes.ManagedAction
 	cfg          Config
-	requirements keeper.RecipeRequirements
+	requirements provider.Requirements
 }
 
-func NewAutomatic(deps registry.Deps) (provider.Provider, error) {
+func NewAutomatic(deps registry.Deps) (provider.Integration, error) {
 	if deps.Chain == nil {
 		return nil, errors.New("automatic Merkl requires chain reader")
 	}
 	return &Automatic{deps: deps}, nil
-}
-func (*Automatic) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("Merkl requires authenticated recipe")
 }
 func rewardHTTP() protocolio.HTTPConfig {
 	return protocolio.HTTPConfig{URL: RewardAPI, MaxResponseBytes: 8 << 20}
@@ -100,7 +98,7 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 				return nil, errors.New("Merkl claim user, tokens, selector and proof layout must be pinned")
 			}
 		}
-		requirements := keeper.RecipeRequirements{Actions: []string{action.Key}}
+		requirements := provider.Requirements{Actions: []string{action.Key}}
 		for _, b := range action.Bindings {
 			if !amountOffsets[int(b.Offset)] {
 				return nil, errors.New("Merkl supports numerical bindings only for cumulative amounts")
@@ -124,22 +122,39 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 	}
 	return result, nil
 }
-func (p *Automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (keeper.RecipeRequirements, error) {
-	claim, err := p.derive(s, r, t)
-	if err != nil || claim == nil {
-		return keeper.RecipeRequirements{}, err
-	}
-	return claim.requirements, nil
+
+type automaticOperation struct {
+	integration  *Automatic
+	compiled     *recipeClaim
+	requirements provider.Requirements
+	saved        *provider.Record
 }
-func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
-	claim, err := p.derive(s, r, t)
-	if err != nil {
-		return provider.Output{}, err
+
+func (*Automatic) ID() string     { return "merkl" }
+func (*Automatic) Policy() string { return automaticPolicy + "/operation-v2" }
+func (p *Automatic) Compile(program provider.Program) ([]provider.Operation, error) {
+	program = program.Clone()
+	compiled, err := p.derive(program.Snapshot, program.Recipe, program.Tree)
+	if err != nil || compiled == nil {
+		return nil, err
 	}
-	if claim == nil {
-		return derived.Empty(automaticPolicy)
+	return []provider.Operation{&automaticOperation{integration: p, compiled: compiled, requirements: compiled.requirements}}, nil
+}
+func (o *automaticOperation) ID() string                          { return provider.OperationID(o.requirements.Actions) }
+func (o *automaticOperation) Requirements() provider.Requirements { return o.requirements.Clone() }
+func (o *automaticOperation) Prepare(ctx context.Context, preparation provider.Preparation) (provider.Output, error) {
+	if o.compiled == nil {
+		return provider.Output{}, errors.New("restored operation cannot prepare")
 	}
-	runtime, err := New(claim.cfg, p.deps)
+	if preparation.Reader == nil {
+		return provider.Output{}, errors.New("attempt chain reader required")
+	}
+	claim := *o.compiled
+	s, results := preparation.Program.Snapshot, preparation.Results
+	deps := o.integration.deps
+	deps.Chain = preparation.Reader
+
+	runtime, err := New(claim.cfg, deps)
 	if err != nil {
 		return provider.Output{}, err
 	}
@@ -150,21 +165,95 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if err = derived.BindOutput(derived.SignTemplate{Action: claim.action}, out.Actions[claim.cfg.Action], results, &out); err != nil {
 		return provider.Output{}, err
 	}
-	return derived.Encode(automaticPolicy, claim.cfg, out, true)
+	return provider.EncodeOperation(o.integration.Policy(), claim.cfg, out)
 }
-func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+
+func (p *Automatic) Restore(record provider.Record) (provider.Operation, error) {
 	var cfg Config
-	inner, matched, err := derived.Decode(automaticPolicy, out, &cfg)
+	inner, err := provider.DecodeOperation(p.Policy(), record.Output, &cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if !reflect.DeepEqual(cfg.HTTP, rewardHTTP()) || cfg.Multicall3 != protocolio.StandardMulticall3 || cfg.MinClaimable != "1" || cfg.SkipIfEmpty || cfg.DedicatedClaimGroup || len(cfg.AmountInputs) != 0 || len(cfg.ClaimableInputs) != 0 {
+		return nil, errors.New("persisted Merkl automatic constants differ")
+	}
+	runtime, err := New(cfg, p.deps)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = runtime
+	data := inner.Actions[cfg.Action]
+	method := binding.NewMerklDistributor().GetABI().Methods["claim"]
+	if len(data) != cfg.CalldataBytes || len(data) < 4 || !bytes.Equal(data[:4], method.ID) {
+		return nil, errors.New("persisted Merkl claim selector or size differs")
+	}
+	args, err := method.Inputs.Unpack(data[4:])
+	if err != nil {
+		return nil, err
+	}
+	users, tokens, amounts, proofs := args[0].([]common.Address), args[1].([]common.Address), args[2].([]*big.Int), args[3].([][][32]byte)
+	packed, err := binding.NewMerklDistributor().TryPackClaim(users, tokens, amounts, proofs)
+	if err != nil || !bytes.Equal(packed, data) || len(tokens) != len(cfg.Tokens) || len(users) != len(tokens) || len(amounts) != len(tokens) || len(proofs) != len(tokens) {
+		return nil, errors.New("persisted Merkl claim layout differs")
+	}
+	var evidence struct {
+		Root   string `json:"root"`
+		Tokens string `json:"tokens"`
+	}
+	if err := derived.StrictJSON(inner.Data, &evidence); err != nil {
+		return nil, err
+	}
+	root := common.HexToHash(evidence.Root)
+	if root == (common.Hash{}) || evidence.Tokens != strconv.Itoa(len(tokens)) {
+		return nil, errors.New("persisted Merkl root invalid")
+	}
+	for i, token := range tokens {
+		if users[i] == (common.Address{}) || users[i] != users[0] || token != common.HexToAddress(cfg.Tokens[i]) || len(proofs[i]) != cfg.ProofLengths[i] || !VerifyProof(users[i], token, amounts[i], proofs[i], root) {
+			return nil, errors.New("persisted Merkl proof or identity differs")
+		}
+	}
+
+	available := map[string]int{}
+	for _, amount := range amounts {
+		available[amount.String()]++
+	}
+	for _, value := range inner.Inputs {
+		if available[value] == 0 {
+			return nil, errors.New("persisted Merkl input differs from cumulative amount")
+		}
+		available[value]--
+	}
+
+	expected := provider.OutputRequirements(inner, nil)
+	if len(expected.Actions) != 1 || expected.Actions[0] != cfg.Action {
+		return nil, errors.New("persisted operation action scope differs")
+	}
+	if err = provider.ValidateRecord(record, p.ID(), p.Policy(), expected); err != nil {
+		return nil, err
+	}
+	savedRecord := record.Clone()
+	return &automaticOperation{integration: p, requirements: record.Requirements.Clone(), saved: &savedRecord}, nil
+}
+func (o *automaticOperation) Advance(ctx context.Context, s chainio.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+	if _, err := o.integration.Restore(provider.Record{Integration: o.integration.ID(), Policy: o.integration.Policy(), ID: o.ID(), Requirements: o.Requirements(), Output: out}); err != nil {
+		return provider.Progress{}, err
+	}
+
+	if o.saved != nil && !provider.EqualOutput(o.saved.Output, out) {
+		return provider.Progress{}, errors.New("operation output differs from restored record")
+	}
+	var cfg Config
+	inner, err := provider.DecodeOperation(o.integration.Policy(), out, &cfg)
 	if err != nil {
 		return provider.Progress{}, err
 	}
-	if !matched {
-		return provider.Progress{Done: true}, nil
-	}
+
 	if !reflect.DeepEqual(cfg.HTTP, rewardHTTP()) || cfg.Multicall3 != protocolio.StandardMulticall3 || cfg.MinClaimable != "1" || cfg.SkipIfEmpty || cfg.DedicatedClaimGroup || len(cfg.AmountInputs) != 0 || len(cfg.ClaimableInputs) != 0 {
 		return provider.Progress{}, errors.New("persisted Merkl automatic constants differ")
 	}
-	runtime, err := New(cfg, p.deps)
+	runtime, err := New(cfg, o.integration.deps)
 	if err != nil {
 		return provider.Progress{}, err
 	}

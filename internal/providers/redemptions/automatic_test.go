@@ -18,10 +18,10 @@ import (
 	registry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/internal/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	runtimeSDK "github.com/symbioticfi/merkle-executor/sdk/runtime"
 )
 
 func packedStep(t *testing.T, op uint8, args abi.Arguments, values ...any) []byte {
@@ -149,7 +149,7 @@ func TestAutomaticAllEmbeddedIssuerRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalogue := raw.(*automatic)
+	catalogue := testAutomatic(raw)
 
 	for _, asset := range catalogue.assets {
 		for _, mode := range append(append([]string{}, asset.RequestModes...), asset.ClaimModes...) {
@@ -173,7 +173,7 @@ func TestAutomaticAllEmbeddedIssuerRoutes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				p := runtime.(*automatic)
+				p := testAutomatic(runtime)
 				recipe, tree := automaticRecipe(t, cfg, s, reader)
 				req, err := p.RecipeRequirements(s, recipe, tree)
 				if err != nil || reader.reads != 0 {
@@ -182,7 +182,7 @@ func TestAutomaticAllEmbeddedIssuerRoutes(t *testing.T) {
 				if len(req.Inputs) != 0 {
 					t.Fatal("result binding incorrectly owns an input")
 				}
-				if err := keeper.ValidateRecipeComposition(recipe, tree, []keeper.RecipeRequirements{req}); err != nil {
+				if err := runtimeSDK.ValidateComposition(recipe, tree, []provider.Requirements{req}); err != nil {
 					t.Fatalf("pure valid composition rejected: %v", err)
 				}
 				out, err := p.PrepareRecipe(context.Background(), s, recipe, tree, map[uint]*big.Int{0: big.NewInt(100), 1: big.NewInt(125)})
@@ -218,7 +218,7 @@ func TestAutomaticAllEmbeddedIssuerRoutes(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				progress, err := restarted.Advance(context.Background(), s, out, nil)
+				progress, err := testAutomatic(restarted).Advance(context.Background(), s, out, nil)
 				if err != nil || !progress.Done || reader.reads != before {
 					t.Fatalf("durable issuer recovery: %+v %v", progress, err)
 				}
@@ -232,7 +232,7 @@ func TestAutomaticIssuerRejectsInvalidEconomicsAndIdentityBeforeReads(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := raw.(*automatic)
+	p := testAutomatic(raw)
 	asset := p.assets[0]
 	cfg := automaticConfig(asset, "request")
 	s, _ := issuerFixture(t, cfg)
@@ -269,7 +269,7 @@ func TestAutomaticIssuerRejectsDurablePolicyAndPayloadChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := raw.(*automatic)
+	p := testAutomatic(raw)
 	cfg := automaticConfig(p.assets[0], "request")
 	s, reader := issuerFixture(t, cfg)
 	p.deps.Chain = reader
@@ -279,7 +279,7 @@ func TestAutomaticIssuerRejectsDurablePolicyAndPayloadChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	var bundle durableRoutes
-	inner, _, err := derived.Decode(PolicyVersion, out, &bundle)
+	inner, _, err := decodeTestBundle(out, &bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestAutomaticIssuerRejectsDurablePolicyAndPayloadChanges(t *testing.T) {
 			case "account":
 				changed.Routes[0].Output.Data = json.RawMessage(`"0x0000000000000000000000000000000000000011"`)
 			}
-			corrupt, err := derived.Encode(PolicyVersion, changed, inner, true)
+			corrupt, err := encodeTestBundle(PolicyVersion, changed, inner)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -330,7 +330,7 @@ func TestAutomaticIssuerBoundedAmountAndExactClaimIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := raw.(*automatic)
+	p := testAutomatic(raw)
 	cfg := automaticConfig(p.assets[0], "request")
 	s, reader := issuerFixture(t, cfg)
 	p.deps.Chain = reader
@@ -347,7 +347,7 @@ func TestAutomaticIssuerBoundedAmountAndExactClaimIdentity(t *testing.T) {
 		t.Fatalf("bounded amount %+v %v", out, err)
 	}
 	var bundle durableRoutes
-	_, _, err = derived.Decode(PolicyVersion, out, &bundle)
+	_, _, err = decodeTestBundle(out, &bundle)
 	if err != nil || bundle.Routes[0].Config.Amount != "80" {
 		t.Fatalf("bounded durable amount %+v %v", bundle, err)
 	}
@@ -375,7 +375,7 @@ func TestAutomaticIssuerLeavesUnrelatedGenericRedemptionUnclaimed(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := raw.(*automatic)
+	p := testAutomatic(raw)
 	s, _ := issuerFixture(t, automaticConfig(p.assets[0], "request"))
 	data := append(bytes.Clone(crypto.Keccak256([]byte("redeem(uint256)"))[:4]), common.LeftPadBytes(big.NewInt(100).Bytes(), 32)...)
 	leaf := recipes.Leaf{Target: issuerAddress(987), Value: new(big.Int), Data: data, DataMask: make([]byte, len(data))}
@@ -398,7 +398,7 @@ func TestAutomaticIssuerUsesComputedClaimIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := raw.(*automatic)
+	p := testAutomatic(raw)
 	var asset issuerAsset
 	for _, candidate := range p.assets {
 		if candidate.Family == "pareto" {
@@ -436,7 +436,7 @@ func TestAutomaticIssuerUsesComputedClaimIndex(t *testing.T) {
 				t.Fatal(err)
 			}
 			var bundle durableRoutes
-			_, _, err = derived.Decode(PolicyVersion, out, &bundle)
+			_, _, err = decodeTestBundle(out, &bundle)
 			if err != nil || bundle.Routes[0].Config.Epoch != "7" {
 				t.Fatalf("computed claim identity %+v %v", bundle, err)
 			}
@@ -453,7 +453,7 @@ func TestAutomaticFigureLinksBoundedUnwrapInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := raw.(*automatic)
+	p := testAutomatic(raw)
 	var asset issuerAsset
 	for _, candidate := range p.assets {
 		if candidate.Family == "figure" {
@@ -496,7 +496,7 @@ func TestAutomaticIssuerExclusiveCompositionRejectsBeforeReads(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p := raw.(*automatic)
+			p := testAutomatic(raw)
 			cfg := automaticConfig(p.assets[0], "request")
 			s, _ := issuerFixture(t, cfg)
 			r, tree := automaticRecipe(t, cfg, s, reader)
@@ -519,11 +519,11 @@ func TestAutomaticIssuerExclusiveCompositionRejectsBeforeReads(t *testing.T) {
 			if err != nil || len(req.ExclusiveTargets) != 1 {
 				t.Fatalf("pure route claims %+v %v", req, err)
 			}
-			requirements := []keeper.RecipeRequirements{req}
+			requirements := []provider.Requirements{req}
 			if fault == "another provider" {
 				requirements = append(requirements, req)
 			}
-			if err = keeper.ValidateRecipeComposition(r, tree, requirements); err == nil || reader.reads != 0 {
+			if err = runtimeSDK.ValidateComposition(r, tree, requirements); err == nil || reader.reads != 0 {
 				t.Fatalf("composition conflict reached reads: %v reads=%d", err, reader.reads)
 			}
 		})
@@ -573,11 +573,11 @@ func TestAutomaticNativeNoonSelectionAndRestoration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := p.(*automatic).RecipeRequirements(snapshot, recipe, tree)
+	req, err := testAutomatic(p).RecipeRequirements(snapshot, recipe, tree)
 	if err != nil || len(req.ExclusiveTargets) != 1 || reader.reads != 0 {
 		t.Fatalf("native automatic selection missing: %+v %v reads=%d", req, err, reader.reads)
 	}
-	out, err := p.(*automatic).PrepareRecipe(t.Context(), snapshot, recipe, tree, map[uint]*big.Int{0: amount})
+	out, err := testAutomatic(p).PrepareRecipe(t.Context(), snapshot, recipe, tree, map[uint]*big.Int{0: amount})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -590,7 +590,7 @@ func TestAutomaticNativeNoonSelectionAndRestoration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	progress, err := restarted.Advance(t.Context(), snapshot, out, nil)
+	progress, err := testAutomatic(restarted).Advance(t.Context(), snapshot, out, nil)
 	if err != nil || !progress.Done || reader.reads != before {
 		t.Fatalf("native durable restoration: %+v %v", progress, err)
 	}
@@ -611,7 +611,7 @@ func TestAutomaticNativeNoonBudgetAndPreflight(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			p := raw.(*automatic)
+			p := testAutomatic(raw)
 			switch fault {
 			case "free amount":
 				recipe.Steps = [][]byte{recipe.Steps[0], recipe.Steps[3]}
@@ -651,7 +651,7 @@ func TestAutomaticNativeNoonBudgetAndPreflight(t *testing.T) {
 			if e != nil || len(req.Inputs) != 1 || req.Inputs[0] != 7 || reader.reads != 0 {
 				t.Fatalf("bounded native requirements: %+v %v", req, e)
 			}
-			if e = keeper.ValidateRecipeComposition(recipe, tree, []keeper.RecipeRequirements{req}); e != nil {
+			if e = runtimeSDK.ValidateComposition(recipe, tree, []provider.Requirements{req}); e != nil {
 				t.Fatal(e)
 			}
 			reader.reply(common.HexToAddress(cfg.Target), native.NewNoonRedeemHandlerV2().GetABI(), "calculateCollateralAmount", []any{common.HexToAddress(cfg.OutputAsset), big.NewInt(80)}, big.NewInt(1_234_567))
@@ -660,7 +660,7 @@ func TestAutomaticNativeNoonBudgetAndPreflight(t *testing.T) {
 				t.Fatalf("native maximum bounded amount: %+v %v", out.Inputs, e)
 			}
 			var bundle durableRoutes
-			_, _, e = derived.Decode(PolicyVersion, out, &bundle)
+			_, _, e = decodeTestBundle(out, &bundle)
 			if e != nil || bundle.Routes[0].Config.Amount != "80" || bundle.Routes[0].Config.Mode != "redeem-usn" {
 				t.Fatalf("native durable budget differs: %+v %v", bundle, e)
 			}
@@ -697,13 +697,13 @@ func TestAutomaticNativeNoonRecoveryPolicyAndEvidence(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			p := raw.(*automatic)
+			p := testAutomatic(raw)
 			out, e := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, map[uint]*big.Int{0: amount})
 			if e != nil {
 				t.Fatal(e)
 			}
 			var bundle durableRoutes
-			inner, _, e := derived.Decode(PolicyVersion, out, &bundle)
+			inner, _, e := decodeTestBundle(out, &bundle)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -736,7 +736,7 @@ func TestAutomaticNativeNoonRecoveryPolicyAndEvidence(t *testing.T) {
 			for i := range snapshot.Execution.Logs {
 				snapshot.Execution.Logs[i].Index = uint(i)
 			}
-			out, e = derived.Encode(policy, bundle, inner, true)
+			out, e = encodeTestBundle(policy, bundle, inner)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -745,7 +745,7 @@ func TestAutomaticNativeNoonRecoveryPolicyAndEvidence(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			progress, e := restarted.Advance(t.Context(), snapshot, out, nil)
+			progress, e := testAutomatic(restarted).Advance(t.Context(), snapshot, out, nil)
 			if fault == "valid" {
 				if e != nil || !progress.Done || progress.Outcome != "redeemed" {
 					t.Fatalf("valid native durable recovery: %+v %v", progress, e)
@@ -771,7 +771,7 @@ func TestAutomaticNativeSelectorDoesNotOwnUnknownTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := raw.(*automatic).RecipeRequirements(snapshot, recipe, tree)
+	req, err := testAutomatic(raw).RecipeRequirements(snapshot, recipe, tree)
 	if err != nil || len(req.ExclusiveTargets) != 0 || len(req.Actions) != 0 || reader.reads != 0 {
 		t.Fatalf("native selector stole unrelated action: %+v %v", req, err)
 	}
