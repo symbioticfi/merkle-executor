@@ -91,11 +91,15 @@ func (s *Store) Save(key string, value any) error {
 	if s.lock == nil {
 		return errors.New("state store closed")
 	}
+	return save(s.dir, key, value)
+}
+
+func save(dir, key string, value any) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return errors.Errorf("encode state: %w", err)
 	}
-	f, err := os.CreateTemp(s.dir, ".pending-*")
+	f, err := os.CreateTemp(dir, ".pending-*")
 	if err != nil {
 		return errors.Errorf("create state replacement: %w", err)
 	}
@@ -109,10 +113,10 @@ func (s *Store) Save(key string, value any) error {
 	if err := f.Close(); err != nil {
 		return errors.Errorf("close state replacement: %w", err)
 	}
-	if err := os.Rename(f.Name(), s.filename(key)); err != nil {
+	if err := os.Rename(f.Name(), filename(dir, key)); err != nil {
 		return errors.Errorf("replace state: %w", err)
 	}
-	return s.syncDirectory()
+	return syncDirectory(dir)
 }
 
 func (s *Store) Delete(key string) error {
@@ -128,7 +132,11 @@ func (s *Store) Delete(key string) error {
 }
 
 func (s *Store) syncDirectory() error {
-	dir, err := os.Open(s.dir)
+	return syncDirectory(s.dir)
+}
+
+func syncDirectory(path string) error {
+	dir, err := os.Open(path)
 	if err != nil {
 		return errors.Errorf("open state directory for sync: %w", err)
 	}
