@@ -144,12 +144,12 @@ func openEnvironment(ctx context.Context, path string, httpClient *http.Client) 
 		close: func() { client.Close(); flush() }}, nil
 }
 
-func runBot(ctx context.Context, path string, once bool) error {
-	return runBotWithHTTP(ctx, path, once, nil)
+func runBot(ctx context.Context, path string) error {
+	return runBotWithHTTP(ctx, path, nil)
 }
 
 // runBotWithHTTP permits bounded official API fixture transports.
-func runBotWithHTTP(ctx context.Context, path string, once bool, httpClient *http.Client) (err error) {
+func runBotWithHTTP(ctx context.Context, path string, httpClient *http.Client) (err error) {
 	env, err := openEnvironment(ctx, path, httpClient)
 	if err != nil {
 		return err
@@ -193,9 +193,6 @@ func runBotWithHTTP(ctx context.Context, path string, once bool, httpClient *htt
 		metrics.Ready(err == nil)
 		if err != nil && ctx.Err() == nil {
 			log.Error(err, "runtime iteration failed", "pending", k.Pending())
-		}
-		if once && !k.Pending() {
-			return err
 		}
 		if ctx.Err() != nil {
 			return stopped(ctx, k)

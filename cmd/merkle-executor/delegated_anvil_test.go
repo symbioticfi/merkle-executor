@@ -137,9 +137,7 @@ func TestAnvilServiceDelegatedBatch(t *testing.T) {
 	}
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
-	if err := runBot(ctx, path, true); err != nil {
-		t.Fatal(err)
-	}
+	runService(t, ctx, path, "ok", 2)
 	transaction := serviceTransaction(t, ctx, client, caller, 0)
 	if transaction.To() == nil || *transaction.To() != caller || !bytes.Equal(transaction.Data(), plan.Data) {
 		t.Fatal("not the planned self-transaction")

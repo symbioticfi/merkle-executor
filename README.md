@@ -31,9 +31,9 @@ validated at startup; the signing key must match that caller.
 `strategies` is an ordered list of executor addresses. Accounts come from the
 contracts, and active permission artifacts come from `curator.url`. Duplicate
 executors and unknown YAML fields are rejected. `plan` discovers, assembles and
-simulates without signing or publishing orders. `run --once` drives one admitted
-cycle through pending transaction and external settlement; cancelling it discards
-RAM tracking when the process exits.
+simulates without signing or publishing orders. `run` continuously drives
+transaction and external settlement work until stopped; stopping discards RAM
+tracking when the process exits.
 
 When configured, `/healthz`, `/readyz` and `/metrics` expose process health and
 keeper outcomes. Readiness reflects the latest iteration. `version` prints build

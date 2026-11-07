@@ -67,11 +67,13 @@ progress in private Go state. Stateless Aave, Merkl and 3F preparation needs no
 replay envelope or settlement method. Native claim validity stays in the native
 contracts, with recipe constraints and full simulation checked by the SDK.
 
-The host calls `Keeper.Tick` and, for a one-shot session, continues while
-`Keeper.Pending()` is true. Each tick drains immediately confirmed work while
+The host calls `Keeper.Tick` on its polling cadence; `Keeper.Pending()` reports
+process-owned work. Each tick drains immediately confirmed work while
 submitting each executor and advancing each settlement at most once. Idle candidates
 can become ready after earlier confirmed effects. Pending work yields after one
-poll. A host may select `Keeper.Wakeup()` alongside its normal timer when its
+poll. Polling, each settlement, and preparation/submission have independent
+operation budgets and honor the host context's cancellation. A host may select
+`Keeper.Wakeup()` alongside its normal timer when its
 sender provides canonical-completion notifications; the SDK starts no worker.
 `transaction.Manager` exposes Submit/Poll/Busy. Before signing it requires a fresh
 `Backend.TransactionSenderBalanceAt` balance covering the final maximum gas cost;

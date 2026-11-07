@@ -180,10 +180,8 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 
 	startServiceConfirmationMining(t, ctx, client, caller)
-	run := func() {
-		if err := runBot(ctx, path, true); err != nil {
-			t.Fatal(err)
-		}
+	run := func(outcome string, count int) {
+		runService(t, ctx, path, outcome, count)
 	}
 	read := func(target common.Address, contract serviceArtifact, method string, args ...any) *big.Int {
 		raw, err := client.CallContract(ctx, ethereum.CallMsg{To: &target, Data: servicePack(t, contract, method, args...)}, nil)
@@ -203,10 +201,10 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 			t.Fatalf("idle recipes consumed a nonce: nonce=%d error=%v", nonce, err)
 		}
 	}
-	run()
+	run("idle", 2)
 	assertIdle()
 	serviceSeedTransaction(t, ctx, client, owner, &share, servicePack(t, shareArtifact, "mint", account, big.NewInt(100)))
-	run()
+	run("ok", 1)
 	requested := serviceTransaction(t, ctx, client, caller, 0)
 	if requested.To() == nil || *requested.To() != requestExecutor {
 		t.Fatal("request used a different executor")
@@ -215,12 +213,12 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 		t.Fatal("request did not consume exact allowance and retain issuer-owned pending shares")
 	}
 
-	run() // Restart while the issuer is still pending must not submit another request.
+	run("idle", 2) // Restart while the issuer is pending must not submit another request.
 	if read(issuer, issuerArtifact, "requestCount").Int64() != 1 {
 		t.Fatal("restart duplicated redemption request")
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &issuer, servicePack(t, issuerArtifact, "finalize", account))
-	run() // Separate claim strategy may now own the same account and nonce lane.
+	run("ok", 1) // Separate claim strategy may now own the same account and nonce lane.
 	claimed := serviceTransaction(t, ctx, client, caller, 1)
 	if claimed.Hash() == requested.Hash() {
 		t.Fatal("claim reused the request transaction")
@@ -228,7 +226,7 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 	if read(issuer, issuerArtifact, "maxRedeem", account).Sign() != 0 || read(asset, outputArtifact, "balanceOf", account).Int64() != 200 || read(issuer, issuerArtifact, "claimCount").Int64() != 1 {
 		t.Fatal("claim failed to redeem the exact committed 100 shares")
 	}
-	run()
+	run("idle", 2)
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 2 {
 		t.Fatalf("completed lifecycle repeated across restart: nonce=%d error=%v", nonce, err)
 	}

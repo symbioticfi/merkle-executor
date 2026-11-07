@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -257,6 +258,84 @@ func serviceKeeper(t *testing.T, ctx context.Context, path string, client *http.
 	return k
 }
 
+// Stop the continuous daemon only after its public metrics report the expected work.
+func runService(t *testing.T, ctx context.Context, path, outcome string, count int) {
+	t.Helper()
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Observability.Addr = listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeCLIConfig(t, filepath.Dir(path), *cfg)
+	run, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	var runErr error
+	go func() {
+		runErr = runBot(run, path)
+		close(done)
+	}()
+	defer func() { stop(); <-done }()
+	client := &http.Client{Timeout: time.Second}
+	defer client.CloseIdleConnections()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			t.Fatalf("daemon stopped before observing %s: %v", outcome, runErr)
+		case <-ctx.Done():
+			t.Fatalf("daemon did not report %s: %v", outcome, ctx.Err())
+		case <-ticker.C:
+			request, err := http.NewRequestWithContext(run, http.MethodGet, "http://"+cfg.Observability.Addr+"/metrics", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := client.Do(request)
+			if err != nil {
+				continue
+			}
+			data, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+			closeErr := response.Body.Close()
+			if readErr != nil || closeErr != nil {
+				t.Fatalf("read daemon metrics: %v / %v", readErr, closeErr)
+			}
+			total := float64(0)
+			for _, line := range strings.Split(string(data), "\n") {
+				if !strings.HasPrefix(line, "merkle_executor_iterations_total{") || (!strings.Contains(line, "outcome="+strconv.Quote(outcome)) && !strings.Contains(line, `outcome="error"`)) {
+					continue
+				}
+				_, raw, found := strings.Cut(line, "} ")
+				value, err := strconv.ParseFloat(raw, 64)
+				if !found || err != nil {
+					t.Fatalf("invalid iteration metric %q", line)
+				}
+				if strings.Contains(line, `outcome="error"`) {
+					if value != 0 {
+						t.Fatalf("daemon reported an iteration failure: %s", line)
+					}
+					continue
+				}
+				total += value
+			}
+			if total >= float64(count) {
+				stop()
+				<-done
+				if runErr != nil {
+					t.Fatalf("daemon cancellation after %s: %v", outcome, runErr)
+				}
+				return
+			}
+		}
+	}
+}
+
 func servicePendingTransaction(t *testing.T, ctx context.Context, client *ethclient.Client, caller common.Address) *types.Transaction {
 	t.Helper()
 	var content struct {
@@ -418,7 +497,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(mismatchedKey)))
-	if err := runBot(ctx, path, true); err == nil {
+	if err := runBot(ctx, path); err == nil {
 		t.Fatal("send accepted a key that is not executor caller")
 	}
 	if _, err := os.Stat(filepath.Join(directory, "state")); !os.IsNotExist(err) {
@@ -436,7 +515,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	defer occupied.Close()
 	cfg.Observability.Addr = occupied.Addr().String()
 	path = writeCLIConfig(t, directory, cfg)
-	if err = runBot(ctx, path, true); err == nil || !strings.Contains(err.Error(), "observability listener failed") {
+	if err = runBot(ctx, path); err == nil || !strings.Contains(err.Error(), "observability listener failed") {
 		t.Fatalf("listener startup failure did not stop before signing: %v", err)
 	}
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 0 {
@@ -448,7 +527,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		curatorUnavailable.Store(failure == "HTTP503")
 		wrongPermissionChain.Store(failure == "wrong chain")
 		changeRootDuringHTTP.Store(failure == "root during HTTP")
-		if err = runBot(ctx, path, true); err == nil {
+		if err = serviceKeeper(t, ctx, path, nil).Tick(ctx); err == nil {
 			t.Fatalf("send accepted curator failure %s", failure)
 		}
 		if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
@@ -470,9 +549,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	// the real sender confirms the signed transaction.
 	startServiceConfirmationMining(t, ctx, client, caller)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
-	if err = runBot(ctx, path, true); err != nil {
-		t.Fatalf("send-once failed: %v", err)
-	}
+	runService(t, ctx, path, "ok", 1)
 	transaction := serviceTransaction(t, ctx, client, caller, 0)
 	signedBy, err := types.Sender(types.LatestSignerForChainID(big.NewInt(31337)), transaction)
 	if err != nil || signedBy != caller || transaction.To() == nil || *transaction.To() != executorAddress || !bytes.Equal(transaction.Data(), expectedCalldata) || transaction.Nonce() != 0 {
@@ -490,7 +567,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	}
 	permissionRequests := curatorCalls.Load()
 	curatorUnavailable.Store(true)
-	if err = runBot(ctx, path, true); err == nil {
+	if err = serviceKeeper(t, ctx, path, nil).Tick(ctx); err == nil {
 		t.Fatal("fresh runtime bypassed unavailable permission source")
 	}
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 || curatorCalls.Load() <= permissionRequests {
@@ -502,8 +579,8 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	}
 	stopping, stop := context.WithTimeout(ctx, 2500*time.Millisecond)
 	defer stop()
-	if err = runBot(stopping, path, true); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "pending work") {
-		t.Fatalf("once silently abandoned pending tracking: %v", err)
+	if err = runBot(stopping, path); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "pending work") {
+		t.Fatalf("cancellation silently abandoned pending tracking: %v", err)
 	}
 	if pending := servicePendingTransaction(t, ctx, client, caller); pending.Nonce() != 1 {
 		t.Fatal("cancellation changed or lost pending transaction identity")

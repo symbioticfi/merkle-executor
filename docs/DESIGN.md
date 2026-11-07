@@ -111,7 +111,11 @@ reserved until every task finishes; unrelated accounts can continue.
 A tick drains immediately confirmed work and continues other eligible executors,
 submitting each executor and advancing each settlement at most once. Idle
 candidates may be prepared again after confirmed effects make them useful. Pending transactions yield
-after one poll; all work shares the operation deadline. Hosts may select the
+after one poll. Polling, each settlement, and preparation/submission have separate
+operation deadlines, so a slow account cannot consume another account's budget.
+Preparation and submission share one deadline for the selected transaction.
+Parent cancellation stops subsequent work; the per-executor and per-settlement
+visitation limits bound each tick. Hosts may select the
 keeper's optional sender wakeup channel alongside their normal cadence. Canonical
 host completion wakes promptly; ambiguous errors retain normal retry cadence.
 

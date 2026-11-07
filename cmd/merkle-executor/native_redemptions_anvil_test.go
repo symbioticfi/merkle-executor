@@ -274,7 +274,7 @@ func TestAnvilNativeRedemptionsAtomicityAndInProcessReorg(t *testing.T) {
 	failedRecipe := recipes.CloneRecipe(recipe)
 	failedRecipe.Steps[10] = issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, big.NewInt(81), result(9))
 	serviceSeedTransaction(t, ctx, client, owner, &executor, executors.PackSetRecipe(failedRecipe.Queries, failedRecipe.Steps))
-	if err = runBot(ctx, path, true); !recipes.BatchRejected(err) {
+	if err = serviceKeeper(t, ctx, path, nil).Tick(ctx); !recipes.BatchRejected(err) {
 		t.Fatal("daemon did not reject the final output guard during simulation", err)
 	}
 

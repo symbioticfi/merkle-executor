@@ -73,9 +73,9 @@ func (k *Keeper) Tick(ctx context.Context) error {
 		}
 		names[name] = true
 	}
-	operation, cancel := context.WithTimeout(ctx, k.OperationTimeout)
-	defer cancel()
 	if k.Mode == "simulate" {
+		operation, cancel := context.WithTimeout(ctx, k.OperationTimeout)
+		defer cancel()
 		plan, err := k.Planner.PrepareExecution(operation, k.Strategies)
 		var failures []error
 		for _, s := range k.Strategies {
@@ -104,7 +104,7 @@ func (k *Keeper) Tick(ctx context.Context) error {
 		k.halted = map[string]bool{}
 		k.settlements = map[string]*settlement{}
 	}
-	return k.drain(operation)
+	return k.drain(ctx)
 }
 
 // Wakeup exposes an optional sender progress hint. Hosts still schedule Tick;
@@ -130,7 +130,9 @@ func (k *Keeper) drain(ctx context.Context) error {
 			for _, member := range k.active.Members {
 				visited[member.Name] = true
 			}
-			result, err := k.Sender.Poll(ctx)
+			operation, cancel := context.WithTimeout(ctx, k.OperationTimeout)
+			result, err := k.Sender.Poll(operation)
+			cancel()
 			if err != nil {
 				failures = append(failures, err)
 			} else if result != nil {
@@ -143,6 +145,9 @@ func (k *Keeper) drain(ctx context.Context) error {
 		}
 		reserved := map[common.Address]bool{}
 		for _, strategy := range k.Strategies {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(failures, err)...)
+			}
 			work := k.settlements[strategy.Config.Name]
 			if work == nil {
 				continue
@@ -177,8 +182,8 @@ func (k *Keeper) drain(ctx context.Context) error {
 		if len(candidates) == 0 {
 			return errors.Join(failures...)
 		}
-		plan, err := k.Planner.PrepareExecution(ctx, candidates)
-		if err != nil {
+		plan, err := k.prepareAndSubmit(ctx, candidates)
+		if plan == nil {
 			for _, strategy := range candidates {
 				k.observe(strategy.Config.Name, err)
 			}
@@ -194,26 +199,41 @@ func (k *Keeper) drain(ctx context.Context) error {
 				failures = append(failures, failure)
 			}
 		}
-		if err = validateExecutionComposition(plan, candidates); err != nil {
-			return errors.Join(append(failures, err)...)
+		for _, member := range plan.Members {
+			visited[member.Name] = true
 		}
-		to, data, err := plan.Transaction()
 		if err != nil {
 			return errors.Join(append(failures, err)...)
 		}
-		// Capture ownership before submission: a timeout can follow a successful send.
-		frozen := freezeExecution(plan)
-		k.active = &frozen
-		for _, member := range frozen.Members {
-			visited[member.Name] = true
-		}
-		if err = k.Sender.Submit(ctx, transaction.Request{To: to, Data: data}); err != nil {
-			if !k.Sender.Busy() {
-				k.active = nil
-			}
-			return errors.Join(append(failures, err)...)
-		}
 	}
+}
+
+// Keep preparation and submission under one deadline for the selected bytes.
+func (k *Keeper) prepareAndSubmit(ctx context.Context, candidates []Strategy) (*ExecutionPlan, error) {
+	operation, cancel := context.WithTimeout(ctx, k.OperationTimeout)
+	defer cancel()
+	if err := operation.Err(); err != nil {
+		return nil, err
+	}
+	plan, err := k.Planner.PrepareExecution(operation, candidates)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateExecutionComposition(plan, candidates); err != nil {
+		return &plan, err
+	}
+	to, data, err := plan.Transaction()
+	if err != nil {
+		return &plan, err
+	}
+	// Capture ownership before submission: a timeout can follow a successful send.
+	frozen := freezeExecution(plan)
+	k.active = &frozen
+	err = k.Sender.Submit(operation, transaction.Request{To: to, Data: data})
+	if err != nil && !k.Sender.Busy() {
+		k.active = nil
+	}
+	return &plan, err
 }
 
 func (k *Keeper) complete(result *transaction.Result) error {
@@ -252,6 +272,8 @@ func (k *Keeper) advance(ctx context.Context, work *settlement) error {
 	if !hasTask {
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, k.OperationTimeout)
+	defer cancel()
 	original := work.plan.Snapshot
 	original.Execution = work.execution.Clone()
 	snapshot, err := k.Planner.ConfirmedSnapshot(ctx, original)

@@ -25,12 +25,10 @@ func main() {
 func root() *cobra.Command {
 	cmd := &cobra.Command{Use: "merkle-executor", Short: "Execute committed Merkle recipes", SilenceUsage: true, SilenceErrors: true}
 	var runPath string
-	var once bool
 	run := &cobra.Command{Use: "run", Short: "Run configured strategies", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return runBot(cmd.Context(), runPath, once)
+		return runBot(cmd.Context(), runPath)
 	}}
 	run.Flags().StringVar(&runPath, "config", "", "YAML configuration path")
-	run.Flags().BoolVar(&once, "once", false, "process one iteration")
 	_ = run.MarkFlagRequired("config")
 	var planPath string
 	plan := &cobra.Command{Use: "plan", Short: "Discover, assemble and simulate without signing or submitting", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {

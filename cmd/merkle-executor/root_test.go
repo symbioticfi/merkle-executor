@@ -57,7 +57,7 @@ func executeCLI(t *testing.T, args ...string) (string, error) {
 
 func TestRootCommandsAndRequiredFlags(t *testing.T) {
 	for name, flags := range map[string][]string{
-		"run": {"config", "once"}, "plan": {"config"}, "check-config": {"config"},
+		"run": {"config"}, "plan": {"config"}, "check-config": {"config"},
 		"version": {},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -82,6 +82,12 @@ func TestRootCommandsAndRequiredFlags(t *testing.T) {
 	}
 	if output, err := executeCLI(t, "version"); err != nil || !strings.Contains(output, "(") {
 		t.Fatalf("version output %q: %v", output, err)
+	}
+}
+
+func TestRunRejectsRemovedOnceFlag(t *testing.T) {
+	if _, err := executeCLI(t, "run", "--once", "--config", "unused.yaml"); err == nil || !strings.Contains(err.Error(), "unknown flag: --once") {
+		t.Fatalf("removed flag was accepted: %v", err)
 	}
 }
 

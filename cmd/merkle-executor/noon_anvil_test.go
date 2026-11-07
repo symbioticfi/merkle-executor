@@ -340,7 +340,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := runBot(ctx, path, true); !recipes.BatchRejected(err) {
+			if err := serviceKeeper(t, ctx, path, nil).Tick(ctx); !recipes.BatchRejected(err) {
 				t.Fatalf("send admission accepted failing issuer recipe: %v", err)
 			}
 			if afterNonce, err := client.NonceAt(ctx, caller, nil); err != nil || afterNonce != beforeNonce {
@@ -378,9 +378,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	path = writeCLIConfig(t, t.TempDir(), cfg)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
-	if err = runBot(ctx, path, true); err != nil {
-		t.Fatal(err)
-	}
+	runService(t, ctx, path, "ok", 1)
 
 	if read(usn, tokenArtifact, "balanceOf", account).Sign() != 0 || read(usn, tokenArtifact, "totalSupply").Sign() != 0 || read(usn, tokenArtifact, "allowance", account, handler).Sign() != 0 {
 		t.Fatal("USN burn or exact-allowance cleanup failed")
@@ -394,7 +392,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	}
 	// A fresh process re-prepares: the committed positive output floor rejects
 	// another execution after the first transaction exhausted its input balance.
-	if err = runBot(ctx, path, true); !recipes.BatchRejected(err) {
+	if err = serviceKeeper(t, ctx, path, nil).Tick(ctx); !recipes.BatchRejected(err) {
 		t.Fatal("exhausted redemption bypassed its output floor", err)
 	}
 	if after, e := client.NonceAt(ctx, caller, nil); e != nil || after != nonce {

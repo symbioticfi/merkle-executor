@@ -22,3 +22,19 @@ Retain signed ownership after an RPC attempt; a fresh pre-sign funding check rej
 - [x] Run SDK/daemon `make check` and `make integration` with Anvil 1.9.0; independent source review found no production blockers. The real host bridge funding/retry regression also passes ten race-enabled Anvil runs.
 
 Publish the SDK through existing PR #39; the host plan tracks its final pin, repository-wide gates and PR #277 update. No auto cancellation or additional runtime state.
+
+## Settlement timeout isolation
+
+- [x] Reproduce a slow external settlement starving both an existing settlement
+  and a new execution on healthy accounts. Give sender polls and each settlement
+  separate operation deadlines; preparation and submission retain one shared
+  deadline for their selected bytes. Parent cancellation and visitation limits
+  remain in force, with no SDK workers or additional configuration.
+- [x] Remove the daemon's one-shot CLI option and migrate lifecycle tests to
+  explicit cancellation; complete both modules' checks and local Anvil suites.
+
+Validation: `make check` and `make integration` passed with Go 1.27.3 and local
+Anvil 1.9.0. Regression tests cover later settlements, new healthy executions,
+poll timeouts, retained signed ownership, and parent cancellation. The daemon
+rejects the removed flag, while lifecycle fixtures stop from completion metrics.
+The host plan tracks the published SDK commit and PR #277 pin.

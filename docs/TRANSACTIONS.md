@@ -30,9 +30,9 @@ Canonical success creates optional external settlement tasks. A canonical revert
 halts every selected executor for this process; an atomic batch is never partially
 resent. There is no acknowledgement handshake or second receipt journal.
 
-The daemon polls explicitly. `run --once` keeps driving admitted transaction and
-external work until it settles or its context ends. Cancellation can leave live
-work outside the process. No background drain, disk checkpoint or recovery occurs.
+The daemon polls explicitly and continues running until its context ends.
+Cancellation can leave live work outside the process. No background drain, disk
+checkpoint or recovery occurs.
 
 Restart loses hashes, order identities and reservations. An old transaction can
 still mine, and an authorized external order can still fill. Fresh nonce reads
