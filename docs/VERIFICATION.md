@@ -76,7 +76,7 @@ of the removed strategy `account`/`tree` fields. Local fixtures cover pinned sta
 account discovery, distinct target/account association, deduplication/chunking,
 canonical closure, atomic failure and recovery fingerprint rejection without saved
 state changes. SDK fixtures reject source errors, empty/mismatched trees and invalid
-unused leaves before providers run, preserve cancellation and legacy local trees,
+unused leaves before providers run, preserve cancellation and local permission trees,
 and reject metadata/reorg changes while permission acquisition is in flight.
 
 The real local Anvil service plans and sends using backend-shaped HTTP permissions

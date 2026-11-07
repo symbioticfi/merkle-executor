@@ -47,8 +47,8 @@ func (r *cowBatchReader) BatchRead(ctx context.Context, req []protocolio.ReadReq
 func TestAdvanceBatchesButPreservesTerminalPrecedence(t *testing.T) {
 	for _, mode := range []string{"filled", "expired", "partial", "invalidated", "domain", "local identity"} {
 		t.Run(mode, func(t *testing.T) {
-			r := &cowBatchReader{t: t, filled: big.NewInt(990)}
-			p, err := fixtureFactory(node(t, negativeConfig("http://127.0.0.1:1")), registry.Deps{Chain: r})
+			r := &cowBatchReader{t: t, filled: big.NewInt(1000)}
+			p, err := fixtureProvider(negativeConfig("http://127.0.0.1:1"), registry.Deps{Chain: r})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -69,6 +69,9 @@ func TestAdvanceBatchesButPreservesTerminalPrecedence(t *testing.T) {
 			}
 			r.badDomain = mode == "domain"
 			o := sampleOrder()
+			o.SellAmount = "1000"
+			full, hash := appData(defaultSlippageBPS)
+			o.AppData = hash.Hex()
 			buf, _ := EncodeOrder(o)
 			domain := protocolio.Domain("Gnosis Protocol", "v2", s.ChainID, addr(4))
 			digest := protocolio.Digest(domain, crypto.Keccak256Hash(buf))
@@ -76,7 +79,7 @@ func TestAdvanceBatchesButPreservesTerminalPrecedence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			d := prepared{Version: 1, ChainID: "1", Account: s.Account, PreparedBlock: "12", Order: o, Digest: digest, UID: UID(digest, s.Account, uint32(o.ValidTo))}
+			d := prepared{Version: 1, FullAppData: full, SlippageBPS: defaultSlippageBPS, ChainID: "1", Account: s.Account, PreparedBlock: "12", Order: o, Digest: digest, UID: UID(digest, s.Account, uint32(o.ValidTo))}
 			if mode == "local identity" {
 				d.UID = "wrong"
 			}

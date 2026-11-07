@@ -3,8 +3,6 @@ package securitize
 import (
 	"bytes"
 	"io"
-	"os"
-	"path/filepath"
 
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
@@ -35,20 +33,6 @@ type Route struct {
 	Target        string `yaml:"target"`
 	PaymentToken  string `yaml:"paymentToken"`
 	PaymentSymbol string `yaml:"paymentSymbol"`
-}
-
-// LoadCatalog reads a local YAML snapshot. No network response can change targets.
-func LoadCatalog(path string) (Catalog, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return Catalog{}, errors.Errorf("open Securitize catalog: %w", err)
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
-	if err != nil || len(raw) > 1<<20 {
-		return Catalog{}, errors.New("Securitize catalog unreadable or larger than 1 MiB")
-	}
-	return decodeCatalog(raw)
 }
 
 func decodeCatalog(raw []byte) (Catalog, error) {
@@ -99,46 +83,4 @@ func decodeCatalog(raw []byte) (Catalog, error) {
 		}
 	}
 	return c, nil
-}
-
-func (p *Provider) validateCatalog() error {
-	if p.cfg.Catalog == "" && p.cfg.Symbol == "" {
-		return nil
-	}
-	if p.cfg.Catalog == "" || p.cfg.Symbol == "" {
-		return errors.New("Securitize catalog and symbol must be configured together")
-	}
-	path := p.cfg.Catalog
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(p.deps.ConfigDir, path)
-	}
-	c, err := LoadCatalog(path)
-	if err != nil {
-		return err
-	}
-	for _, a := range c.Assets {
-		if a.Symbol != p.cfg.Symbol || a.ChainID != p.cfg.ChainID {
-			continue
-		}
-		token, _ := parse.Address(a.Token)
-		if token != p.token || a.Unavailable != "" {
-			return errors.New("Securitize catalog token mismatch or unavailable issuer route")
-		}
-		p.decimals = &a.Decimals
-		if p.cfg.Mode == "wallet" {
-			wallet, err := parse.Address(a.RedemptionWallet)
-			if err == nil && wallet == p.target {
-				return nil
-			}
-		}
-		for _, r := range a.Offramps {
-			target, _ := parse.Address(r.Target)
-			payment, _ := parse.Address(r.PaymentToken)
-			if r.Mode == p.cfg.Mode && target == p.target && payment == p.payment {
-				return nil
-			}
-		}
-		return errors.New("Securitize route does not match pinned catalog")
-	}
-	return errors.New("Securitize symbol and chain not found in catalog")
 }

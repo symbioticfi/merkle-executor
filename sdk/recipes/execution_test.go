@@ -298,7 +298,7 @@ func TestPrepareExecutionChecksIdentityBeforeBuild(t *testing.T) {
 		})
 	}
 }
-func TestPrepareExecutionLegacyAndBatchReturnSameBuild(t *testing.T) {
+func TestPrepareExecutionSingleAndBatchReturnSameBuild(t *testing.T) {
 	var snapshots []Snapshot
 	for _, batched := range []bool{false, true} {
 		r := newExecutionReader(t)

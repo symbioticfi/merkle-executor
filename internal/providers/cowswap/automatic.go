@@ -213,7 +213,7 @@ func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provid
 	if err != nil {
 		return provider.Progress{}, err
 	}
-	if cfg.Settlement != settlement.Hex() || !reflect.DeepEqual(cfg.HTTP, http) || cfg.ValiditySeconds != DefaultValiditySeconds || cfg.AppData != "" || cfg.SlippageBPS != 0 {
+	if cfg.Settlement != settlement.Hex() || !reflect.DeepEqual(cfg.HTTP, http) || cfg.ValiditySeconds != DefaultValiditySeconds {
 		return provider.Progress{}, errors.New("persisted CoW automatic constants differ")
 	}
 	runtime, err := New(cfg, p.deps)

@@ -32,7 +32,7 @@ func (r stagedBatchReader) BatchRead(ctx context.Context, qs []protocolio.ReadRe
 func TestMerklStagedPreparationPreservesAPIEligibilityAndLazyErrors(t *testing.T) {
 	for _, batched := range []bool{false, true} {
 		for _, mode := range []string{"valid", "absent", "absent skip", "member error", "malformed", "wrong count", "getter failure", "pin mismatch", "cancel"} {
-			t.Run(mode+map[bool]string{false: "/legacy", true: "/batch"}[batched], func(t *testing.T) {
+			t.Run(mode+map[bool]string{false: "/single", true: "/batch"}[batched], func(t *testing.T) {
 				apiCalls, chainCalls := 0, 0
 				root := common.HexToHash("0xd98400418a73f31e4b681498ddc089b9c9b92f409942f76789590c1cae24f0ab")
 				reward := wire.MerklReward{Token: wire.MerklToken{Address: addr(1).Hex(), Decimals: 6}, Amount: "100", Claimed: "70", Pending: "0", Proofs: []string{common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111").Hex()}}
@@ -76,12 +76,12 @@ func TestMerklStagedPreparationPreservesAPIEligibilityAndLazyErrors(t *testing.T
 					}
 					return multicall.NewMulticall3().GetABI().Methods["aggregate3"].Outputs.Pack(values)
 				})
-				p, err := Factory(node(t, Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: 452, AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: mode == "absent skip", DedicatedClaimGroup: mode == "absent skip"}), registry.Deps{Chain: chain, HTTP: srv.Client()})
+				p, err := New(Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: 452, AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: mode == "absent skip", DedicatedClaimGroup: mode == "absent skip"}, registry.Deps{Chain: chain, HTTP: srv.Client()})
 				if err != nil {
 					t.Fatal(err)
 				}
 				pin := protocolio.PreparationPin{ChainID: "1", BlockNumber: 12, BlockHash: common.HexToHash("0x12"), Timestamp: 144, Executor: addr(6), Account: addr(3), Caller: addr(7)}
-				plan, err := p.(protocolio.StagedProvider).PlanPreparation(pin)
+				plan, err := p.PlanPreparation(pin)
 				if err != nil || chainCalls != 0 || apiCalls != 0 || len(plan.Requests) != 1 || plan.Requests[0].MulticallSafe {
 					t.Fatalf("planning performed I/O/nested aggregate: %v", err)
 				}
@@ -129,7 +129,7 @@ func TestMerklStagedPreparationPreservesAPIEligibilityAndLazyErrors(t *testing.T
 					t.Fatal("invalid identity/cancellation reached API")
 				}
 				if !batched && (mode == "absent" || mode == "absent skip" || mode == "pin mismatch" || mode == "cancel") && chainCalls != 0 {
-					t.Fatal("legacy unused staged read executed")
+					t.Fatal("single unused staged read executed")
 				}
 				if chainCalls > 1 && mode != "valid" {
 					t.Fatal("staged result retried")

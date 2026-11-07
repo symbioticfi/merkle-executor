@@ -99,7 +99,5 @@ at most 10 API pages per tick, with at most 100 orders per page. Cursor, seen or
 IDs/cursors and a possible quote match survive restart, preserving duplicate checks
 across tick boundaries. Only a complete scan permits publication. A completed
 lookup is discarded; an ambiguous POST response starts a fresh lookup next tick.
-The fixed automatic bounds cannot be changed through daemon YAML. No saved order
-identity or journal migration is performed. Existing progress without lookup state
-remains valid. Drain active jobs before downgrading to a binary that cannot read
-the new lookup checkpoint.
+The fixed automatic bounds cannot be changed through daemon YAML. Recovery
+validates the version `1` checkpoint and preserves its saved order identity.

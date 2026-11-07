@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
-	"gopkg.in/yaml.v3"
 
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
@@ -30,6 +29,7 @@ type Config struct {
 	SecondAction       string `yaml:"secondAction"`
 	CDO                string `yaml:"cdo"`
 	Strategy           string `yaml:"strategy"`
+	Tranche            string `yaml:"tranche"`
 	Epoch              string `yaml:"epoch"`
 	RequestID          string `yaml:"requestId"`
 	AmountInput        *uint  `yaml:"amountInput"`
@@ -46,18 +46,6 @@ type Provider struct {
 	amount, epoch, requestID, intermediate *big.Int
 }
 
-func Register(registry *providerRegistry.Registry) error {
-	return registry.Register("redemptions", Factory)
-}
-
-func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
-	var cfg Config
-	if err := parse.DecodeStrict(raw, &cfg); err != nil {
-		return nil, err
-	}
-	return New(cfg, deps)
-}
-
 // New consumes authenticated recipe values or explicit local fixture policy.
 func New(cfg Config, deps providerRegistry.Deps) (*Provider, error) {
 	if cfg.ChainID == 0 || deps.Chain == nil {
@@ -65,7 +53,7 @@ func New(cfg Config, deps providerRegistry.Deps) (*Provider, error) {
 	}
 	allowed := map[string][]string{
 		"midas": {"request"}, "centrifuge": {"request", "claim"},
-		"openeden": {"request"}, "figure": {"request"}, "noon": {"request", "claim", "redeem-usn"},
+		"openeden": {"request"}, "figure": {"request"}, "hastra": {"unwrap", "request"}, "noon": {"request", "claim", "redeem-usn"},
 		"pareto": {"queue-request", "direct-request", "queue-claim", "direct-claim", "instant-claim"},
 	}
 	valid := false
@@ -92,12 +80,18 @@ func New(cfg Config, deps providerRegistry.Deps) (*Provider, error) {
 	if p.token == p.asset {
 		return nil, errors.New("redemption token and output asset must differ")
 	}
+	if cfg.Family == "hastra" && p.token != p.target {
+		return nil, errors.New("Hastra action must target its share token")
+	}
 	if cfg.Family == "noon" && cfg.Mode == "redeem-usn" {
 		if cfg.ChainID != 1 || p.token != noonUSN || p.asset != noonUSDC || p.target != noonRedeemer {
 			return nil, errors.New("native Noon redemption requires the reviewed Ethereum USN, USDC and RedeemHandlerV2 deployment")
 		}
 	}
 	if cfg.Family == "pareto" {
+		if cfg.Tranche != "" && (cfg.Tranche != "bb" || cfg.Mode != "direct-request") {
+			return nil, errors.New("BB tranche applies only to direct Pareto requests")
+		}
 		var err error
 		if p.cdo, err = parse.Address(cfg.CDO); err != nil {
 			return nil, err
@@ -105,7 +99,7 @@ func New(cfg Config, deps providerRegistry.Deps) (*Provider, error) {
 		if p.strategy, err = parse.Address(cfg.Strategy); err != nil {
 			return nil, err
 		}
-	} else if cfg.CDO != "" || cfg.Strategy != "" {
+	} else if cfg.CDO != "" || cfg.Strategy != "" || cfg.Tranche != "" {
 		return nil, errors.New("cdo and strategy apply only to Pareto")
 	}
 	if cfg.Family == "figure" {
@@ -195,6 +189,8 @@ func (p *Provider) Prepare(ctx context.Context, snapshot provider.Snapshot) (pro
 		amount, err = p.openeden(ctx, snapshot, &out)
 	case "figure":
 		amount, intermediate, err = p.figure(ctx, snapshot, &out)
+	case "hastra":
+		amount, err = p.hastra(ctx, snapshot, &out)
 	case "pareto":
 		amount, err = p.pareto(ctx, snapshot, &out)
 	case "noon":
@@ -256,7 +252,7 @@ func (p *Provider) Advance(ctx context.Context, snapshot provider.Snapshot, outp
 	outcome := "requested"
 	if strings.HasSuffix(p.cfg.Mode, "claim") {
 		outcome = "claimed"
-	} else if p.cfg.Mode == "redeem-usn" {
+	} else if p.cfg.Mode == "redeem-usn" || p.cfg.Mode == "unwrap" {
 		outcome = "redeemed"
 	}
 	return provider.Progress{Done: true, Outcome: outcome, Reference: snapshot.Execution.TxHash.Hex()}, nil

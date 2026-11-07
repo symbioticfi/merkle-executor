@@ -50,7 +50,7 @@ type BatchReader interface {
 }
 
 // ReadResults is scoped to one sequential read stage, not a cross-block cache.
-// At lazily reads legacy backends, preserving early-return behavior and existing
+// At lazily reads single-call backends, preserving early-return behavior and existing
 // interfaces. Real batches execute once and defer only consumption of member errors.
 // It is intended for use by one goroutine.
 type ReadResults struct {

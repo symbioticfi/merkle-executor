@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 
@@ -59,10 +60,17 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 		return plan, errors.New("permission source requires valid chain ID")
 	}
 	var preparation *protocolio.Preparation
+	var returned []byte
 	options := recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache, Stage: func(pin protocolio.PreparationPin) []protocolio.ReadRequest {
 		preparation = protocolio.PlanPreparation(strategy.Providers, pin)
 		return preparation.Requests()
-	}, VerifySimulation: func(raw []byte) error { return recipes.VerifyResults(plan.Calldata, raw, plan.Results) }}
+	}, VerifySimulation: func(raw []byte) error {
+		if err := recipes.VerifyResults(plan.Calldata, raw, plan.Results); err != nil {
+			return err
+		}
+		returned = bytes.Clone(raw)
+		return nil
+	}}
 	err := recipes.PrepareExecutionWithOptions(ctx, p.Chain, common.HexToAddress(strategy.Config.Executor), common.HexToAddress(strategy.Config.Account), p.Caller, options, func(snap recipes.Snapshot, recipe recipes.Recipe, staged protocolio.ReadAccessor) ([]byte, []common.Hash, error) {
 		if strategy.Config.RecipeHash != "" && snap.RecipeHash != common.HexToHash(strategy.Config.RecipeHash) {
 			return nil, nil, errors.New("configured recipe hash mismatch")
@@ -201,7 +209,18 @@ func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) 
 		}
 		return plan.Calldata, plan.Leaves, nil
 	})
-	return plan, err
+	if err != nil {
+		return plan, err
+	}
+	// Readiness follows full simulation and both canonical closing guards.
+	work, err := recipes.HasWork(plan.Calldata, returned)
+	if err != nil {
+		return plan, err
+	}
+	if !work {
+		return plan, provider.ErrNotReady
+	}
+	return plan, nil
 }
 
 func (p *Planner) permissionTree(ctx context.Context, path string, snapshot recipes.Snapshot) (*recipes.Tree, error) {
@@ -250,7 +269,14 @@ func (p *Planner) Validate(ctx context.Context, plan Plan) error {
 	if plan.Snapshot.Executor != plan.Recipe.Executor {
 		return errors.New("prepared plan executor mismatch")
 	}
-	return recipes.ValidateExecutionWithResults(ctx, p.Chain, plan.Recipe, p.Caller, plan.Calldata, plan.Results)
+	work, err := recipes.ExecutionHasWork(ctx, p.Chain, plan.Recipe, p.Caller, plan.Calldata, plan.Results)
+	if err != nil {
+		return err
+	}
+	if !work {
+		return provider.ErrNotReady
+	}
+	return nil
 }
 
 func (p *Planner) ConfirmedSnapshot(ctx context.Context, original provider.Snapshot) (provider.Snapshot, error) {

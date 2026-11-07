@@ -88,25 +88,15 @@ func (r *issuerReader) reply(target common.Address, contract abi.ABI, method str
 
 func issuerAddress(n int64) common.Address { return common.BigToAddress(big.NewInt(n)) }
 
-func issuerNode(t *testing.T, value any) yaml.Node {
-	t.Helper()
-	data, err := yaml.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var raw yaml.Node
-	if err = yaml.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	return raw
-}
-
 func issuerConfig(family string) Config {
 	input := uint(3)
 	cfg := Config{Family: family, Mode: "request", ChainID: 1, Token: issuerAddress(1).Hex(), OutputAsset: issuerAddress(2).Hex(), Target: issuerAddress(3).Hex(), Amount: "100", Action: "2:0", AmountInput: &input}
 	if family == "figure" {
 		intermediate := uint(4)
 		cfg.SecondAction, cfg.IntermediateInput = "2:1", &intermediate
+	}
+	if family == "hastra" {
+		cfg.Token = cfg.Target
 	}
 	if family == "pareto" {
 		cfg.Mode, cfg.CDO, cfg.Strategy = "queue-request", issuerAddress(4).Hex(), issuerAddress(5).Hex()
@@ -149,6 +139,10 @@ func issuerFixture(t *testing.T, cfg Config) (provider.Snapshot, *issuerReader) 
 		r.reply(target, a, "asset", nil, asset)
 		r.reply(target, a, "pendingRedemptions", []any{s.Account}, big.NewInt(0), big.NewInt(0), big.NewInt(0))
 		r.reply(token, v, "previewRedeem", []any{amount}, big.NewInt(125))
+	case "hastra":
+		a := figure.NewFigureYieldVault().GetABI()
+		r.reply(target, a, "asset", nil, asset)
+		r.reply(target, a, "pendingRedemptions", []any{s.Account}, big.NewInt(0), big.NewInt(0), big.NewInt(0))
 	case "noon":
 		r.reply(token, erc4626.NewERC4626().GetABI(), "asset", nil, asset)
 		h := noonwithdrawalhandler.NewNoonWithdrawalHandler().GetABI()
@@ -162,7 +156,11 @@ func issuerFixture(t *testing.T, cfg Config) (provider.Snapshot, *issuerReader) 
 		r.reply(target, q, "underlying", nil, asset)
 		r.reply(target, q, "idleCDOEpoch", nil, cdo)
 		r.reply(target, q, "strategy", nil, strategy)
-		r.reply(cdo, c, "AATranche", nil, token)
+		tranche := "AATranche"
+		if cfg.Tranche == "bb" {
+			tranche = "BBTranche"
+		}
+		r.reply(cdo, c, tranche, nil, token)
 		r.reply(cdo, c, "token", nil, asset)
 		r.reply(cdo, c, "strategy", nil, strategy)
 		r.reply(strategy, st, "idleCDO", nil, cdo)
@@ -190,7 +188,7 @@ func issuerFixture(t *testing.T, cfg Config) (provider.Snapshot, *issuerReader) 
 
 func issuerProvider(t *testing.T, cfg Config, r provider.Reader) provider.Provider {
 	t.Helper()
-	p, err := Factory(issuerNode(t, cfg), providerRegistry.Deps{Chain: r})
+	p, err := New(cfg, providerRegistry.Deps{Chain: r})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +217,7 @@ func assertIssuerAction(t *testing.T, data []byte, contract abi.ABI, method stri
 }
 
 func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRoute(t *testing.T) {
-	data, err := os.ReadFile("../../../config/assets/liquid-lane.yaml")
+	data, err := os.ReadFile("catalogue/liquid-lane.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,15 +232,15 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	wanted := strings.Fields("mF-ONE mROX mHYPER CarryTradeUSDTRYLeverage StockMarketTRBasisTrade mM1-USD JAAA JTRSY HYB deJAAA deJTRSY HYBOND PRIME mGLOBAL AA_FalconXUSDC sUSN USN")
-	if len(catalogue.Assets) != len(wanted) {
-		t.Fatalf("catalogue asset coverage: got %d, expected %d", len(catalogue.Assets), len(wanted))
-	}
 	seen := map[string]bool{}
+	routes := map[string]bool{}
 	for _, entry := range catalogue.Assets {
 		t.Run(entry.Symbol, func(t *testing.T) {
-			if seen[entry.Symbol] {
-				t.Fatal("duplicate catalogue asset")
+			key := entry.Family + entry.Token + entry.OutputAsset + entry.Target
+			if routes[key] {
+				t.Fatal("duplicate catalogue route")
 			}
+			routes[key] = true
 			seen[entry.Symbol] = true
 			if entry.Symbol == "USN" {
 				cfg, s, r := nativeNoonFixture(t)
@@ -257,8 +255,9 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRoute(t *testing.T) {
 				return
 			}
 			cfg := issuerConfig(entry.Family)
+			cfg.Mode = entry.RequestModes[0]
 			cfg.ChainID, cfg.Token, cfg.OutputAsset, cfg.Target = entry.ChainID, entry.Token, entry.OutputAsset, entry.Target
-			cfg.CDO, cfg.Strategy = entry.CDO, entry.Strategy
+			cfg.CDO, cfg.Strategy, cfg.Tranche = entry.CDO, entry.Strategy, entry.Tranche
 			s, r := issuerFixture(t, cfg)
 			before, _ := json.Marshal(s)
 			p := issuerProvider(t, cfg, r)
@@ -283,10 +282,20 @@ func TestEveryLiquidLaneCatalogueAssetPreparesDirectIssuerRoute(t *testing.T) {
 				if out.Inputs[4] != "125" || len(out.Actions) != 2 {
 					t.Fatalf("wrong Figure second action: %+v", out)
 				}
+			case "hastra":
+				if cfg.Mode == "unwrap" {
+					assertIssuerAction(t, a, erc4626.NewERC4626().GetABI(), "redeem", big.NewInt(100), s.Account, s.Account)
+				} else {
+					assertIssuerAction(t, a, figure.NewFigureYieldVault().GetABI(), "requestRedeem", big.NewInt(100))
+				}
 			case "noon":
 				assertIssuerAction(t, a, erc4626.NewERC4626().GetABI(), "redeem", big.NewInt(100), common.HexToAddress(cfg.Target), s.Account)
 			case "pareto":
-				assertIssuerAction(t, a, paretoqueue.NewParetoQueue().GetABI(), "requestWithdraw", big.NewInt(100))
+				if cfg.Mode == "direct-request" {
+					assertIssuerAction(t, a, paretocdo.NewParetoCDO().GetABI(), "requestWithdraw", big.NewInt(100), common.HexToAddress(cfg.Token))
+				} else {
+					assertIssuerAction(t, a, paretoqueue.NewParetoQueue().GetABI(), "requestWithdraw", big.NewInt(100))
+				}
 			}
 			after, _ := json.Marshal(s)
 			if !bytes.Equal(before, after) || r.reads == 0 {
@@ -555,7 +564,7 @@ func TestParetoValidatesEveryConfiguredTopologyEdge(t *testing.T) {
 	}
 }
 
-func TestRedemptionFactoryRejectsInvalidConfiguration(t *testing.T) {
+func TestRedemptionConstructorRejectsInvalidConfiguration(t *testing.T) {
 	cases := map[string]func(*Config){
 		"family":                func(c *Config) { c.Family = "unknown" },
 		"mode":                  func(c *Config) { c.Mode = "claim" },
@@ -586,33 +595,22 @@ func TestRedemptionFactoryRejectsInvalidConfiguration(t *testing.T) {
 			cfg := issuerConfig("midas")
 			change(&cfg)
 			_, r := issuerFixture(t, issuerConfig("midas"))
-			if _, err := Factory(issuerNode(t, cfg), providerRegistry.Deps{Chain: r}); err == nil {
+			if _, err := New(cfg, providerRegistry.Deps{Chain: r}); err == nil {
 				t.Fatal("invalid configuration accepted")
 			}
 		})
 	}
-	_, r := issuerFixture(t, issuerConfig("midas"))
-	if _, err := Factory(issuerNode(t, issuerConfig("midas")), providerRegistry.Deps{}); err == nil {
+	if _, err := New(issuerConfig("midas"), providerRegistry.Deps{}); err == nil {
 		t.Fatal("missing chain reader accepted")
-	}
-	if _, err := Factory(issuerNode(t, map[string]any{"unexpected": true}), providerRegistry.Deps{Chain: r}); err == nil {
-		t.Fatal("unknown configuration field accepted")
 	}
 }
 
-func TestRegistryAndFullWidthRequestAmount(t *testing.T) {
+func TestFullWidthRequestAmount(t *testing.T) {
 	cfg := issuerConfig("midas")
 	amount := new(big.Int).Lsh(big.NewInt(1), 255)
 	cfg.Amount = amount.String()
 	s, r := issuerFixture(t, cfg)
-	registry := providerRegistry.NewRegistry()
-	if err := Register(registry); err != nil {
-		t.Fatal(err)
-	}
-	if err := Register(registry); err == nil {
-		t.Fatal("duplicate provider registration accepted")
-	}
-	p, err := registry.New("redemptions", issuerNode(t, cfg), providerRegistry.Deps{Chain: r})
+	p, err := New(cfg, providerRegistry.Deps{Chain: r})
 	if err != nil {
 		t.Fatal(err)
 	}

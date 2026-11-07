@@ -13,20 +13,11 @@ import (
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"gopkg.in/yaml.v3"
 )
 
-func compositionProvider(t *testing.T, factory registry.Factory, cfg any) provider.Provider {
+func compositionProvider[C any, P provider.Provider](t *testing.T, constructor func(C, registry.Deps) (P, error), cfg C) P {
 	t.Helper()
-	raw, err := yaml.Marshal(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var node yaml.Node
-	if err = yaml.Unmarshal(raw, &node); err != nil {
-		t.Fatal(err)
-	}
-	p, err := factory(node, registry.Deps{Chain: unusedReader{}})
+	p, err := constructor(cfg, registry.Deps{Chain: unusedReader{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +73,7 @@ func TestIssuerCompositionUsesRealRouteDeclarations(t *testing.T) {
 					cfg.Amount = ""
 				}
 			}
-			pr := compositionProvider(t, redemptions.Factory, cfg)
+			pr := compositionProvider(t, redemptions.New, cfg)
 			if err := keeper.ValidateComposition(testExecute(t, tc.targets...), []provider.Provider{pr}); err != nil {
 				t.Fatal(err)
 			}
@@ -105,7 +96,7 @@ func TestSecuritizeRejectsRepeatedStaticAndMixedRoutes(t *testing.T) {
 				cfg.PaymentToken = payment.Hex()
 				cfg.MinOutput = "90"
 			}
-			first := compositionProvider(t, securitize.Factory, cfg)
+			first := compositionProvider(t, securitize.New, cfg)
 			if err := keeper.ValidateComposition(testExecute(t, target, payment), []provider.Provider{first}); err != nil {
 				t.Fatalf("unrelated later payment movement: %v", err)
 			}
@@ -113,11 +104,11 @@ func TestSecuritizeRejectsRepeatedStaticAndMixedRoutes(t *testing.T) {
 				t.Fatal("static repeated route accepted")
 			}
 			cfg.Action = "1:0"
-			second := compositionProvider(t, securitize.Factory, cfg)
+			second := compositionProvider(t, securitize.New, cfg)
 			if err := keeper.ValidateComposition(testExecute(t, target, target), []provider.Provider{first, second}); err == nil {
 				t.Fatal("repeated configured route accepted")
 			}
-			mixed := compositionProvider(t, redemptions.Factory, redemptions.Config{Family: "midas", Mode: "request", ChainID: 1, Token: token.Hex(), OutputAsset: payment.Hex(), Target: target.Hex(), Amount: "100", Action: "1:0"})
+			mixed := compositionProvider(t, redemptions.New, redemptions.Config{Family: "midas", Mode: "request", ChainID: 1, Token: token.Hex(), OutputAsset: payment.Hex(), Target: target.Hex(), Amount: "100", Action: "1:0"})
 			if err := keeper.ValidateComposition(testExecute(t, target, target), []provider.Provider{first, mixed}); err == nil {
 				t.Fatal("mixed provider route accepted")
 			}

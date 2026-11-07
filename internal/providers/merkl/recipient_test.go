@@ -114,7 +114,7 @@ func TestDefaultRecipientReadOncePerPinnedPreparation(t *testing.T) {
 				calls++
 				return batch(ctx, m, b)
 			})
-			p, err := Factory(node(t, cfg), providerRegistry.Deps{Chain: outer, HTTP: srv.Client()})
+			p, err := New(cfg, providerRegistry.Deps{Chain: outer, HTTP: srv.Client()})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -100,7 +100,7 @@ func TestAnvilMerklMulticallUsesPinnedDistributorState(t *testing.T) {
 		return client.CallContract(received, msg, block)
 	})
 	cfg := merkl.Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: distributor.Hex(), Multicall3: aggregate.Hex(), Tokens: []string{token.Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: 452, MinClaimable: "10", AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: true, DedicatedClaimGroup: true}
-	p, err := merkl.Factory(serviceNode(t, cfg), providerRegistry.Deps{Chain: reader, HTTP: srv.Client()})
+	p, err := merkl.New(cfg, providerRegistry.Deps{Chain: reader, HTTP: srv.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}

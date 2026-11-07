@@ -23,6 +23,9 @@ import (
 func (p *automatic) validateKnownRoute(cfg Config) error {
 	matches := 0
 	for _, asset := range p.assets {
+		if asset.Tranche != cfg.Tranche {
+			continue
+		}
 		if asset.ChainID != cfg.ChainID || asset.Family != cfg.Family || common.HexToAddress(asset.Token) != common.HexToAddress(cfg.Token) || common.HexToAddress(asset.OutputAsset) != common.HexToAddress(cfg.OutputAsset) || common.HexToAddress(asset.Target) != common.HexToAddress(cfg.Target) || common.HexToAddress(asset.CDO) != common.HexToAddress(cfg.CDO) || common.HexToAddress(asset.Strategy) != common.HexToAddress(cfg.Strategy) {
 			continue
 		}
@@ -56,6 +59,12 @@ func (p *Provider) expectedActions(account common.Address) (map[string][]byte, e
 		}
 	case "openeden":
 		out[p.cfg.Action] = openeden.NewOpenEdenExpress().PackRequestRedeem(account, p.amount)
+	case "hastra":
+		if p.cfg.Mode == "unwrap" {
+			out[p.cfg.Action] = erc4626.NewERC4626().PackRedeem(p.amount, account, account)
+		} else {
+			out[p.cfg.Action] = figure.NewFigureYieldVault().PackRequestRedeem(p.amount)
+		}
 	case "figure":
 		if p.intermediate == nil {
 			return nil, errors.New("Figure derived intermediate amount missing")

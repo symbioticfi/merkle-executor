@@ -38,7 +38,7 @@ func (r *permissionReader) CallContract(ctx context.Context, m ethereum.CallMsg,
 			r.t.Fatal("wrong prepared simulation")
 		}
 		r.simulations++
-		return nil, nil
+		return r.returned, r.simulationErr
 	}
 	return r.validationReader.CallContract(ctx, m, b)
 }
@@ -53,16 +53,20 @@ func (*permissionProvider) Advance(context.Context, provider.Snapshot, provider.
 	return provider.Progress{Done: true}, nil
 }
 func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
-	for _, mode := range []string{"valid", "legacy", "source error", "empty", "missing chain", "null chain", "wrong chain", "root", "account", "invalid unused leaf", "invalid unused proof", "mutate chain", "root during HTTP", "reorg during HTTP"} {
+	for _, mode := range []string{"valid", "local tree", "source error", "empty", "missing chain", "null chain", "wrong chain", "root", "account", "invalid unused leaf", "invalid unused proof", "mutate chain", "root during HTTP", "reorg during HTTP"} {
 		t.Run(mode, func(t *testing.T) {
 			header := &types.Header{Number: big.NewInt(12)}
 			recipe := recipes.Recipe{}
 			hash, _ := recipes.HashRecipe(recipe)
 			snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: hash, RecipeBlock: 12, Root: common.HexToHash("0x04")}
 			abi := executor.NewRecipeExecutor()
+			returned, err := abi.GetABI().Methods["execute"].Outputs.Pack([]*big.Int{})
+			if err != nil {
+				t.Fatal(err)
+			}
 			event := abi.GetABI().Events["SetRecipe"]
 			data, _ := event.Inputs.NonIndexed().Pack(recipe.Queries, recipe.Steps)
-			r := &permissionReader{validationReader: &validationReader{t: t, snapshot: snapshot, header: header, payload: abi.PackExecute(nil, nil, nil, nil)}, log: types.Log{Address: snapshot.Executor, BlockNumber: 12, BlockHash: header.Hash(), Topics: []common.Hash{event.ID, hash}, Data: data}}
+			r := &permissionReader{validationReader: &validationReader{t: t, snapshot: snapshot, header: header, payload: abi.PackExecute(nil, nil, nil, nil), returned: returned}, log: types.Log{Address: snapshot.Executor, BlockNumber: 12, BlockHash: header.Hash(), Topics: []common.Hash{event.ID, hash}, Data: data}}
 			doc := map[string]any{"chainId": 1, "root": snapshot.Root.Hex(), "adapter": common.HexToAddress("0x999").Hex(), "leaves": []any{}}
 			switch mode {
 			case "missing chain":
@@ -109,7 +113,7 @@ func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 				return raw, nil
 			})}
 			strategy := Strategy{Config: Config{Account: snapshot.Account.Hex(), Executor: snapshot.Executor.Hex()}}
-			if mode == "legacy" {
+			if mode == "local tree" {
 				planner.PermissionSource = nil
 				delete(doc, "chainId")
 				raw, _ = json.Marshal(doc)
@@ -120,9 +124,9 @@ func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 			}
 			pr := &permissionProvider{}
 			strategy.Providers = []provider.Provider{pr}
-			_, err := planner.Prepare(t.Context(), strategy)
-			ok := mode == "valid" || mode == "legacy" || mode == "mutate chain"
-			if (err == nil) != ok {
+			_, err = planner.Prepare(t.Context(), strategy)
+			ok := mode == "valid" || mode == "local tree" || mode == "mutate chain"
+			if ok && !errors.Is(err, provider.ErrNotReady) || !ok && (err == nil || errors.Is(err, provider.ErrNotReady)) {
 				t.Fatalf("mode %s: %v", mode, err)
 			}
 			if planner.ChainID.Int64() != 1 {
@@ -134,7 +138,7 @@ func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 			if !ok && mode != "root during HTTP" && mode != "reorg during HTTP" && pr.calls != 0 {
 				t.Fatal("invalid tree reached provider")
 			}
-			if mode != "legacy" && calls != 1 {
+			if mode != "local tree" && calls != 1 {
 				t.Fatal("source unexpectedly retried")
 			}
 		})
@@ -159,7 +163,8 @@ func TestPlannerPermissionSourceRequiresValidChainBeforeReads(t *testing.T) {
 func TestPlannerValidationDoesNotFetchPermissions(t *testing.T) {
 	header := &types.Header{Number: big.NewInt(12)}
 	snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: common.HexToHash("0x04"), Root: common.HexToHash("0x05"), RecipeBlock: 11}
-	r := &validationReader{t: t, snapshot: snapshot, header: header, payload: []byte{1, 2, 3, 4}}
+	payload, returned := validationWork(t, true)
+	r := &validationReader{t: t, snapshot: snapshot, header: header, payload: payload, returned: returned}
 	planner := Planner{Chain: r, Caller: snapshot.Caller, PermissionSource: permissionSourceFunc(func(context.Context, *big.Int, recipes.Snapshot) ([]byte, error) {
 		t.Fatal("validation contacted unavailable permission source")
 		return nil, errors.New("source unavailable")

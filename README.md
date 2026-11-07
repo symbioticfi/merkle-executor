@@ -76,16 +76,13 @@ logs and metrics. Reordering does not change identity; duplicate addresses are
 rejected, including different checksum spellings. Strategy objects, labels and
 per-strategy options are rejected before network access.
 
-The runtime uses policy version `address-only-v4`, including automatic native Noon
-redemption and its updated issuer catalogue. Finish active jobs
-with the previous binary and configuration before upgrading, including terminal
-jobs whose transaction journal remains occupied. Existing custom or prefixed keys
-stay visible in `status` and block admission while unresolved. Journals are never
-migrated or aliased to the new address identifiers.
+The runtime policy version is `1`. Its recovery fingerprint binds the executor,
+chain, discovered account and caller, curator source, provider policies and sender
+fee ceiling. Active work must match that fingerprint before it can resume.
 
-The runtime uses fixed cache, timeout, polling, confirmation and fee-horizon
-policies. Legacy fields are accepted only when they match the fixed policy; remove
-custom overrides when migrating. Optional `signer.address` is an identity assertion,
+Cache, timeout, polling, confirmation and fee-horizon policies are fixed in code.
+Their fields are not configuration inputs.
+Optional `signer.address` is an identity assertion,
 and `signer.keyEnv` may name an alternative key environment variable. Neither is
 required. Offline `check-config`, `status` and `reset-strategy` never read a key or
 contact RPC; state commands check the chain and saved caller identity, plus the
@@ -97,8 +94,7 @@ Independent reads use bounded JSON-RPC arrays on the read endpoint. Caller-indep
 source-verified getters aggregate through the standard Multicall3 address,
 `0xcA11bde05977b3631167028862bE2a173976CA11`. An unavailable or incompatible
 deployment fails the preparation; it never triggers a fallback to individual
-reads. `chain.multicall3`, if present in an old configuration, must equal that
-constant. Arbitrary data reads and ERC-1271 checks preserve their original caller
+reads. Arbitrary data reads and ERC-1271 checks preserve their original caller
 and separate `eth_call` execution. Full simulations remain isolated EVM calls
 while sharing JSON arrays with getters.
 Dependent reads and the later closing canonical checks remain ordered.
@@ -116,22 +112,14 @@ For every new preparation, the daemon fetches `/merkle-trees/{acceptedRoot}?chai
 from the configured curator backend. The root comes from the authenticated on-chain
 snapshot. The response must identify the configured chain and exact active root;
 every leaf hash and sorted-pair proof is verified, including unused leaves. Backend
-`adapter`, actions and display metadata do not authorize execution. Strategies no
-longer accept `account` or local `tree` fields. The SDK retains its optional local
+`adapter`, actions and display metadata do not authorize execution. Strategies contain only executor addresses. The SDK retains its optional local
 permission-file interface for other hosts.
 
-Before upgrading from a configuration with manual account/tree fields, finish all
-active jobs using the old binary and configuration, including combined workflows
-with some completed providers. Then add `curator` and remove those strategy fields.
-Remove every `strategy.providers` entry when adopting recipe-derived runtime providers;
-manual mappings and economic values are rejected. Finish active jobs using the old
-binary and configuration before this migration. Derived accounts and callers,
-chain identity, curator settings, the fixed runtime policy version and transaction
-fee policy are part of the recovery fingerprint. Before adopting a new policy
-version, finish active jobs with the previous binary and configuration. Existing
-journals are never rewritten to accept a configuration change. Curator access is
-required for new preparation; saved signed attempts and external settlement retain
-their existing recovery paths without fetching a new permission tree.
+Derived accounts and callers, chain identity, curator settings, the runtime policy
+version and transaction fee policy are part of the recovery fingerprint. Recovery
+validates the saved configuration and never rewrites journal identity. Curator
+access is required for new preparation; saved signed attempts and external
+settlement resume without fetching a new permission tree.
 
 `SetRecipe` fixes instructions and runtime slot ordering. Providers output input
 indices and/or replacement calldata keyed by `stepIndex:actionIndex`. Replacement
@@ -202,7 +190,6 @@ bin/merkle-executor reset-strategy --config config/operator.local.yaml --executo
 ```
 
 Use the executor address shown by `status` with `reset-strategy --executor`.
-Legacy custom or prefixed identifiers require the previous binary and configuration.
 Invalid or zero addresses fail before state opens.
 
 Reset is permitted only for terminal jobs after the transaction journal is clear.

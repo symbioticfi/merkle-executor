@@ -60,7 +60,7 @@ func TestNoonNativeRejectsUnsupportedConfiguration(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cfg, _, r := nativeNoonFixture(t)
 			edit(&cfg)
-			if _, err := Factory(issuerNode(t, cfg), providerRegistry.Deps{Chain: r}); err == nil {
+			if _, err := New(cfg, providerRegistry.Deps{Chain: r}); err == nil {
 				t.Fatal("unsupported native Noon route accepted")
 			}
 		})
@@ -234,7 +234,7 @@ func TestNoonNativeReconcilesBurnAndAccountPayment(t *testing.T) {
 func TestNoonNativeAcceptsCanonicalUSNToUSDCConfiguration(t *testing.T) {
 	cfg := nativeNoonConfig()
 	_, reader := issuerFixture(t, issuerConfig("noon"))
-	if _, err := Factory(issuerNode(t, cfg), providerRegistry.Deps{Chain: reader}); err != nil {
+	if _, err := New(cfg, providerRegistry.Deps{Chain: reader}); err != nil {
 		t.Fatalf("native USN redemption configuration rejected: %v", err)
 	}
 }

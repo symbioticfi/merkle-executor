@@ -19,24 +19,19 @@ import (
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	"github.com/symbioticfi/merkle-executor/internal/txmanager"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func testCLIConfig(directory string) config.Config {
 	return config.Config{
-		Mode:             "simulate",
-		RecipeCacheBytes: config.DefaultRecipeCacheBytes,
-		Curator:          protocolio.HTTPConfig{URL: "http://127.0.0.1:1/api/v1"},
-		Chain:            config.Chain{ChainID: 31337, RPCURL: "http://127.0.0.1:1"},
-		Signer:           config.Signer{Address: common.HexToAddress("0xabcd").Hex(), KeyEnv: "MERKLE_CLI_TEST_KEY"},
-		StateDir:         filepath.Join(directory, "state"),
-		OperationTimeout: config.DefaultOperationTimeout,
-		HTTPTimeout:      config.DefaultHTTPTimeout,
-		PollInterval:     config.DefaultPollInterval,
-		TxManager:        config.TxManager{MaxFeeGwei: 30},
-		Strategies:       []string{common.HexToAddress("0x1111").Hex()},
+		Mode:       "simulate",
+		Curator:    config.Curator{URL: "http://127.0.0.1:1/api/v1"},
+		Chain:      config.Chain{ChainID: 31337, RPCURL: "http://127.0.0.1:1"},
+		Signer:     config.Signer{Address: common.HexToAddress("0xabcd").Hex(), KeyEnv: "MERKLE_CLI_TEST_KEY"},
+		StateDir:   filepath.Join(directory, "state"),
+		TxManager:  config.TxManager{MaxFeeGwei: 30},
+		Strategies: []string{common.HexToAddress("0x1111").Hex()},
 	}
 }
 
@@ -114,7 +109,7 @@ func TestCheckConfigDoesNotReadKeyOrUseRPC(t *testing.T) {
 	directory := t.TempDir()
 	cfg := testCLIConfig(directory)
 	cfg.Mode, cfg.Chain.RPCURL = "send", server.URL
-	cfg.Curator = protocolio.HTTPConfig{URL: server.URL + "/api/v1", APIKeyEnv: "MISSING_CURATOR_CHECK_CONFIG_KEY"}
+	cfg.Curator = config.Curator{URL: server.URL + "/api/v1", APIKeyEnv: "MISSING_CURATOR_CHECK_CONFIG_KEY"}
 	t.Setenv(cfg.Signer.KeyEnv, "deliberately-invalid-cli-test-key")
 	path := writeCLIConfig(t, directory, cfg)
 	if output, err := executeCLI(t, "check-config", "--config", path); err != nil || output != "configuration valid\n" {
@@ -333,7 +328,7 @@ func TestResetRejectsInvalidAddressBeforeOpeningState(t *testing.T) {
 		})
 	}
 	if _, err := executeCLI(t, "reset-strategy", "--config", "unused.yaml", "--name", "old-label"); err == nil || !strings.Contains(err.Error(), "unknown flag") {
-		t.Fatalf("legacy name flag accepted: %v", err)
+		t.Fatalf("unsupported name flag accepted: %v", err)
 	}
 }
 
@@ -354,16 +349,16 @@ func TestResetCanonicalizesExecutorAddress(t *testing.T) {
 	}
 }
 
-func TestStatusRetainsLegacyIdentifiers(t *testing.T) {
+func TestStatusRetainsRemovedExecutors(t *testing.T) {
 	directory := t.TempDir()
 	cfg := testCLIConfig(directory)
 	path := writeCLIConfig(t, directory, cfg)
 	store := seedCLIState(t, cfg, keeper.Job{ID: "new", Phase: "settled"}, false)
-	legacy := []string{"old-custom", "executor-" + cfg.Strategies[0]}
-	if err := store.Save("strategies.v1", append([]string{cfg.Strategies[0]}, legacy...)); err != nil {
+	removed := []string{strings.ToLower(common.HexToAddress("0x2222").Hex()), strings.ToLower(common.HexToAddress("0x3333").Hex())}
+	if err := store.Save("strategies.v1", append([]string{cfg.Strategies[0]}, removed...)); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range legacy {
+	for _, id := range removed {
 		if err := store.Save("strategy."+id+".v1", keeper.Job{ID: id, Phase: "authorized"}); err != nil {
 			t.Fatal(err)
 		}
@@ -376,14 +371,36 @@ func TestStatusRetainsLegacyIdentifiers(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &rows); err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 3 || rows[0].Identifier != cfg.Strategies[0] || rows[1].Identifier != legacy[0] || rows[2].Identifier != legacy[1] {
-		t.Fatalf("legacy identifiers hidden: %s", output)
+	if len(rows) != 3 || rows[0].Identifier != cfg.Strategies[0] || rows[1].Identifier != removed[0] || rows[2].Identifier != removed[1] {
+		t.Fatalf("removed identifiers hidden: %s", output)
 	}
-	for _, id := range legacy {
+	for _, id := range removed {
 		var job keeper.Job
 		if found, err := store.Load("strategy."+id+".v1", &job); err != nil || !found || job.Phase != "authorized" {
-			t.Fatal("status changed legacy job", err)
+			t.Fatal("status changed removed job", err)
 		}
+	}
+}
+
+func TestStatusRejectsInvalidSavedExecutorIdentity(t *testing.T) {
+	for _, id := range []string{"label", "0x1", "0x0000000000000000000000000000000000000000", "0xABCDEF0000000000000000000000000000000001"} {
+		t.Run(id, func(t *testing.T) {
+			directory := t.TempDir()
+			cfg := testCLIConfig(directory)
+			path := writeCLIConfig(t, directory, cfg)
+			store := seedCLIState(t, cfg, keeper.Job{ID: "owned", Phase: "authorized"}, false)
+			defer store.Close()
+			if err := store.Save("strategies.v1", []string{id}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := executeCLI(t, "status", "--config", path); err == nil || !strings.Contains(err.Error(), "invalid saved executor address") {
+				t.Fatalf("invalid saved identity accepted: %v", err)
+			}
+			var job keeper.Job
+			if found, err := store.Load("strategy."+cfg.Strategies[0]+".v1", &job); err != nil || !found || job.ID != "owned" || job.Phase != "authorized" {
+				t.Fatal("status altered active job", err)
+			}
+		})
 	}
 }
 

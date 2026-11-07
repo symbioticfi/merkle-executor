@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"maps"
 	"math/big"
-	"os"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -134,10 +133,7 @@ func TestAutomaticSecuritizeAllEmbeddedRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalogue := raw.(*automatic)
-	disk, err := os.ReadFile("../../../config/assets/securitize.yaml")
-	if err != nil || !bytes.Equal(disk, embeddedCatalogue) {
-		t.Fatal("embedded Securitize catalogue drifted")
-	}
+
 	for _, asset := range catalogue.assets {
 		routes := append([]Route{}, asset.Offramps...)
 		if asset.RedemptionWallet != "" {
@@ -294,7 +290,7 @@ func TestAutomaticSecuritizeRejectsPersistedRouteAndFieldMutation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fault := range []string{"route", "amount", "decimals", "action", "input", "catalogue", "account", "expected"} {
+	for _, fault := range []string{"route", "amount", "decimals", "action", "input", "account", "expected"} {
 		t.Run(fault, func(t *testing.T) {
 			data, _ := json.Marshal(bundle)
 			var changed durableRoutes
@@ -310,8 +306,6 @@ func TestAutomaticSecuritizeRejectsPersistedRouteAndFieldMutation(t *testing.T) 
 				changed.Routes[0].Output.Actions[cfg.Action][67] ^= 1
 			case "input":
 				changed.Routes[0].Output.Inputs = map[uint]string{77: "100"}
-			case "catalogue":
-				changed.Routes[0].Config.Catalog = "secret-path"
 			case "account":
 				var identity prepared
 				_ = json.Unmarshal(changed.Routes[0].Output.Data, &identity)

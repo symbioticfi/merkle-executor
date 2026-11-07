@@ -19,7 +19,6 @@ import (
 	ab "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"gopkg.in/yaml.v3"
 )
 
 type reader func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
@@ -38,18 +37,6 @@ func testHeader(b *big.Int) *types.Header {
 	return &types.Header{Number: new(big.Int).Set(b), Time: timestamp}
 }
 func addr(n int64) common.Address { return common.BigToAddress(big.NewInt(n)) }
-func node(t *testing.T, c any) yaml.Node {
-	t.Helper()
-	b, e := yaml.Marshal(c)
-	if e != nil {
-		t.Fatal(e)
-	}
-	var n yaml.Node
-	if e = yaml.Unmarshal(b, &n); e != nil {
-		t.Fatal(e)
-	}
-	return n
-}
 func sampleOrder() wire.CowOrder {
 	return wire.CowOrder{SellToken: addr(1).Hex(), BuyToken: addr(2).Hex(), Receiver: addr(3).Hex(), From: addr(3).Hex(), SellAmount: "990", BuyAmount: "1980", FeeAmount: "0", ValidTo: 1600, AppData: (common.Hash{}).Hex(), Kind: "sell", PartiallyFillable: false, SellTokenBalance: "erc20", BuyTokenBalance: "erc20", SigningScheme: "eip1271", Signature: "0x"}
 }
@@ -59,12 +46,12 @@ func sampleQuote() wire.CowOrder {
 	q.AppData = hash.Hex()
 	return q
 }
-func fixtureFactory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
-	p, err := Factory(raw, deps)
+func fixtureProvider(c Config, deps providerRegistry.Deps) (provider.Provider, error) {
+	p, err := New(c, deps)
 	if err != nil {
 		return nil, err
 	}
-	p.(*Provider).volumeBPS = func(context.Context, *big.Int, common.Address, common.Address) (uint64, error) { return 0, nil }
+	p.volumeBPS = func(context.Context, *big.Int, common.Address, common.Address) (uint64, error) { return 0, nil }
 	return p, nil
 }
 func TestCoWViemDigestAndUIDGolden(t *testing.T) {
@@ -175,9 +162,9 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 		return nil, nil
 	})
 	sellInput, buyInput := uint(0), uint(1)
-	cfg := Config{SellAmountInput: &sellInput, BuyAmountInput: &buyInput, HTTP: protocolio.HTTPConfig{URL: srv.URL}, Settlement: addr(4).Hex(), SellToken: addr(1).Hex(), BuyToken: addr(2).Hex(), SellAmount: "1000", MinBuyAmount: "1800", SlippageBPS: 100, ValiditySeconds: 600, AppData: (common.Hash{}).Hex(), Action: "1:0"}
+	cfg := Config{SellAmountInput: &sellInput, BuyAmountInput: &buyInput, HTTP: protocolio.HTTPConfig{URL: srv.URL}, Settlement: addr(4).Hex(), SellToken: addr(1).Hex(), BuyToken: addr(2).Hex(), SellAmount: "1000", MinBuyAmount: "1800", ValiditySeconds: 600, Action: "1:0"}
 	deps := providerRegistry.Deps{Chain: chain, HTTP: srv.Client()}
-	p, e := fixtureFactory(node(t, cfg), deps)
+	p, e := fixtureProvider(cfg, deps)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -218,7 +205,7 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	encoded, _ := json.Marshal(out)
 	var restored provider.Output
 	_ = json.Unmarshal(encoded, &restored)
-	p, e = fixtureFactory(node(t, cfg), deps)
+	p, e = fixtureProvider(cfg, deps)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -267,6 +254,14 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 		t.Fatal("gross/net numerical input drift accepted")
 	}
 	restored.Inputs[0] = "1000"
+	for _, version := range []int{0, 2} {
+		d.Version = version
+		restored.Data, _ = json.Marshal(d)
+		if _, e = p.Advance(context.Background(), snap, restored, nil); e == nil {
+			t.Fatal("unsupported persisted format accepted")
+		}
+	}
+	d.Version = 1
 	d.UID = "0x00"
 	restored.Data, _ = json.Marshal(d)
 	if _, e = p.Advance(context.Background(), snap, restored, nil); e == nil {

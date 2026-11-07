@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
-	"gopkg.in/yaml.v3"
 
 	legacy "github.com/symbioticfi/merkle-executor/api/bindings/securitizelegacyofframp"
 	modern "github.com/symbioticfi/merkle-executor/api/bindings/securitizeofframp"
@@ -24,8 +23,6 @@ import (
 )
 
 type Config struct {
-	Catalog           string `yaml:"catalog"`
-	Symbol            string `yaml:"symbol"`
 	ChainID           uint64 `yaml:"chainId"`
 	Mode              string `yaml:"mode"`
 	Token             string `yaml:"token"`
@@ -57,16 +54,6 @@ type prepared struct {
 	Amount   string         `json:"amount"`
 	Minimum  string         `json:"minimum"`
 	Expected string         `json:"expected"`
-}
-
-func Register(r *providerRegistry.Registry) error { return r.Register("securitize", Factory) }
-
-func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
-	var c Config
-	if err := parse.DecodeStrict(raw, &c); err != nil {
-		return nil, err
-	}
-	return New(c, deps)
 }
 
 // New consumes authenticated recipe values or explicit local fixture policy.
@@ -123,9 +110,6 @@ func New(c Config, deps providerRegistry.Deps) (*Provider, error) {
 	}
 	if c.GuardMinimumInput != nil && (c.MinOutputInput != nil || (c.AmountInput != nil && *c.AmountInput == *c.GuardMinimumInput)) {
 		return nil, errors.New("duplicate Securitize guard assignment")
-	}
-	if err = p.validateCatalog(); err != nil {
-		return nil, err
 	}
 	return p, nil
 }

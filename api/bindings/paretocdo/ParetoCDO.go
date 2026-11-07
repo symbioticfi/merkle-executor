@@ -26,7 +26,7 @@ var (
 
 // ParetoCDOMetaData contains all meta data concerning the ParetoCDO contract.
 var ParetoCDOMetaData = bind.MetaData{
-	ABI: "[{\"type\":\"function\",\"name\":\"AATranche\",\"inputs\":[],\"outputs\":[{\"name\":\"tranche\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"ONE_TRANCHE_TOKEN\",\"inputs\":[],\"outputs\":[{\"name\":\"unit\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"claimInstantWithdrawRequest\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"claimWithdrawRequest\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"defaulted\",\"inputs\":[],\"outputs\":[{\"name\":\"isDefaulted\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isEpochRunning\",\"inputs\":[],\"outputs\":[{\"name\":\"running\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isWalletAllowed\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"allowed\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"keyring\",\"inputs\":[],\"outputs\":[{\"name\":\"keyringAddress\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"keyringPolicyId\",\"inputs\":[],\"outputs\":[{\"name\":\"policy\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"oneToken\",\"inputs\":[],\"outputs\":[{\"name\":\"unit\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"requestWithdraw\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"tranche\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"assets\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"strategy\",\"inputs\":[],\"outputs\":[{\"name\":\"receiptToken\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"strategyToken\",\"inputs\":[],\"outputs\":[{\"name\":\"receiptToken\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"token\",\"inputs\":[],\"outputs\":[{\"name\":\"underlying\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"virtualPrice\",\"inputs\":[{\"name\":\"tranche\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"price\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"inputs\":[],\"name\":\"allowInstantWithdraw\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"epochEndDate\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"}]",
+	ABI: "[{\"type\":\"function\",\"name\":\"AATranche\",\"inputs\":[],\"outputs\":[{\"name\":\"tranche\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"BBTranche\",\"inputs\":[],\"outputs\":[{\"name\":\"tranche\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"ONE_TRANCHE_TOKEN\",\"inputs\":[],\"outputs\":[{\"name\":\"unit\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"claimInstantWithdrawRequest\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"claimWithdrawRequest\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"defaulted\",\"inputs\":[],\"outputs\":[{\"name\":\"isDefaulted\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isEpochRunning\",\"inputs\":[],\"outputs\":[{\"name\":\"running\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isWalletAllowed\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"allowed\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"keyring\",\"inputs\":[],\"outputs\":[{\"name\":\"keyringAddress\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"keyringPolicyId\",\"inputs\":[],\"outputs\":[{\"name\":\"policy\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"oneToken\",\"inputs\":[],\"outputs\":[{\"name\":\"unit\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"requestWithdraw\",\"inputs\":[{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"tranche\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"assets\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"strategy\",\"inputs\":[],\"outputs\":[{\"name\":\"receiptToken\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"strategyToken\",\"inputs\":[],\"outputs\":[{\"name\":\"receiptToken\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"token\",\"inputs\":[],\"outputs\":[{\"name\":\"underlying\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"virtualPrice\",\"inputs\":[{\"name\":\"tranche\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"price\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"inputs\":[],\"name\":\"allowInstantWithdraw\",\"outputs\":[{\"internalType\":\"bool\",\"name\":\"\",\"type\":\"bool\"}],\"stateMutability\":\"view\",\"type\":\"function\"},{\"inputs\":[],\"name\":\"epochEndDate\",\"outputs\":[{\"internalType\":\"uint256\",\"name\":\"\",\"type\":\"uint256\"}],\"stateMutability\":\"view\",\"type\":\"function\"}]",
 	ID:  "ParetoCDO",
 }
 
@@ -83,6 +83,41 @@ func (paretoCDO *ParetoCDO) TryPackAATranche() ([]byte, error) {
 // Solidity: function AATranche() view returns(address tranche)
 func (paretoCDO *ParetoCDO) UnpackAATranche(data []byte) (common.Address, error) {
 	out, err := paretoCDO.abi.Unpack("AATranche", data)
+	if err != nil {
+		return *new(common.Address), err
+	}
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+	return out0, nil
+}
+
+// PackBBTranche is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xe3e39368.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function BBTranche() view returns(address tranche)
+func (paretoCDO *ParetoCDO) PackBBTranche() []byte {
+	enc, err := paretoCDO.abi.Pack("BBTranche")
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackBBTranche is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xe3e39368.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function BBTranche() view returns(address tranche)
+func (paretoCDO *ParetoCDO) TryPackBBTranche() ([]byte, error) {
+	return paretoCDO.abi.Pack("BBTranche")
+}
+
+// UnpackBBTranche is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0xe3e39368.
+//
+// Solidity: function BBTranche() view returns(address tranche)
+func (paretoCDO *ParetoCDO) UnpackBBTranche(data []byte) (common.Address, error) {
+	out, err := paretoCDO.abi.Unpack("BBTranche", data)
 	if err != nil {
 		return *new(common.Address), err
 	}

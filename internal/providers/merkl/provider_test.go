@@ -18,7 +18,6 @@ import (
 	providerRegistry "github.com/symbioticfi/merkle-executor/internal/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"gopkg.in/yaml.v3"
 )
 
 type reader func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
@@ -27,18 +26,6 @@ func (f reader) CallContract(c context.Context, m ethereum.CallMsg, b *big.Int) 
 	return f(c, m, b)
 }
 func addr(n int64) common.Address { return common.BigToAddress(big.NewInt(n)) }
-func node(t *testing.T, c any) yaml.Node {
-	t.Helper()
-	b, e := yaml.Marshal(c)
-	if e != nil {
-		t.Fatal(e)
-	}
-	var n yaml.Node
-	if e = yaml.Unmarshal(b, &n); e != nil {
-		t.Fatal(e)
-	}
-	return n
-}
 func TestMerklProofViemGolden(t *testing.T) {
 	sibling := common.HexToHash("0x" + strings.Repeat("11", 32))
 	root := common.HexToHash("0xd98400418a73f31e4b681498ddc089b9c9b92f409942f76789590c1cae24f0ab")
@@ -109,7 +96,7 @@ func TestPrepareCumulativeSelfClaim(t *testing.T) {
 			if test == "proof-layout" {
 				cfg.ProofLengths[0] = 2
 			}
-			p, e := Factory(node(t, cfg), providerRegistry.Deps{Chain: multicallReader(t, []common.Address{addr(1)}, chain), HTTP: srv.Client()})
+			p, e := New(cfg, providerRegistry.Deps{Chain: multicallReader(t, []common.Address{addr(1)}, chain), HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -184,7 +171,7 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 				cfg.SkipIfEmpty = false
 				cfg.DedicatedClaimGroup = false
 			}
-			p, e := Factory(node(t, cfg), providerRegistry.Deps{Chain: multicallReader(t, []common.Address{addr(1)}, chain), HTTP: srv.Client()})
+			p, e := New(cfg, providerRegistry.Deps{Chain: multicallReader(t, []common.Address{addr(1)}, chain), HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -237,7 +224,7 @@ func TestOptionalClaimRequiresDedicatedSingleActionLayout(t *testing.T) {
 			case "step-overflow":
 				cfg.Action = "999999999999999999999999999999:0"
 			}
-			_, e := Factory(node(t, cfg), providerRegistry.Deps{Chain: reader(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+			_, e := New(cfg, providerRegistry.Deps{Chain: reader(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 				t.Fatal("factory made RPC call")
 				return nil, nil
 			})})

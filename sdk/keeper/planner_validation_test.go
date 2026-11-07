@@ -23,6 +23,9 @@ type validationReader struct {
 	header             *types.Header
 	reads, simulations int
 	payload            []byte
+	returned           []byte
+	simulationErr      error
+	reorgOnSimulation  bool
 }
 
 func (r *validationReader) HeaderByNumber(context.Context, *big.Int) (*types.Header, error) {
@@ -44,7 +47,11 @@ func (r *validationReader) CallContract(_ context.Context, msg ethereum.CallMsg,
 		if msg.To == nil || *msg.To != r.snapshot.Executor || msg.From != r.snapshot.Caller || block != nil {
 			r.t.Fatal("validation changed exact send target/caller/latest payload")
 		}
-		return nil, nil
+		if r.reorgOnSimulation {
+			r.header = types.CopyHeader(r.header)
+			r.header.Extra = []byte("reorg after simulation")
+		}
+		return r.returned, r.simulationErr
 	}
 	if block == nil || block.Uint64() != r.snapshot.BlockNumber {
 		r.t.Fatal("metadata not pinned")
@@ -77,7 +84,8 @@ func TestPlannerValidateRejectsDifferentDiscoveryAndSendExecutors(t *testing.T) 
 		t.Run(map[bool]string{false: "same", true: "different"}[different], func(t *testing.T) {
 			header := &types.Header{Number: big.NewInt(12)}
 			snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: common.HexToHash("0x04"), Root: common.HexToHash("0x05"), RecipeBlock: 11}
-			r := &validationReader{t: t, snapshot: snapshot, header: header, payload: []byte{1, 2, 3, 4}}
+			payload, returned := validationWork(t, true)
+			r := &validationReader{t: t, snapshot: snapshot, header: header, payload: payload, returned: returned}
 			plan := Plan{Recipe: snapshot, Snapshot: provider.Snapshot{Executor: snapshot.Executor}, Calldata: r.payload}
 			if different {
 				plan.Snapshot.Executor = common.HexToAddress("0x99")

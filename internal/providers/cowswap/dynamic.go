@@ -15,7 +15,7 @@ import (
 )
 
 // PolicyVersion identifies the pinned CoW SDK AUTO policy in strategy revisions.
-const PolicyVersion = "cow-sdk-auto-9ce323316b01-v2"
+const PolicyVersion = "cow-sdk-auto-9ce323316b01-v1"
 
 const (
 	DefaultValiditySeconds uint64 = 1800

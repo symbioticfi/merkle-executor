@@ -118,6 +118,31 @@ func (p *Provider) openeden(ctx context.Context, s provider.Snapshot, out *provi
 	return p.amount, nil
 }
 
+func (p *Provider) hastra(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, error) {
+	vault := erc4626.NewERC4626()
+	asset, err := read(ctx, p, s, p.target, vault.PackAsset(), vault.UnpackAsset)
+	if err != nil {
+		return nil, err
+	}
+	if asset != p.asset {
+		return nil, errors.New("issuer contract topology or asset mismatch")
+	}
+	if p.cfg.Mode == "unwrap" {
+		out.Actions[p.cfg.Action] = vault.PackRedeem(p.amount, s.Account, s.Account)
+	} else {
+		yield := figure.NewFigureYieldVault()
+		pending, err := read(ctx, p, s, p.target, yield.PackPendingRedemptions(s.Account), yield.UnpackPendingRedemptions)
+		if err != nil {
+			return nil, err
+		}
+		if pending.Shares.Sign() > 0 {
+			return nil, idle("Figure request already pending for account")
+		}
+		out.Actions[p.cfg.Action] = yield.PackRequestRedeem(p.amount)
+	}
+	return p.amount, nil
+}
+
 func (p *Provider) figure(ctx context.Context, s provider.Snapshot, out *provider.Output) (*big.Int, *big.Int, error) {
 	a, vault := figure.NewFigureYieldVault(), erc4626.NewERC4626()
 	group, err := protocolio.ReadGroup(ctx, p.deps.Chain, protocolio.ContractRead(p.token, vault.PackAsset(), s.BlockNumber, true), protocolio.ContractRead(p.target, a.PackAsset(), s.BlockNumber, true), protocolio.ContractRead(p.target, a.PackPendingRedemptions(s.Account), s.BlockNumber, true), protocolio.ContractRead(p.token, vault.PackPreviewRedeem(p.amount), s.BlockNumber, true))

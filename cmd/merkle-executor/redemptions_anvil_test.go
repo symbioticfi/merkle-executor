@@ -257,7 +257,7 @@ func runIssuerFixture(ctx context.Context, path string, policies []redemptions.C
 		return err
 	}
 	defer client.Close()
-	source, err := curator.New(cfg.Curator, &http.Client{Timeout: cfg.HTTPTimeout})
+	source, err := curator.New(cfg.Curator.HTTPConfig(), &http.Client{Timeout: config.DefaultHTTPTimeout})
 	if err != nil {
 		return err
 	}
@@ -271,7 +271,7 @@ func runIssuerFixture(ctx context.Context, path string, policies []redemptions.C
 	}
 	strategies := make([]keeper.Strategy, len(cfg.Strategies))
 	for i, strategy := range cfg.Strategies {
-		runtime, err := redemptions.New(policies[i], providerRegistry.Deps{Chain: client, Log: logr.Discard()})
+		runtime, err := redemptions.New(policies[i], providerRegistry.Deps{Chain: client})
 		if err != nil {
 			return err
 		}
@@ -298,7 +298,7 @@ func runIssuerFixture(ctx context.Context, path string, policies []redemptions.C
 		return err
 	}
 	defer sender.Close()
-	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: cfg.TxManager.Confirmations}
-	worker := keeper.Keeper{Store: store, Planner: planner, Sender: sender, Strategies: strategies, Mode: "send", OperationTimeout: cfg.OperationTimeout, Log: logr.Discard()}
+	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations}
+	worker := keeper.Keeper{Store: store, Planner: planner, Sender: sender, Strategies: strategies, Mode: "send", OperationTimeout: config.DefaultOperationTimeout, Log: logr.Discard()}
 	return worker.Tick(ctx)
 }

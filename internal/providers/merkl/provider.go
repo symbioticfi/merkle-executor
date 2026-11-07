@@ -14,7 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-	"gopkg.in/yaml.v3"
 
 	binding "github.com/symbioticfi/merkle-executor/api/bindings/merkldistributor"
 	multicall "github.com/symbioticfi/merkle-executor/api/bindings/multicall3"
@@ -74,15 +73,6 @@ type Provider struct {
 	tokens      []common.Address
 	minimum     *big.Int
 	claimStep   uint
-}
-
-func Register(r *providerRegistry.Registry) error { return r.Register("merkl", Factory) }
-func Factory(raw yaml.Node, deps providerRegistry.Deps) (provider.Provider, error) {
-	var c Config
-	if e := parse.DecodeStrict(raw, &c); e != nil {
-		return nil, e
-	}
-	return New(c, deps)
 }
 
 // New consumes an immutable carrier derived from the authenticated claim leaf.

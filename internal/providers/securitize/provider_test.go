@@ -5,10 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
-	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -163,29 +160,16 @@ func (r *chainReader) configure(c Config) {
 	r.amount, _ = new(big.Int).SetString(c.Amount, 10)
 }
 
-func configNode(t *testing.T, c any) yaml.Node {
-	t.Helper()
-	raw, err := yaml.Marshal(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var node yaml.Node
-	if err = yaml.Unmarshal(raw, &node); err != nil {
-		t.Fatal(err)
-	}
-	return node
-}
-
 func newProvider(t *testing.T, c Config, r provider.Reader) *Provider {
 	t.Helper()
 	if chain, ok := r.(*chainReader); ok {
 		chain.configure(c)
 	}
-	p, err := Factory(configNode(t, c), providerRegistry.Deps{Chain: r})
+	p, err := New(c, providerRegistry.Deps{Chain: r})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return p.(*Provider)
+	return p
 }
 
 func TestPreparePinnedRoutes(t *testing.T) {
@@ -212,6 +196,13 @@ func TestPreparePinnedRoutes(t *testing.T) {
 				if err != nil || decoded[1].(*big.Int).String() != "90" {
 					t.Fatal("modern route lost minimum output")
 				}
+			}
+			pinned := r.decimals
+			p.decimals = &pinned
+			r.decimals++
+			out, err = p.Prepare(context.Background(), s)
+			if err == nil || err.Error() != "Securitize token decimals changed from pinned catalog" || len(out.Actions) != 0 || len(out.Inputs) != 0 {
+				t.Fatalf("on-chain decimals mismatch produced usable output: %+v %v", out, err)
 			}
 		})
 	}
@@ -446,8 +437,8 @@ func TestModernCompletionEvent(t *testing.T) {
 	}
 }
 
-func TestFactoryRejectsUnsafeConfiguration(t *testing.T) {
-	for _, variant := range []string{"mode", "chain", "reader", "token", "target", "amount", "payment", "minimum", "duplicate-input", "wallet-payment", "wallet-minimum", "wallet-output-input", "action", "symbol-without-catalog", "catalog-without-symbol", "unknown-field"} {
+func TestConstructorRejectsUnsafeConfiguration(t *testing.T) {
+	for _, variant := range []string{"mode", "chain", "reader", "token", "target", "amount", "payment", "minimum", "duplicate-input", "wallet-payment", "wallet-minimum", "wallet-output-input", "action"} {
 		t.Run(variant, func(t *testing.T) {
 			c, _, r := fixture(t, "modern")
 			var chain provider.Reader = r
@@ -478,16 +469,8 @@ func TestFactoryRejectsUnsafeConfiguration(t *testing.T) {
 				c.Mode, c.PaymentToken, c.MinOutput = "wallet", "", ""
 			case "action":
 				c.Action = "not-action"
-			case "symbol-without-catalog":
-				c.Symbol = "HINC"
-			case "catalog-without-symbol":
-				c.Catalog = "../../../config/assets/securitize.yaml"
 			}
-			n := configNode(t, c)
-			if variant == "unknown-field" {
-				n = configNode(t, map[string]any{"unknown": true})
-			}
-			if _, err := Factory(n, providerRegistry.Deps{Chain: chain}); err == nil {
+			if _, err := New(c, providerRegistry.Deps{Chain: chain}); err == nil {
 				t.Fatal("invalid configuration accepted")
 			}
 		})
@@ -495,8 +478,7 @@ func TestFactoryRejectsUnsafeConfiguration(t *testing.T) {
 }
 
 func TestCatalogCoversPublishedEVMDeployments(t *testing.T) {
-	path := "../../../config/assets/securitize.yaml"
-	catalog, err := LoadCatalog(path)
+	catalog, err := decodeCatalog(embeddedCatalogue)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,14 +487,14 @@ func TestCatalogCoversPublishedEVMDeployments(t *testing.T) {
 	for _, a := range catalog.Assets {
 		symbols[a.Symbol] = true
 		c, s, r := fixture(t, "wallet")
-		c.Catalog, c.Symbol, c.ChainID, c.Token, c.Target = path, a.Symbol, a.ChainID, a.Token, a.RedemptionWallet
+		c.ChainID, c.Token, c.Target = a.ChainID, a.Token, a.RedemptionWallet
 		if a.Unavailable != "" {
 			unavailable++
 			if a.Symbol != "VBILL" || a.ChainID != 56 {
 				t.Fatal("unexpected unavailable issuer route")
 			}
 			c.Target = address(99).Hex()
-			if _, err = Factory(configNode(t, c), providerRegistry.Deps{Chain: r}); err == nil {
+			if err = (&automatic{assets: catalog.Assets}).validateKnownRoute(c, a.Decimals); err == nil {
 				t.Fatal("missing issuer route accepted")
 			}
 			continue
@@ -529,7 +511,11 @@ func TestCatalogCoversPublishedEVMDeployments(t *testing.T) {
 				if common.HexToAddress(c.PaymentToken) == common.HexToAddress("0xC139190F447e929f090Edeb554D95AbB8b18aC1C") {
 					r.output = 18
 				}
+				if err := (&automatic{assets: catalog.Assets}).validateKnownRoute(c, a.Decimals); err != nil {
+					t.Fatal(err)
+				}
 				p := newProvider(t, c, r)
+				p.decimals = &a.Decimals
 				out, err := p.Prepare(context.Background(), s)
 				if err != nil {
 					t.Fatalf("catalog route could not prepare: %v", err)
@@ -583,83 +569,46 @@ func TestCatalogCoversPublishedEVMDeployments(t *testing.T) {
 	}
 }
 
-func TestCatalogRejectsMismatchAndMalformedSource(t *testing.T) {
-	path := "../../../config/assets/securitize.yaml"
-	catalog, err := LoadCatalog(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := catalog.Assets[0]
-	for _, variant := range []string{"wallet", "chain", "token", "missing-file", "unknown-symbol", "decimals", "duplicate", "unknown-field", "multiple-documents", "missing-source"} {
+func TestCatalogRejectsMalformedSource(t *testing.T) {
+	for _, variant := range []string{"duplicate", "unknown-field", "multiple-documents", "missing-source", "invalid-token", "invalid-wallet", "invalid-mode", "invalid-target", "invalid-payment", "decimals", "unavailable"} {
 		t.Run(variant, func(t *testing.T) {
-			c, s, r := fixture(t, "wallet")
-			c.Catalog, c.Symbol, c.ChainID, c.Token, c.Target = path, a.Symbol, a.ChainID, a.Token, a.RedemptionWallet
-			s.ChainID = new(big.Int).SetUint64(a.ChainID)
+			catalog, err := decodeCatalog(embeddedCatalogue)
+			if err != nil {
+				t.Fatal(err)
+			}
 			switch variant {
-			case "wallet":
-				c.Target = address(99).Hex()
-			case "chain":
-				c.ChainID = 999999
-			case "token":
-				c.Token = address(99).Hex()
-			case "missing-file":
-				c.Catalog = filepath.Join(t.TempDir(), "missing")
-			case "unknown-symbol":
-				c.Symbol = "UNKNOWN"
+			case "duplicate":
+				catalog.Assets = append(catalog.Assets, catalog.Assets[0])
+			case "missing-source":
+				catalog.Source = ""
+			case "invalid-token":
+				catalog.Assets[0].Token = "invalid"
+			case "invalid-wallet":
+				catalog.Assets[0].RedemptionWallet = "invalid"
+			case "invalid-mode":
+				catalog.Assets[0].Offramps = []Route{{Mode: "invalid"}}
+			case "invalid-target":
+				catalog.Assets[0].Offramps = []Route{{Mode: "modern", Target: "invalid"}}
+			case "invalid-payment":
+				catalog.Assets[0].Offramps = []Route{{Mode: "modern", Target: address(9).Hex(), PaymentToken: "invalid"}}
 			case "decimals":
-				r.decimals = 18
-			default:
-				copyCatalog := catalog
-				if variant == "duplicate" {
-					copyCatalog.Assets = append(append([]Asset{}, catalog.Assets...), a)
-				}
-				if variant == "missing-source" {
-					copyCatalog.Source = ""
-				}
-				raw, err := yaml.Marshal(copyCatalog)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if variant == "unknown-field" {
-					raw = append(raw, []byte("unknown: true\n")...)
-				}
-				if variant == "multiple-documents" {
-					raw = append(raw, []byte("---\nversion: 1\n")...)
-				}
-				c.Catalog = filepath.Join(t.TempDir(), "catalog.yaml")
-				if err = os.WriteFile(c.Catalog, raw, 0o600); err != nil {
-					t.Fatal(err)
-				}
+				catalog.Assets[0].Decimals = 78
+			case "unavailable":
+				catalog.Assets[0].Unavailable = "unavailable"
 			}
-			r.configure(c)
-			p, err := Factory(configNode(t, c), providerRegistry.Deps{Chain: r})
-			if variant == "decimals" && err == nil {
-				_, err = p.Prepare(context.Background(), s)
+			raw, err := yaml.Marshal(catalog)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if err == nil {
-				t.Fatal("invalid catalog authority accepted")
+			if variant == "unknown-field" {
+				raw = append(raw, []byte("unknown: true\n")...)
+			}
+			if variant == "multiple-documents" {
+				raw = append(raw, []byte("---\nversion: 1\n")...)
+			}
+			if _, err = decodeCatalog(raw); err == nil {
+				t.Fatal("invalid catalogue accepted")
 			}
 		})
-	}
-	if _, err := LoadCatalog(strings.Repeat("missing", 2)); err == nil {
-		t.Fatal("missing source accepted")
-	}
-}
-
-func TestCatalogRelativeToConfiguration(t *testing.T) {
-	root := t.TempDir()
-	raw, err := os.ReadFile("../../../config/assets/securitize.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(filepath.Join(root, "assets.yaml"), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c, _, r := fixture(t, "wallet")
-	c.Catalog, c.Symbol, c.ChainID = "assets.yaml", "HINC", 1
-	c.Token = "0x015C477A4E2881C4B3bB8999f59ee4A04e812344"
-	c.Target = "0xbb543C77436645C8b95B64eEc39E3C0d48D4842b"
-	if _, err = Factory(configNode(t, c), providerRegistry.Deps{Chain: r, ConfigDir: root}); err != nil {
-		t.Fatalf("config-relative catalog failed: %v", err)
 	}
 }

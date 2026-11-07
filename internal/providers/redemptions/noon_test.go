@@ -183,7 +183,7 @@ func TestNoonClaimConfigurationRequiresExplicitRequestID(t *testing.T) {
 			cfg.Mode, cfg.Amount, cfg.RequestID = "claim", "", "0"
 			tt.edit(&cfg)
 			_, r := issuerFixture(t, cfg)
-			if _, err := Factory(issuerNode(t, cfg), providerRegistry.Deps{Chain: r}); err == nil {
+			if _, err := New(cfg, providerRegistry.Deps{Chain: r}); err == nil {
 				t.Fatal("invalid Noon configuration accepted")
 			}
 		})

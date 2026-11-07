@@ -8,7 +8,7 @@ permission package, simulates the exact transaction and manages its lifecycle.
 ## Repository alignment
 
 Studied `../vault-solver` at `c5cae70`: Cobra entrypoints under `cmd`, generic
-infrastructure under `internal`, isolated protocol packages, opaque YAML provider
+infrastructure under `internal`, isolated protocol packages, strict YAML
 configuration, Go 1.27.1, go-errors, logr/zap, generated abigen v2 bindings, and
 context-aware I/O. The new service is independently buildable. It does not import
 another module's internal packages or change the solver or adapters checkouts.
@@ -16,7 +16,9 @@ another module's internal packages or change the solver or adapters checkouts.
 ## Boundaries
 
 - `recipes`: ABI codec, SetRecipe discovery, tree/role validation and runtime assembly.
-- `provider`: integration-neutral registry, snapshots, runtime outputs and asynchronous progress.
+- SDK `provider`: integration-neutral snapshots, runtime outputs and asynchronous progress.
+  The daemon keeps only shared chain/HTTP dependencies in `internal/provider`; startup
+  installs its fixed automatic providers directly. There is no manual YAML factory registry.
 - `providers`: protocol-specific adapters selected from authenticated recipes.
   SDK hosts supply additional integrations through the provider interfaces. `redemptions`
   owns the documented LL issuer families; `securitize` owns wallet and offramp routes.
@@ -51,12 +53,9 @@ use later claim recipes, configured independently from the request recipe.
 
 The daemon accepts a YAML list of executor addresses and registers fixed automatic
 providers at startup. Canonical lowercase executor addresses are the durable and
-log identifiers; duplicate addresses and old strategy objects are rejected. The
-`address-only-v4` policy binds chain, discovered account/caller, curator source and
-sender policy. Version 4 adds authenticated native Noon USN redemption; its embedded
-issuer policy also binds the reviewed catalogue digest. Old custom or prefixed
-journals remain inspectable and block new
-admission while unresolved; drain them with the previous binary and configuration.
+log identifiers; duplicate addresses and strategy objects are rejected. Runtime
+policy version `1` binds chain, discovered account/caller, curator source and sender
+policy. The issuer policy also binds the reviewed catalogue digest.
 At startup it pins a valid head, batches deduplicated account and caller getters,
 rejects any invalid member,
 and closes the same-number/hash guard before publishing the complete account map.
@@ -74,8 +73,8 @@ HTTP is in flight. Other SDK hosts may omit the source and keep local tree loadi
 Only new preparation fetches permission bytes. Signed-attempt recovery and external
 provider advancement do not depend on curator availability. Runtime fingerprints bind
 the derived account and curator HTTP configuration (credential variable names only).
-Old active workflows must drain with the old binary/configuration before migration;
-there is no journal identity rewrite or fallback to a different tree source.
+Recovery requires the saved fingerprint to match; it never rewrites journal
+identity or selects a different tree source.
 
 ## Lifecycle
 

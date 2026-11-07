@@ -54,6 +54,11 @@ No schema or endpoint is fetched automatically during a normal build.
   Its EIP712 name/version are `LiquidLaneConnector` / `1`; the verifying contract
   is the connector proxy. The ABI artifact is vendored and independently buildable;
   a source update requires deliberately refreshing this file.
+- `ParetoCDO.BBTranche() returns (address)` was added from the current frontend
+  Pareto builder and NAV identity catalogue on 2026-10-19, for FalconX BB direct
+  requests. It is the public getter in `IdleCDOStorage.sol`, alongside the retained
+  AA getter; bindings are regenerated, not hand edited. This source comparison and
+  local fixture coverage do not establish live liquidity or account eligibility.
 - The ten LL/Noon issuer ABI subsets are sourced from pinned adapters interfaces and
   issuer contracts. [Liquid Lane provenance](../../docs/LIQUID-LANE-ASSETS.md)
   records every source, hash, embedded catalogue policy and read-only topology check.
