@@ -21,13 +21,14 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	rt "github.com/symbioticfi/merkle-executor/sdk/runtime"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 type Options struct {
 	Once, PlanOnly bool
 	Output         io.Writer
 	HTTP           *http.Client
+	// OnSnapshot receives an independent workflow snapshot after each runtime tick.
+	OnSnapshot func([]rt.Workflow)
 }
 
 func Run(ctx context.Context, cfg *config.Config, opts Options) (err error) {
@@ -41,25 +42,7 @@ func Run(ctx context.Context, cfg *config.Config, opts Options) (err error) {
 	}
 	defer flush()
 	drained := true
-	// Process ownership precedes network activity. Plan is a read-only command.
-	var store *state.Store
-	if !opts.PlanOnly {
-		store, err = state.Open(cfg.StateDir)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			if drained {
-				err = errors.Join(err, store.Close())
-			}
-		}()
-	}
 	chainID := new(big.Int).SetUint64(cfg.Chain.ChainID)
-	if store != nil {
-		if err := rt.Preflight(store, chainID, common.HexToAddress(cfg.Signer.Address), cfg.Strategies); err != nil {
-			return err
-		}
-	}
 	startup, cancel := context.WithTimeout(ctx, cfg.Runtime.OperationTimeout)
 	client, err := chain.Dial(startup, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID, common.HexToAddress(cfg.Chain.Multicall3))
 	cancel()
@@ -110,20 +93,15 @@ func Run(ctx context.Context, cfg *config.Config, opts Options) (err error) {
 	if cfg.Signer.Address != "" && common.HexToAddress(cfg.Signer.Address) != caller {
 		return errors.New("signer.address assertion does not match executor caller")
 	}
-	registered, converters, err := DefaultIntegrations(registry.Deps{Chain: reads, HTTP: opts.HTTP})
+	registered, err := DefaultIntegrations(registry.Deps{Chain: reads, HTTP: opts.HTTP})
 	if err != nil {
 		return err
 	}
 	strategies := make([]rt.Strategy, len(cfg.Strategies))
-	legacy := make(map[string][]rt.LegacyConverter, len(strategies))
 	for i, name := range cfg.Strategies {
 		account := accounts[common.HexToAddress(name)]
-		current := rt.Config{Name: name, Executor: name, Account: account.Hex(), Interval: cfg.Runtime.StrategyInterval, Revision: cfg.StrategyFingerprint(name, account, caller)}
-		old := current
-		old.Interval = time.Minute // exact v1 serializer, independent of v2 scheduling policy
-		old.Revision = cfg.LegacyStrategyFingerprint(name, account, caller)
-		strategies[i] = rt.Strategy{Config: current, Integrations: registered, LegacyConfigHash: old.Fingerprint()}
-		legacy[name] = converters
+		current := rt.Config{Name: name, Executor: name, Account: account.Hex(), Interval: cfg.Runtime.StrategyInterval}
+		strategies[i] = rt.Strategy{Config: current, Integrations: registered}
 	}
 	planner := &rt.Planner{PermissionSource: source, Chain: reads, ChainID: chainID, Caller: caller, Confirmations: cfg.Transaction.Confirmations, RecipeCache: recipes.NewRecipeCache(len(strategies), cfg.Runtime.RecipeCacheBytes), MaxConcurrent: cfg.Runtime.MaxPreparations}
 	if opts.PlanOnly {
@@ -156,7 +134,7 @@ func Run(ctx context.Context, cfg *config.Config, opts Options) (err error) {
 		}
 	}
 	metrics := observability.NewMetrics()
-	worker := &rt.Runtime{Store: store, Planner: planner, Driver: driver, Strategies: strategies, Mode: mode, OperationTimeout: cfg.Runtime.OperationTimeout, ShutdownTimeout: cfg.Runtime.ShutdownTimeout, MaxConcurrent: cfg.Runtime.MaxPreparations, Log: log, Observe: metrics.Observe, ChainID: chainID, Caller: caller, LegacyConverters: legacy}
+	worker := &rt.Runtime{Planner: planner, Driver: driver, Strategies: strategies, Mode: mode, OperationTimeout: cfg.Runtime.OperationTimeout, ShutdownTimeout: cfg.Runtime.ShutdownTimeout, MaxConcurrent: cfg.Runtime.MaxPreparations, Log: log, Observe: metrics.Observe, ChainID: chainID, Caller: caller}
 	if err := worker.Start(ctx); err != nil {
 		return err
 	}
@@ -186,6 +164,9 @@ func Run(ctx context.Context, cfg *config.Config, opts Options) (err error) {
 	log.Info("merkle executor started", "mode", mode, "strategies", len(strategies), "chainId", cfg.Chain.ChainID)
 	for {
 		err := worker.Tick(ctx)
+		if opts.OnSnapshot != nil {
+			opts.OnSnapshot(worker.Snapshot())
+		}
 		metrics.Ready(err == nil)
 		if opts.Once {
 			return err

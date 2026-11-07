@@ -7,7 +7,6 @@ curator:
 chain:
   chainId: 1
   rpcUrl: http://127.0.0.1:8545
-stateDir: ../state
 # Required for send mode: choose an absolute fee ceiling for this deployment.
 # transaction:
 #   maxFeeGwei: 30

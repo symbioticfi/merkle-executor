@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/ethereum/go-ethereum/common"
 )
 
 const validConfig = `curator:
@@ -31,26 +29,27 @@ func writeConfig(t *testing.T, text string) string {
 	}
 	return p
 }
-func TestConfigurationDefaultsAndPaths(t *testing.T) {
+func TestConfigurationDefaults(t *testing.T) {
 	t.Parallel()
 	p := writeConfig(t, validConfig)
 	c, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Mode != "simulate" || c.Signer.KeyEnv != "MERKLE_EXECUTOR_PRIVATE_KEY" || c.StateDir != filepath.Join(filepath.Dir(p), "state") {
+	if c.Mode != "simulate" || c.Signer.KeyEnv != "MERKLE_EXECUTOR_PRIVATE_KEY" {
 		t.Fatal(c)
 	}
 }
 func TestRejectMalformedConfiguration(t *testing.T) {
 	t.Parallel()
 	for name, text := range map[string]string{
-		"unknown":           validConfig + "typo: true\n",
-		"multiple":          validConfig + "---\nmode: send\n",
-		"zero caller":       strings.Replace(validConfig, "0000000000000000000000000000000000000001", "0000000000000000000000000000000000000000", 1),
-		"send without fee":  validConfig + "mode: send\n",
-		"negative interval": validConfig + "pollInterval: -1s\n",
-		"missing rpc":       strings.Replace(validConfig, "http://127.0.0.1:8545", "", 1),
+		"unknown":                 validConfig + "typo: true\n",
+		"removed state directory": validConfig + "stateDir: state\n",
+		"multiple":                validConfig + "---\nmode: send\n",
+		"zero caller":             strings.Replace(validConfig, "0000000000000000000000000000000000000001", "0000000000000000000000000000000000000000", 1),
+		"send without fee":        validConfig + "mode: send\n",
+		"negative interval":       validConfig + "pollInterval: -1s\n",
+		"missing rpc":             strings.Replace(validConfig, "http://127.0.0.1:8545", "", 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeConfig(t, text)); err == nil {
@@ -59,49 +58,31 @@ func TestRejectMalformedConfiguration(t *testing.T) {
 		})
 	}
 }
-func TestFingerprintIgnoresCommentsAndPosition(t *testing.T) {
-	a, err := Load(writeConfig(t, validConfig))
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := Load(writeConfig(t, "# documentation\n\n"+validConfig))
-	if err != nil {
-		t.Fatal(err)
-	}
-	account, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01")
-	if a.StrategyFingerprint(a.Strategies[0], account, caller) != b.StrategyFingerprint(b.Strategies[0], account, caller) {
-		t.Fatal("comments changed identity")
-	}
-	if a.StrategyFingerprint(a.Strategies[0], account, caller) == a.StrategyFingerprint(common.HexToAddress("0x04").Hex(), account, caller) {
-		t.Fatal("executor did not change identity")
-	}
-}
-
-func TestTransactionHorizonDefaultsAndInvalidLimits(t *testing.T) {
+func TestTransactionDefaultsAndInvalidLimits(t *testing.T) {
 	t.Parallel()
 	defaults, err := Load(writeConfig(t, validConfig))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defaults.Transaction.Horizon.MaxBlocks != 6 || defaults.Transaction.Horizon.BlockTime != 12*time.Second || defaults.Transaction.PendingTimeout != 5*time.Minute {
+	if defaults.Transaction.PriorityFeeGwei != 0.1 || defaults.Transaction.GasHeadroomBps != 500 || defaults.Transaction.Confirmations != 2 || defaults.Transaction.PollInterval != 2*time.Second || defaults.Transaction.BroadcastTimeout != 5*time.Second || defaults.Transaction.ReadTimeout != 2*time.Second || defaults.Transaction.EstimateTimeout != 5*time.Second {
 		t.Fatal("unexpected transaction defaults")
 	}
 	for name, block := range map[string]string{
-		"fixed polling":                "pollIntervalMs: 2000",
-		"fixed broadcast":              "broadcastTimeoutMs: 5000",
-		"unsupported static fee":       "maxFeePerGas: '30000000000'",
-		"unsupported passive timeout":  "lateReceiptTimeoutMs: 600000",
-		"unsupported passive hash cap": "lateReceiptMaxHashes: 1024",
-		"negative fee":                 "maxFeeGwei: -1",
-		"nan fee":                      "maxFeeGwei: .nan",
-		"infinite fee":                 "maxFeeGwei: .inf",
-		"negative broadcast":           "broadcastTimeoutMs: -1",
-		"overflow broadcast":           "broadcastTimeoutMs: 9223372036854775807",
-		"pending shorter than bump":    "pendingTimeoutMs: 1000",
-		"horizon too long":             "horizon: {maxBlocks: 1025}",
-		"nan percentile":               "horizon: {congestedRewardPercentile: .nan}",
-		"tip ordering":                 "horizon: {tipFloorGwei: 16}",
-		"gas headroom":                 "horizon: {gasHeadroomBps: 2000, fallbackGasHeadroomBps: 1000}",
+		"removed horizon":        "horizon: {maxBlocks: 6}",
+		"removed replacement":    "replacementInterval: 30s",
+		"removed pending":        "pendingTimeout: 5m",
+		"removed shutdown":       "shutdownTimeout: 1m",
+		"fixed polling":          "pollIntervalMs: 2000",
+		"fixed broadcast":        "broadcastTimeoutMs: 5000",
+		"unsupported static fee": "maxFeePerGas: '30000000000'",
+		"negative fee":           "maxFeeGwei: -1",
+		"nan fee":                "maxFeeGwei: .nan",
+		"infinite fee":           "maxFeeGwei: .inf",
+		"negative priority":      "priorityFeeGwei: -1",
+		"nan priority":           "priorityFeeGwei: .nan",
+		"infinite priority":      "priorityFeeGwei: .inf",
+		"negative broadcast":     "broadcastTimeout: -1s",
+		"zero confirmations":     "confirmations: 0",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeConfig(t, validConfig+"transaction:\n  "+block+"\n")); err == nil {
@@ -206,18 +187,16 @@ func TestRuntimeRejectsManualProviders(t *testing.T) {
 	}
 }
 
-func TestCuratorEffectivePolicyAndFingerprint(t *testing.T) {
-	var fingerprint string
+func TestCuratorEffectivePolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name, fields string
 		timeout      int
 		bound        int64
-		equivalent   bool
 	}{
-		{"omitted", "", 10, 2097152, true},
-		{"explicit defaults", "  timeoutSeconds: 10\n  maxResponseBytes: 2097152\n", 10, 2097152, true},
-		{"changed timeout", "  timeoutSeconds: 11\n", 11, 2097152, false},
-		{"changed bound", "  maxResponseBytes: 1048576\n", 10, 1048576, false},
+		{"omitted", "", 10, 2097152},
+		{"explicit defaults", "  timeoutSeconds: 10\n  maxResponseBytes: 2097152\n", 10, 2097152},
+		{"changed timeout", "  timeoutSeconds: 11\n", 11, 2097152},
+		{"changed bound", "  maxResponseBytes: 1048576\n", 10, 1048576},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := Load(writeConfig(t, strings.Replace(validConfig, "curator:\n", "curator:\n"+tc.fields, 1)))
@@ -226,12 +205,6 @@ func TestCuratorEffectivePolicyAndFingerprint(t *testing.T) {
 			}
 			if cfg.Curator.TimeoutSeconds != tc.timeout || cfg.Curator.MaxResponseBytes != tc.bound {
 				t.Fatal("effective curator policy differs")
-			}
-			got := cfg.StrategyFingerprint(cfg.Strategies[0], common.HexToAddress("0x03"), common.HexToAddress("0x01"))
-			if fingerprint == "" {
-				fingerprint = got
-			} else if (got == fingerprint) != tc.equivalent {
-				t.Fatal("curator policy fingerprint differs")
 			}
 		})
 	}
@@ -280,40 +253,6 @@ func TestScalarStrategyAddressSchema(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Load(writeConfig(t, strategyConfig(body))); err == nil {
 				t.Fatal("invalid strategy accepted")
-			}
-		})
-	}
-}
-
-func TestAddressIdentityIgnoresCaseAndOrder(t *testing.T) {
-	account, caller := common.HexToAddress("0x03"), common.HexToAddress("0x01")
-	a, err := Load(writeConfig(t, strategyConfig("  - '0xaBcDeF0000000000000000000000000000000001'\n  - '0x0000000000000000000000000000000000000002'\n")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := Load(writeConfig(t, strategyConfig("  - '0x0000000000000000000000000000000000000002'\n  - '0xabcdef0000000000000000000000000000000001'\n")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, executor := range a.Strategies {
-		if a.StrategyFingerprint(executor, account, caller) != b.StrategyFingerprint(executor, account, caller) {
-			t.Fatal("case/order changed identity")
-		}
-	}
-	original := a.StrategyFingerprint(a.Strategies[0], account, caller)
-	for name, change := range map[string]func(*Config, *common.Address, *common.Address){
-		"account":       func(_ *Config, a, _ *common.Address) { *a = common.HexToAddress("0x04") },
-		"caller":        func(_ *Config, _, c *common.Address) { *c = common.HexToAddress("0x05") },
-		"chain":         func(c *Config, _, _ *common.Address) { c.Chain.ChainID++ },
-		"source":        func(c *Config, _, _ *common.Address) { c.Curator.URL = "http://other.invalid/api/v1" },
-		"credential":    func(c *Config, _, _ *common.Address) { c.Curator.APIKeyEnv = "OTHER_CURATOR_KEY" },
-		"sender policy": func(c *Config, _, _ *common.Address) { c.Transaction.MaxFeeGwei++ },
-	} {
-		t.Run(name, func(t *testing.T) {
-			c, a1, c1 := *a, account, caller
-			change(&c, &a1, &c1)
-			if c.StrategyFingerprint(c.Strategies[0], a1, c1) == original {
-				t.Fatal("changed identity invisible")
 			}
 		})
 	}

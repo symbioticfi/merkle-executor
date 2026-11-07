@@ -1,14 +1,18 @@
 package config
 
 import (
+	"strings"
 	"testing"
 )
 
-func TestProviderAliasesCannotBypassDurableFingerprint(t *testing.T) {
-	for _, inputs := range []string{"{0: &x '1', 1: '2', 2: *x}", "{0: '1', 1: &x '2', 2: *x}"} {
-		raw := strategyConfig("  - executor: '0x0000000000000000000000000000000000000002'\n    providers:\n      - name: static\n        config:\n          inputs: " + inputs + "\n")
+func TestConfigurationRejectsYAMLAnchorsAndAliases(t *testing.T) {
+	for _, value := range []string{
+		"  rpcUrl: &endpoint http://127.0.0.1:8545\n",
+		"  rpcUrl: &endpoint http://127.0.0.1:8545\n  writeRpcUrl: *endpoint\n",
+	} {
+		raw := strings.Replace(validConfig, "  rpcUrl: http://127.0.0.1:8545\n", value, 1)
 		if _, err := Load(writeConfig(t, raw)); err == nil {
-			t.Fatal("obsolete aliased provider accepted")
+			t.Fatal("YAML anchor or alias accepted")
 		}
 	}
 }

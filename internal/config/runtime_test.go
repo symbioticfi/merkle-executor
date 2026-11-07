@@ -12,7 +12,7 @@ func TestRuntimeReadAndTransactionPolicyComesFromYAML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Runtime.MaxPreparations != 7 || cfg.Reads.MaxConcurrent != 3 || cfg.Transaction.PollInterval != 3*time.Second || cfg.Transaction.Horizon.MaxBlocks != 6 {
+	if cfg.Runtime.MaxPreparations != 7 || cfg.Reads.MaxConcurrent != 3 || cfg.Transaction.PollInterval != 3*time.Second || cfg.Transaction.GasHeadroomBps != 500 {
 		t.Fatal("effective YAML policy lost")
 	}
 }

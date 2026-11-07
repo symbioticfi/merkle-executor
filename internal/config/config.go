@@ -1,20 +1,16 @@
-// Package config decodes strict YAML over the versioned file-driven defaults.
+// Package config decodes strict YAML over file-driven defaults.
 package config
 
 import (
 	"bytes"
 	_ "embed"
-	"encoding/json"
 	"io"
 	"math"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/internal/transaction"
 	"github.com/symbioticfi/merkle-executor/sdk/chainio"
@@ -35,7 +31,6 @@ type Config struct {
 	Transaction   transaction.Config `yaml:"transaction"`
 	Runtime       Runtime            `yaml:"runtime"`
 	Reads         chainio.Limits     `yaml:"reads"`
-	StateDir      string             `yaml:"stateDir"`
 	Observability Observability      `yaml:"observability"`
 	Strategies    []string           `yaml:"strategies"`
 }
@@ -119,13 +114,6 @@ func Load(path string) (*Config, error) {
 	}
 	cfg.Chain.RPCURL = os.ExpandEnv(cfg.Chain.RPCURL)
 	cfg.Chain.WriteRPCURL = os.ExpandEnv(cfg.Chain.WriteRPCURL)
-	base, err := filepath.Abs(filepath.Dir(path))
-	if err != nil {
-		return nil, err
-	}
-	if !filepath.IsAbs(cfg.StateDir) {
-		cfg.StateDir = filepath.Join(base, cfg.StateDir)
-	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -167,9 +155,6 @@ func (c *Config) Validate() error {
 	if c.Mode == "send" && c.Signer.KeyEnv == "" {
 		return errors.New("send mode requires signer.keyEnv")
 	}
-	if c.StateDir == "" {
-		return errors.New("stateDir required")
-	}
 	if c.Runtime.PollInterval <= 0 || c.Runtime.OperationTimeout <= 0 || c.Runtime.HTTPTimeout <= 0 || c.Runtime.StrategyInterval < 0 || c.Runtime.ShutdownTimeout <= 0 || c.Runtime.RecipeCacheBytes < 0 || c.Runtime.MaxPreparations <= 0 || c.Runtime.MaxStrategies <= 0 {
 		return errors.New("invalid runtime resource policy")
 	}
@@ -203,33 +188,4 @@ func (c *Config) Validate() error {
 		c.Strategies[i] = canonical
 	}
 	return nil
-}
-func (c *Config) StrategyFingerprint(executor string, account, caller common.Address) string {
-	raw, _ := json.Marshal(struct {
-		Policy                    string
-		Executor, Account, Caller common.Address
-		ChainID                   uint64
-		Curator                   Curator
-		Transaction               transaction.Config
-	}{"2", common.HexToAddress(executor), account, caller, c.Chain.ChainID, c.Curator, c.Transaction})
-	return crypto.Keccak256Hash(raw).Hex()
-}
-
-// LegacyStrategyFingerprint preserves the exact v1 serializer for offline import.
-func (c *Config) LegacyStrategyFingerprint(executor string, account, caller common.Address) string {
-	type oldCurator struct {
-		URL       string `yaml:"url"`
-		APIKeyEnv string `yaml:"apiKeyEnv,omitempty"`
-	}
-	type oldTx struct {
-		MaxFeeGwei float64 `yaml:"maxFeeGwei"`
-	}
-	raw, _ := json.Marshal(struct {
-		Policy                    string
-		Executor, Account, Caller common.Address
-		ChainID                   uint64
-		Curator                   oldCurator
-		TxManager                 oldTx
-	}{"1", common.HexToAddress(executor), account, caller, c.Chain.ChainID, oldCurator{c.Curator.URL, c.Curator.APIKeyEnv}, oldTx{c.Transaction.MaxFeeGwei}})
-	return crypto.Keccak256Hash(raw).Hex()
 }

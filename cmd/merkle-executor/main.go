@@ -53,6 +53,5 @@ func root() *cobra.Command {
 		return err
 	}}
 	cmd.AddCommand(run, plan, check, v)
-	cmd.AddCommand(stateCommands()...)
 	return cmd
 }

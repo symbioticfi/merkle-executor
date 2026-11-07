@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,14 +13,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"gopkg.in/yaml.v3"
-	"math/big"
 
 	"github.com/symbioticfi/merkle-executor/internal/config"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	rt "github.com/symbioticfi/merkle-executor/sdk/runtime"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func testCLIConfig(directory string) config.Config {
@@ -36,7 +30,6 @@ func testCLIConfig(directory string) config.Config {
 	}
 	cfg.Signer = config.Signer{Address: common.HexToAddress("0xabcd").Hex(), KeyEnv: "MERKLE_CLI_TEST_KEY"}
 	cfg.Transaction.MaxFeeGwei = 30
-	cfg.StateDir = filepath.Join(directory, "state")
 	return *cfg
 }
 
@@ -69,7 +62,7 @@ func executeCLI(t *testing.T, args ...string) (string, error) {
 func TestRootCommandsAndRequiredFlags(t *testing.T) {
 	for name, flags := range map[string][]string{
 		"run": {"config", "once"}, "plan": {"config"}, "check-config": {"config"},
-		"status": {"config"}, "reset-strategy": {"config", "executor"}, "version": {},
+		"version": {},
 	} {
 		t.Run(name, func(t *testing.T) {
 			command, _, err := root().Find([]string{name})
@@ -124,296 +117,31 @@ func TestCheckConfigDoesNotReadKeyOrUseRPC(t *testing.T) {
 	if calls.Load() != 0 {
 		t.Fatal("check-config contacted RPC")
 	}
-	if _, err := os.Stat(cfg.StateDir); !os.IsNotExist(err) {
-		t.Fatalf("check-config created state: %v", err)
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("check-config created runtime files: %v / %v", entries, err)
 	}
 }
 
-func TestStateIdentityValidation(t *testing.T) {
-	store, err := state.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	caller := common.HexToAddress("0xabcdef")
-	saved := rt.Deployment{Kind: "deployment", Version: 2, ChainID: big.NewInt(31337), Caller: caller}
-	if err = store.ActivateNamespace(rt.Namespace, map[string]any{"deployment": saved}); err != nil {
-		t.Fatal(err)
-	}
-	load := func(key string, out any) (bool, error) { return store.LoadNamespace(rt.Namespace, key, out) }
-	for _, assertion := range []string{caller.Hex(), strings.ToLower(caller.Hex()), ""} {
-		if err = checkStateIdentity(load, 31337, assertion); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, other := range []struct {
-		chain  uint64
-		caller string
-	}{{1, caller.Hex()}, {31337, common.HexToAddress("0x9999").Hex()}} {
-		if err = checkStateIdentity(load, other.chain, other.caller); err == nil {
-			t.Fatal("foreign identity accepted")
-		}
-	}
-	var retained rt.Deployment
-	if found, err := load("deployment", &retained); err != nil || !found || retained.ChainID.Cmp(saved.ChainID) != 0 || retained.Caller != caller {
-		t.Fatal("identity overwritten", err)
-	}
-}
-
-func seedCLIState(t *testing.T, cfg config.Config, job rt.Workflow, occupied bool) *state.Store {
-	t.Helper()
-	store, err := state.Open(cfg.StateDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	job.Name = cfg.Strategies[0]
-	job.Version = 2
-	job.IdentityVersion = 2
-	job.Reserved = occupied
-	if err = store.ActivateNamespace(rt.Namespace, map[string]any{"deployment": rt.Deployment{Kind: "deployment", Version: 2, ChainID: new(big.Int).SetUint64(cfg.Chain.ChainID), Caller: common.HexToAddress(cfg.Signer.Address)}, rt.WorkflowKey(job.Name): job}); err != nil {
-		t.Fatal(err)
-	}
-	return store
-}
-
-func TestStatusWhileDaemonOwnsState(t *testing.T) {
-	directory := t.TempDir()
-	cfg := testCLIConfig(directory)
-	cfg.Mode = "send"
-	cfg.Curator.APIKeyEnv = "MISSING_CURATOR_STATUS_KEY"
-	t.Setenv(cfg.Signer.KeyEnv, "invalid-key-that-status-must-not-read")
-	path := writeCLIConfig(t, directory, cfg)
-	job := rt.Workflow{ID: "funding-1", Phase: "authorized", Transaction: &rt.Transaction{Execution: &chainio.Execution{TxHash: common.HexToHash("0x1234")}}, Plan: rt.Plan{Operations: []provider.Record{{Progress: provider.Progress{Outcome: "waiting"}, Output: provider.Output{Data: json.RawMessage(`{"privateDetail":"must-not-be-emitted"}`)}}}}}
-	store := seedCLIState(t, cfg, job, false)
-	// Keep the exclusive daemon lock throughout the status command.
-	output, err := executeCLI(t, "status", "--config", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var rows []struct {
-		Identifier, ID, Phase, Transaction string
-		Outcomes                           []string
-	}
-	if err = json.Unmarshal([]byte(output), &rows); err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 || rows[0].Identifier != cfg.Strategies[0] || rows[0].ID != job.ID || rows[0].Phase != "authorized" || rows[0].Transaction != job.Transaction.Execution.TxHash.Hex() || len(rows[0].Outcomes) != 1 || rows[0].Outcomes[0] != "waiting" {
-		t.Fatalf("status lost saved progress: %s", output)
-	}
-	if strings.Contains(output, "must-not-be-emitted") {
-		t.Fatal("status exposed provider runtime data")
-	}
-	var retained rt.Workflow
-	if found, err := store.LoadNamespace(rt.Namespace, rt.WorkflowKey(cfg.Strategies[0]), &retained); err != nil || !found || retained.Phase != "authorized" {
-		t.Fatalf("status mutated work: %v", err)
-	}
-}
-
-func TestStateCommandsRejectOtherDeployment(t *testing.T) {
-	for name, mutate := range map[string]func(*config.Config){
-		"chain":  func(c *config.Config) { c.Chain.ChainID++ },
-		"caller": func(c *config.Config) { c.Signer.Address = common.HexToAddress("0x9999").Hex() },
-	} {
-		t.Run(name, func(t *testing.T) {
-			directory := t.TempDir()
-			cfg := testCLIConfig(directory)
-			store := seedCLIState(t, cfg, rt.Workflow{ID: "funding-1", Phase: "settled"}, false)
-			if err := store.Close(); err != nil {
-				t.Fatal(err)
-			}
-			mutate(&cfg)
-			path := writeCLIConfig(t, directory, cfg)
-			for _, args := range [][]string{{"status", "--config", path}, {"reset-strategy", "--config", path, "--executor", cfg.Strategies[0]}} {
-				if _, err := executeCLI(t, args...); err == nil || !strings.Contains(err.Error(), "another chain or caller") {
-					t.Fatalf("foreign deployment accepted: %v", err)
-				}
-			}
-			var retained rt.Workflow
-			if found, err := state.ReadNamespace(cfg.StateDir, rt.Namespace, rt.WorkflowKey(cfg.Strategies[0]), &retained); err != nil || !found {
-				t.Fatalf("foreign reset removed job: %v", err)
-			}
-		})
-	}
-}
-
-func TestResetStrategyRequiresTerminalAcknowledgedWork(t *testing.T) {
-	for _, tc := range []struct {
-		name, phase       string
-		occupied, allowed bool
-	}{
-		{"prepared", "prepared", false, false}, {"authorized", "authorized", false, false},
-		{"invalid", "unknown", false, false}, {"unacknowledged", "settled", true, false},
-		{"settled", "settled", false, true}, {"failed", "failed", false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			directory := t.TempDir()
-			cfg := testCLIConfig(directory)
-			cfg.Curator.APIKeyEnv = "MISSING_CURATOR_RESET_KEY"
-			path := writeCLIConfig(t, directory, cfg)
-			store := seedCLIState(t, cfg, rt.Workflow{ID: "funding-1", Phase: tc.phase}, tc.occupied)
-			if err := store.Close(); err != nil {
-				t.Fatal(err)
-			}
-			_, err := executeCLI(t, "reset-strategy", "--config", path, "--executor", cfg.Strategies[0])
-			if (err == nil) != tc.allowed {
-				t.Fatalf("reset allowed=%t, error %v", tc.allowed, err)
-			}
-			var retained rt.Workflow
-			found, err := state.ReadNamespace(cfg.StateDir, rt.Namespace, rt.WorkflowKey(cfg.Strategies[0]), &retained)
-			if err != nil || found == tc.allowed {
-				t.Fatalf("wrong checkpoint retention: found=%t / %v", found, err)
-			}
-		})
-	}
-}
-
-func TestStatusWithoutIdentityDoesNotCreateState(t *testing.T) {
-	directory := t.TempDir()
-	cfg := testCLIConfig(directory)
-	path := writeCLIConfig(t, directory, cfg)
-	if _, err := executeCLI(t, "status", "--config", path); err == nil {
-		t.Fatal("unbound state accepted")
-	}
-	if _, err := os.Stat(cfg.StateDir); !os.IsNotExist(err) {
-		t.Fatalf("status created state: %v", err)
-	}
-}
-
-func TestOfflineStateCommandsUseSavedCallerWhenAssertionOmitted(t *testing.T) {
-	for _, command := range []string{"status", "reset-strategy"} {
-		t.Run(command, func(t *testing.T) {
-			directory := t.TempDir()
-			cfg := testCLIConfig(directory)
-			store := seedCLIState(t, cfg, rt.Workflow{ID: "owned", Phase: "settled"}, false)
-			if err := store.Close(); err != nil {
-				t.Fatal(err)
-			}
-			cfg.Signer = config.Signer{}
-			t.Setenv("MERKLE_EXECUTOR_PRIVATE_KEY", "invalid-offline-key-must-not-be-read")
-			path := writeCLIConfig(t, directory, cfg)
-			args := []string{command, "--config", path}
-			if command == "reset-strategy" {
-				args = append(args, "--executor", cfg.Strategies[0])
-			}
-			if _, err := executeCLI(t, args...); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
-func TestResetUsesExecutorFlag(t *testing.T) {
-	cmd, _, err := root().Find([]string{"reset-strategy"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cmd.Flags().Lookup("executor") == nil || cmd.Flags().Lookup("name") != nil {
-		t.Fatal("reset must accept --executor and reject --name")
-	}
-}
-
-func TestResetRejectsInvalidAddressBeforeOpeningState(t *testing.T) {
-	for _, value := range []string{"invalid", "0x1", "0x0000000000000000000000000000000000000000"} {
-		t.Run(value, func(t *testing.T) {
-			directory := t.TempDir()
-			cfg := testCLIConfig(directory)
-			path := writeCLIConfig(t, directory, cfg)
-			if _, err := executeCLI(t, "reset-strategy", "--config", path, "--executor", value); err == nil || !strings.Contains(err.Error(), "full nonzero address") {
-				t.Fatalf("invalid reset: %v", err)
-			}
-			if _, err := os.Stat(cfg.StateDir); !os.IsNotExist(err) {
-				t.Fatalf("invalid reset opened state: %v", err)
-			}
-		})
-	}
-	if _, err := executeCLI(t, "reset-strategy", "--config", "unused.yaml", "--name", "old-label"); err == nil || !strings.Contains(err.Error(), "unknown flag") {
-		t.Fatalf("unsupported name flag accepted: %v", err)
-	}
-}
-
-func TestResetCanonicalizesExecutorAddress(t *testing.T) {
-	directory := t.TempDir()
-	cfg := testCLIConfig(directory)
-	cfg.Strategies = []string{"0xabcdef0000000000000000000000000000000001"}
-	path := writeCLIConfig(t, directory, cfg)
-	store := seedCLIState(t, cfg, rt.Workflow{ID: "owned", Phase: "settled"}, false)
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := executeCLI(t, "reset-strategy", "--config", path, "--executor", "0xABCDEF0000000000000000000000000000000001"); err != nil {
-		t.Fatal(err)
-	}
-	if found, err := state.ReadNamespace(cfg.StateDir, rt.Namespace, rt.WorkflowKey(cfg.Strategies[0]), new(any)); err != nil || found {
-		t.Fatalf("canonical checkpoint retained: %v", err)
-	}
-}
-
-func TestStatusRetainsRemovedExecutors(t *testing.T) {
-	directory := t.TempDir()
-	cfg := testCLIConfig(directory)
-	path := writeCLIConfig(t, directory, cfg)
-	store := seedCLIState(t, cfg, rt.Workflow{ID: "new", Phase: "settled"}, false)
-	removed := []string{strings.ToLower(common.HexToAddress("0x2222").Hex()), strings.ToLower(common.HexToAddress("0x3333").Hex())}
-	for _, id := range removed {
-		if err := store.SaveNamespace(rt.Namespace, rt.WorkflowKey(id), rt.Workflow{Version: 2, IdentityVersion: 2, Name: id, ID: id, Phase: "authorized"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	output, err := executeCLI(t, "status", "--config", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var rows []struct{ Identifier string }
-	if err := json.Unmarshal([]byte(output), &rows); err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 3 || rows[0].Identifier != cfg.Strategies[0] || rows[1].Identifier != removed[0] || rows[2].Identifier != removed[1] {
-		t.Fatalf("removed identifiers hidden: %s", output)
-	}
-	for _, id := range removed {
-		var job rt.Workflow
-		if found, err := store.LoadNamespace(rt.Namespace, rt.WorkflowKey(id), &job); err != nil || !found || job.Phase != "authorized" {
-			t.Fatal("status changed removed job", err)
+func TestRemovedStateCommandsAreUnknown(t *testing.T) {
+	for _, name := range []string{"status", "reset-strategy"} {
+		if _, err := executeCLI(t, name); err == nil || !strings.Contains(err.Error(), "unknown command") {
+			t.Fatalf("removed command %s accepted: %v", name, err)
 		}
 	}
 }
 
-func TestStatusRejectsInvalidSavedExecutorIdentity(t *testing.T) {
-	for _, id := range []string{"label", "0x1", "0x0000000000000000000000000000000000000000", "0xABCDEF0000000000000000000000000000000001"} {
-		t.Run(id, func(t *testing.T) {
-			directory := t.TempDir()
-			cfg := testCLIConfig(directory)
-			path := writeCLIConfig(t, directory, cfg)
-			store := seedCLIState(t, cfg, rt.Workflow{ID: "owned", Phase: "authorized"}, false)
-			defer store.Close()
-			if err := store.SaveNamespace(rt.Namespace, rt.WorkflowKey(id), rt.Workflow{Version: 2, Name: id, ID: "invalid", Phase: "authorized"}); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := executeCLI(t, "status", "--config", path); err == nil || !strings.Contains(err.Error(), "invalid saved executor address") {
-				t.Fatalf("invalid saved identity accepted: %v", err)
-			}
-			var job rt.Workflow
-			if found, err := store.LoadNamespace(rt.Namespace, rt.WorkflowKey(cfg.Strategies[0]), &job); err != nil || !found || job.ID != "owned" || job.Phase != "authorized" {
-				t.Fatal("status altered active job", err)
-			}
-		})
-	}
-}
-
-func TestResetRejectsUnknownExecutorAndRetainsCheckpoint(t *testing.T) {
+func TestCheckConfigRejectsRemovedStateDirectory(t *testing.T) {
 	directory := t.TempDir()
-	cfg := testCLIConfig(directory)
-	path := writeCLIConfig(t, directory, cfg)
-	store := seedCLIState(t, cfg, rt.Workflow{ID: "owned", Phase: "settled"}, false)
-	if err := store.Close(); err != nil {
+	path := writeCLIConfig(t, directory, testCLIConfig(directory))
+	raw, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := executeCLI(t, "reset-strategy", "--config", path, "--executor", "0x0000000000000000000000000000000000009999"); err == nil || !strings.Contains(err.Error(), "unknown strategy") {
-		t.Fatalf("wrong executor accepted: %v", err)
+	if err = os.WriteFile(path, append(raw, []byte("stateDir: state\n")...), 0600); err != nil {
+		t.Fatal(err)
 	}
-	var retained rt.Workflow
-	if found, err := state.ReadNamespace(cfg.StateDir, rt.Namespace, rt.WorkflowKey(cfg.Strategies[0]), &retained); err != nil || !found || retained.ID != "owned" {
-		t.Fatal("wrong executor changed checkpoint", err)
+	if _, err := executeCLI(t, "check-config", "--config", path); err == nil {
+		t.Fatal("removed stateDir accepted")
 	}
 }

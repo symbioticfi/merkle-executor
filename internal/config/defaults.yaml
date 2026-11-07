@@ -1,5 +1,4 @@
 mode: simulate
-stateDir: state
 signer:
   keyEnv: MERKLE_EXECUTOR_PRIVATE_KEY
 curator:
@@ -32,24 +31,10 @@ reads:
   collectionWindow: 1ms
 transaction:
   maxFeeGwei: 0
+  priorityFeeGwei: 0.1
+  gasHeadroomBps: 500
   confirmations: 2
   pollInterval: 2s
   broadcastTimeout: 5s
-  replacementInterval: 30s
-  pendingTimeout: 5m
-  shutdownTimeout: 1m
   readTimeout: 2s
   estimateTimeout: 5s
-  horizon:
-    maxBlocks: 6
-    blockTime: 12s
-    tipFloorGwei: 0.02
-    fullBlockTipGwei: 0.1
-    congestedTipFloorGwei: 0.2
-    congestedTipCapGwei: 15
-    congestedRewardBlocks: 3
-    congestedRewardPercentile: 50
-    escalateAfterFullBlocks: 2
-    stallAfterBlocks: 3
-    gasHeadroomBps: 500
-    fallbackGasHeadroomBps: 1000
