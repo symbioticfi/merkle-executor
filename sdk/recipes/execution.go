@@ -8,7 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 // PrepareExecution encloses discovery, preparation and execution validation in
@@ -19,7 +19,7 @@ func PrepareExecution(ctx context.Context, reader Reader, executor, account, cal
 	if build == nil {
 		return errors.New("expected account, caller and preparation callback required")
 	}
-	return PrepareExecutionWithOptions(ctx, reader, executor, account, caller, PreparationOptions{}, func(s Snapshot, r Recipe, _ protocolio.ReadAccessor) ([]byte, []common.Hash, error) {
+	return PrepareExecutionWithOptions(ctx, reader, executor, account, caller, PreparationOptions{}, func(s Snapshot, r Recipe, _ chainio.ReadAccessor) ([]byte, []common.Hash, error) {
 		return build(s, r)
 	})
 }
@@ -28,8 +28,10 @@ func PrepareExecution(ctx context.Context, reader Reader, executor, account, cal
 // independently guarded discovery APIs. Stage must perform only pure local work.
 type PreparationOptions struct {
 	ChainID *big.Int
-	Cache   *RecipeCache
-	Stage   func(protocolio.PreparationPin) []protocolio.ReadRequest
+	// Pin is a shared opening head, never reused for a closing canonical guard.
+	Pin   *types.Header
+	Cache *RecipeCache
+	Stage func(chainio.PreparationPin) []chainio.ReadRequest
 	// VerifySimulation checks returned values from the original executor code.
 	VerifySimulation func([]byte) error
 }
@@ -37,7 +39,7 @@ type PreparationOptions struct {
 // PrepareExecutionWithOptions retains every execution guard while allowing
 // independent provider reads beside initial metadata. The build callback only
 // receives staged results after recipe evidence and configured identity checks.
-func PrepareExecutionWithOptions(ctx context.Context, reader Reader, executor, account, caller common.Address, options PreparationOptions, build func(Snapshot, Recipe, protocolio.ReadAccessor) ([]byte, []common.Hash, error)) error {
+func PrepareExecutionWithOptions(ctx context.Context, reader Reader, executor, account, caller common.Address, options PreparationOptions, build func(Snapshot, Recipe, chainio.ReadAccessor) ([]byte, []common.Hash, error)) error {
 	if account == (common.Address{}) || caller == (common.Address{}) || build == nil {
 		return errors.New("expected account, caller and preparation callback required")
 	}
@@ -64,13 +66,13 @@ func PrepareExecutionWithOptions(ctx context.Context, reader Reader, executor, a
 	requests := snapshotRequests(executor, account, current.Number)
 	requests = append(requests, roles...)
 	requests = append(requests, executionRead(snapshot, caller, calldata, new(big.Int).SetUint64(snapshot.BlockNumber)))
-	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
+	reads, err := chainio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
 		return err
 	}
 	// Preserve the planner's permission -> simulation -> current metadata priority.
 	// The opening headers necessarily run first to pin independent current reads.
-	if err = verifyRoleResults(unique, func(i int) protocolio.ReadResult { return reads.At(5 + i) }); err != nil {
+	if err = verifyRoleResults(unique, func(i int) chainio.ReadResult { return reads.At(5 + i) }); err != nil {
 		return err
 	}
 	if reads.At(len(requests)-1).Err != nil {
@@ -125,7 +127,7 @@ func validateExecutionResults(ctx context.Context, reader Reader, snapshot Snaps
 	}
 	requests := snapshotRequests(snapshot.Executor, snapshot.Account, current.Number)
 	requests = append(requests, executionRead(snapshot, caller, calldata, nil))
-	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
+	reads, err := chainio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
 		return nil, err
 	}
@@ -149,10 +151,10 @@ func validateExecutionResults(ctx context.Context, reader Reader, snapshot Snaps
 	}
 	return raw, nil
 }
-func executionRead(snapshot Snapshot, caller common.Address, calldata []byte, block *big.Int) protocolio.ReadRequest {
-	return protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: caller, To: &snapshot.Executor, Data: calldata}, Block: block}
+func executionRead(snapshot Snapshot, caller common.Address, calldata []byte, block *big.Int) chainio.ReadRequest {
+	return chainio.ReadRequest{Kind: chainio.ReadCall, Call: ethereum.CallMsg{From: caller, To: &snapshot.Executor, Data: calldata}, Block: block}
 }
-func validateCurrent(snapshot Snapshot, header *types.Header, reads *protocolio.ReadResults, caller common.Address) error {
+func validateCurrent(snapshot Snapshot, header *types.Header, reads *chainio.ReadResults, caller common.Address) error {
 	current, err := decodeCurrentSnapshot(snapshot, header, reads)
 	if err != nil {
 		return err
@@ -167,7 +169,7 @@ func openExecution(ctx context.Context, reader Reader, snapshot Snapshot, caller
 		return nil, errors.New("snapshot caller does not match configured sender")
 	}
 	originalNumber := new(big.Int).SetUint64(snapshot.BlockNumber)
-	reads, err := protocolio.ReadGroup(ctx, reader, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: originalNumber}, protocolio.ReadRequest{Kind: protocolio.ReadHeader})
+	reads, err := chainio.ReadGroup(ctx, reader, chainio.ReadRequest{Kind: chainio.ReadHeader, Block: originalNumber}, chainio.ReadRequest{Kind: chainio.ReadHeader})
 	if err != nil {
 		return nil, err
 	}
@@ -197,17 +199,17 @@ func openExecution(ctx context.Context, reader Reader, snapshot Snapshot, caller
 	return latest.Header, nil
 }
 func closeExecution(ctx context.Context, reader Reader, snapshot Snapshot, current *types.Header) error {
-	requests := []protocolio.ReadRequest{{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(snapshot.BlockNumber)}}
+	requests := []chainio.ReadRequest{{Kind: chainio.ReadHeader, Block: new(big.Int).SetUint64(snapshot.BlockNumber)}}
 	expected := []common.Hash{snapshot.BlockHash}
 	if current.Number.Uint64() == snapshot.BlockNumber {
 		if current.Hash() != snapshot.BlockHash {
 			return errors.New("conflicting headers at snapshot height")
 		}
 	} else {
-		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).Set(current.Number)})
+		requests = append(requests, chainio.ReadRequest{Kind: chainio.ReadHeader, Block: new(big.Int).Set(current.Number)})
 		expected = append(expected, current.Hash())
 	}
-	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
+	reads, err := chainio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
 		return err
 	}
@@ -226,12 +228,18 @@ func closeExecution(ctx context.Context, reader Reader, snapshot Snapshot, curre
 	return nil
 }
 
-func discoverPreparation(ctx context.Context, reader Reader, executor, account, caller common.Address, options PreparationOptions) (Snapshot, Recipe, protocolio.ReadAccessor, *recipeEvidence, error) {
-	if options.Stage == nil && options.Cache == nil {
+func discoverPreparation(ctx context.Context, reader Reader, executor, account, caller common.Address, options PreparationOptions) (Snapshot, Recipe, chainio.ReadAccessor, *recipeEvidence, error) {
+	if options.Stage == nil && options.Cache == nil && options.Pin == nil {
 		snapshot, recipe, err := discoverForBuild(ctx, reader, executor, account, nil)
 		return snapshot, recipe, nil, nil, err
 	}
-	header, err := reader.HeaderByNumber(ctx, nil)
+	var header *types.Header
+	var err error
+	if options.Pin != nil {
+		header = types.CopyHeader(options.Pin)
+	} else {
+		header, err = reader.HeaderByNumber(ctx, nil)
+	}
 	if err != nil {
 		return Snapshot{}, Recipe{}, nil, nil, errors.Errorf("pin block: %w", err)
 	}
@@ -241,7 +249,7 @@ func discoverPreparation(ctx context.Context, reader Reader, executor, account, 
 	if executor == (common.Address{}) {
 		return Snapshot{}, Recipe{}, nil, nil, errors.New("zero executor address")
 	}
-	pin := protocolio.PreparationPin{BlockNumber: header.Number.Uint64(), BlockHash: header.Hash(), Timestamp: header.Time, Executor: executor, Account: account, Caller: caller}
+	pin := chainio.PreparationPin{BlockNumber: header.Number.Uint64(), BlockHash: header.Hash(), Timestamp: header.Time, Executor: executor, Account: account, Caller: caller}
 	if options.ChainID != nil {
 		pin.ChainID = options.ChainID.String()
 	}
@@ -251,16 +259,16 @@ func discoverPreparation(ctx context.Context, reader Reader, executor, account, 
 	key := evidenceKey{chainID: pin.ChainID, executor: executor}
 	hint := options.Cache.load(key) // Freeze once; never consult a later concurrent entry.
 	requests := snapshotRequests(executor, account, header.Number)
-	var extra []protocolio.ReadRequest
+	var extra []chainio.ReadRequest
 	if options.Stage != nil {
 		extra = options.Stage(pin)
 	}
 	requests = append(requests, extra...)
 	hintIndex := len(requests)
 	if hint != nil && hint.block != pin.BlockNumber {
-		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(hint.block)})
+		requests = append(requests, chainio.ReadRequest{Kind: chainio.ReadHeader, Block: new(big.Int).SetUint64(hint.block)})
 	}
-	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
+	reads, err := chainio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
 		return Snapshot{}, Recipe{}, nil, nil, errors.Errorf("read executor state: %w", err)
 	}
@@ -307,9 +315,9 @@ func discoverPreparation(ctx context.Context, reader Reader, executor, account, 
 	if !options.Cache.retainable(pending) {
 		pending = nil
 	}
-	return snapshot, recipe, func(i int) protocolio.ReadResult {
+	return snapshot, recipe, func(i int) chainio.ReadResult {
 		if i < 0 || i >= len(extra) {
-			return protocolio.ReadResult{Err: errors.New("staged result index outside preparation")}
+			return chainio.ReadResult{Err: errors.New("staged result index outside preparation")}
 		}
 		return reads.At(5 + i)
 	}, pending, nil

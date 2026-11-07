@@ -11,7 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 type discoveryReader struct {
@@ -98,7 +98,7 @@ func (r *discoveryReader) FilterLogs(context.Context, ethereum.FilterQuery) ([]t
 
 type discoveryBatch struct{ *discoveryReader }
 
-func (r discoveryBatch) BatchRead(ctx context.Context, qs []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
+func (r discoveryBatch) BatchRead(ctx context.Context, qs []chainio.ReadRequest) ([]chainio.ReadResult, error) {
 	r.batches++
 	if len(qs) > 256 {
 		r.t.Fatal("unbounded group")
@@ -109,9 +109,9 @@ func (r discoveryBatch) BatchRead(ctx context.Context, qs []protocolio.ReadReque
 	if r.mode == "shape" {
 		return nil, nil
 	}
-	results := make([]protocolio.ReadResult, len(qs))
+	results := make([]chainio.ReadResult, len(qs))
 	for i, q := range qs {
-		if q.Kind != protocolio.ReadCall || !q.MulticallSafe {
+		if q.Kind != chainio.ReadCall || !q.MulticallSafe {
 			r.t.Fatal("account getter lost aggregation")
 		}
 		results[i].Data, results[i].Err = r.CallContract(ctx, q.Call, q.Block)

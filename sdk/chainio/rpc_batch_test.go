@@ -1,4 +1,4 @@
-package protocolio
+package chainio
 
 import (
 	"context"
@@ -26,7 +26,7 @@ func (testAggregateCodec) Decode(raw []byte) ([]AggregateResult, error) {
 }
 
 func TestRPCBatchReaderPreservesOrderAndSeparatesCallerAndBlock(t *testing.T) {
-	a, b, aggregate := common.HexToAddress("0x01"), common.HexToAddress("0x02"), common.HexToAddress(StandardMulticall3)
+	a, b, aggregate := common.HexToAddress("0x01"), common.HexToAddress("0x02"), common.HexToAddress("0xcA11bde05977b3631167028862bE2a173976CA11")
 	requests := []ReadRequest{ContractRead(a, []byte{1}, big.NewInt(12), true), ContractRead(b, []byte{2}, big.NewInt(12), true), ContractRead(a, []byte{3}, big.NewInt(12), true), ContractRead(a, []byte{4}, big.NewInt(13), true)}
 	requests[2].Call.From = b
 	calls := 0
@@ -148,5 +148,35 @@ func TestHTTPBatchRejectsAmbiguousWireResponsesWithoutRetry(t *testing.T) {
 				t.Fatal("private body exposed")
 			}
 		})
+	}
+}
+
+func TestRPCBatchCodeOverridePreservesCompleteContext(t *testing.T) {
+	to, from := common.HexToAddress("0x11"), common.HexToAddress("0x22")
+	msg := ethereum.CallMsg{From: from, To: &to, Data: []byte{1, 2}, Value: big.NewInt(3), Gas: 4, GasPrice: big.NewInt(5), GasFeeCap: big.NewInt(6), GasTipCap: big.NewInt(7), BlobGasFeeCap: big.NewInt(8), BlobHashes: []common.Hash{common.HexToHash("0x09")}}
+	reader := RPCBatchReader{Multicall: common.HexToAddress("0x33"), Codec: testAggregateCodec{}, Call: func(_ context.Context, b []rpc.BatchElem) error {
+		if len(b) != 2 {
+			t.Fatal("override aggregated")
+		}
+		for i := range b {
+			if len(b[i].Args) != 3 {
+				t.Fatal("missing code override")
+			}
+			raw, _ := json.Marshal(b[i].Args[0])
+			expected, _ := json.Marshal(CallArgument(msg))
+			if string(raw) != string(expected) {
+				t.Fatalf("context changed: %s", raw)
+			}
+			over := b[i].Args[2].(map[common.Address]any)
+			if _, ok := over[to]; !ok {
+				t.Fatal("wrong override target")
+			}
+			*b[i].Result.(*hexutil.Bytes) = []byte{1}
+		}
+		return nil
+	}}
+	q := ReadRequest{Kind: ReadCall, Call: msg, Block: big.NewInt(10), CodeOverride: []byte{0x60}, MulticallSafe: true}
+	if _, e := reader.BatchRead(t.Context(), []ReadRequest{q, q}); e != nil {
+		t.Fatal(e)
 	}
 }

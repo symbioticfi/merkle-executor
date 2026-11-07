@@ -9,7 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 type Reader interface {
@@ -68,12 +68,12 @@ func discoverRecipe(ctx context.Context, reader Reader, snapshot Snapshot, heade
 	eventBlock := new(big.Int).SetUint64(snapshot.RecipeBlock)
 	eventID := executorABI.GetABI().Events["SetRecipe"].ID
 	query := ethereum.FilterQuery{FromBlock: eventBlock, ToBlock: eventBlock, Addresses: []common.Address{snapshot.Executor}, Topics: [][]common.Hash{{eventID}}}
-	requests := []protocolio.ReadRequest{}
+	requests := []chainio.ReadRequest{}
 	if snapshot.RecipeBlock != snapshot.BlockNumber {
-		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: eventBlock})
+		requests = append(requests, chainio.ReadRequest{Kind: chainio.ReadHeader, Block: eventBlock})
 	}
-	requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadLogs, Filter: query})
-	evidence, err := protocolio.ReadGroup(ctx, reader, requests...)
+	requests = append(requests, chainio.ReadRequest{Kind: chainio.ReadLogs, Filter: query})
+	evidence, err := chainio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
 		return Recipe{}, common.Hash{}, errors.Errorf("read recipe evidence: %w", err)
 	}
@@ -137,15 +137,15 @@ func validateRecipeMetadata(snapshot Snapshot) error {
 	return nil
 }
 
-func snapshotRequests(executor, expectedAccount common.Address, block *big.Int) []protocolio.ReadRequest {
-	requests := []protocolio.ReadRequest{
-		protocolio.ContractRead(executor, executorABI.PackAccount(), block, true),
-		protocolio.ContractRead(executor, executorABI.PackCaller(), block, true),
-		protocolio.ContractRead(executor, executorABI.PackRecipeHash(), block, true),
-		protocolio.ContractRead(executor, executorABI.PackRecipeBlock(), block, true),
+func snapshotRequests(executor, expectedAccount common.Address, block *big.Int) []chainio.ReadRequest {
+	requests := []chainio.ReadRequest{
+		chainio.ContractRead(executor, executorABI.PackAccount(), block, true),
+		chainio.ContractRead(executor, executorABI.PackCaller(), block, true),
+		chainio.ContractRead(executor, executorABI.PackRecipeHash(), block, true),
+		chainio.ContractRead(executor, executorABI.PackRecipeBlock(), block, true),
 	}
 	if expectedAccount != (common.Address{}) {
-		requests = append(requests, protocolio.ContractRead(expectedAccount, accountABI.PackRoot(), block, true))
+		requests = append(requests, chainio.ContractRead(expectedAccount, accountABI.PackRoot(), block, true))
 	}
 	return requests
 }
@@ -205,7 +205,7 @@ func readSnapshot(ctx context.Context, reader Reader, executor, expectedAccount 
 		return Snapshot{}, errors.New("zero executor address")
 	}
 	block := new(big.Int).Set(header.Number)
-	group, err := protocolio.ReadGroup(ctx, reader, snapshotRequests(executor, expectedAccount, block)...)
+	group, err := chainio.ReadGroup(ctx, reader, snapshotRequests(executor, expectedAccount, block)...)
 	if err != nil {
 		return Snapshot{}, errors.Errorf("read executor state: %w", err)
 	}
@@ -233,7 +233,7 @@ func decodeSnapshotRoot(snapshot Snapshot, raw []byte, err error) (Snapshot, err
 	snapshot.Root = root
 	return snapshot, nil
 }
-func decodeCurrentSnapshot(snapshot Snapshot, header *types.Header, reads *protocolio.ReadResults) (Snapshot, error) {
+func decodeCurrentSnapshot(snapshot Snapshot, header *types.Header, reads *chainio.ReadResults) (Snapshot, error) {
 	current, err := decodeExecutorSnapshot(snapshot.Executor, snapshot.Account, header, func(i int) ([]byte, error) { v := reads.At(i); return v.Data, v.Err })
 	if err != nil {
 		return Snapshot{}, err
@@ -273,7 +273,7 @@ func ValidateSnapshot(ctx context.Context, reader Reader, snapshot Snapshot, exp
 	if expectedCaller == (common.Address{}) || snapshot.Caller != expectedCaller {
 		return errors.New("snapshot caller does not match configured sender")
 	}
-	opening, err := protocolio.ReadGroup(ctx, reader, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(snapshot.BlockNumber)}, protocolio.ReadRequest{Kind: protocolio.ReadHeader})
+	opening, err := chainio.ReadGroup(ctx, reader, chainio.ReadRequest{Kind: chainio.ReadHeader, Block: new(big.Int).SetUint64(snapshot.BlockNumber)}, chainio.ReadRequest{Kind: chainio.ReadHeader})
 	if err != nil {
 		return err
 	}
@@ -310,21 +310,21 @@ func ValidateSnapshot(ctx context.Context, reader Reader, snapshot Snapshot, exp
 
 // VerifyRoles checks only assembled (not explicitly skipped) leaves at the
 // snapshot block. The leaf role belongs to the executor, never the keeper EOA.
-func roleRequests(snapshot Snapshot, leaves []common.Hash) ([]common.Hash, []protocolio.ReadRequest) {
+func roleRequests(snapshot Snapshot, leaves []common.Hash) ([]common.Hash, []chainio.ReadRequest) {
 	checked := make(map[common.Hash]bool, len(leaves))
 	unique := make([]common.Hash, 0, len(leaves))
-	requests := make([]protocolio.ReadRequest, 0, len(leaves))
+	requests := make([]chainio.ReadRequest, 0, len(leaves))
 	for _, leaf := range leaves {
 		if checked[leaf] {
 			continue
 		}
 		checked[leaf] = true
 		unique = append(unique, leaf)
-		requests = append(requests, protocolio.ContractRead(snapshot.Account, accountABI.PackHasRole(leaf, snapshot.Executor), new(big.Int).SetUint64(snapshot.BlockNumber), true))
+		requests = append(requests, chainio.ContractRead(snapshot.Account, accountABI.PackHasRole(leaf, snapshot.Executor), new(big.Int).SetUint64(snapshot.BlockNumber), true))
 	}
 	return unique, requests
 }
-func verifyRoleResults(leaves []common.Hash, result func(int) protocolio.ReadResult) error {
+func verifyRoleResults(leaves []common.Hash, result func(int) chainio.ReadResult) error {
 	for i, leaf := range leaves {
 		member := result(i)
 		if member.Err != nil {
@@ -342,7 +342,7 @@ func verifyRoleResults(leaves []common.Hash, result func(int) protocolio.ReadRes
 }
 func VerifyRoles(ctx context.Context, reader Reader, snapshot Snapshot, leaves []common.Hash) error {
 	unique, requests := roleRequests(snapshot, leaves)
-	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
+	reads, err := chainio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
 		return errors.Errorf("read leaf roles: %w", err)
 	}

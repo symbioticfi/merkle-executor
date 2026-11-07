@@ -3,8 +3,9 @@ package recipes
 import (
 	"context"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"math/big"
 	"strings"
 	"testing"
@@ -12,11 +13,11 @@ import (
 
 type initialBatch struct {
 	*cachedReader
-	groups  [][]protocolio.ReadRequest
+	groups  [][]chainio.ReadRequest
 	failure string
 }
 
-func (r *initialBatch) BatchRead(ctx context.Context, qs []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
+func (r *initialBatch) BatchRead(ctx context.Context, qs []chainio.ReadRequest) ([]chainio.ReadResult, error) {
 	r.groups = append(r.groups, qs)
 	if len(r.groups) == 1 {
 		switch r.failure {
@@ -38,16 +39,16 @@ func TestInitialStagedReadsAreLazyBoundedAndOnlyConsumedAfterIdentity(t *testing
 				if batched {
 					reader = batch
 				}
-				var pin protocolio.PreparationPin
-				options := PreparationOptions{ChainID: big.NewInt(1), Stage: func(p protocolio.PreparationPin) []protocolio.ReadRequest {
+				var pin chainio.PreparationPin
+				options := PreparationOptions{ChainID: big.NewInt(1), Stage: func(p chainio.PreparationPin) []chainio.ReadRequest {
 					pin = p
-					qs := make([]protocolio.ReadRequest, count)
+					qs := make([]chainio.ReadRequest, count)
 					for i := range qs {
-						qs[i] = protocolio.ContractRead(p.Account, accountABI.PackRoot(), big.NewInt(10), true)
+						qs[i] = chainio.ContractRead(p.Account, accountABI.PackRoot(), big.NewInt(10), true)
 					}
 					return qs
 				}}
-				err := PrepareExecutionWithOptions(t.Context(), reader, r.executor, r.account, r.caller, options, func(s Snapshot, _ Recipe, read protocolio.ReadAccessor) ([]byte, []common.Hash, error) {
+				err := PrepareExecutionWithOptions(t.Context(), reader, r.executor, r.account, r.caller, options, func(s Snapshot, _ Recipe, read chainio.ReadAccessor) ([]byte, []common.Hash, error) {
 					if s.BlockHash != pin.BlockHash || s.Root != r.root {
 						t.Fatal("unverified build")
 					}
@@ -94,10 +95,10 @@ func TestInitialStagedFailureNeverFallsBackOrReachesUnauthenticatedBuild(t *test
 				r.caller = common.HexToAddress("0x8888")
 			}
 			batch := &initialBatch{cachedReader: r, failure: mode}
-			opts := PreparationOptions{ChainID: big.NewInt(1), Stage: func(p protocolio.PreparationPin) []protocolio.ReadRequest {
-				return []protocolio.ReadRequest{protocolio.ContractRead(p.Account, accountABI.PackRoot(), big.NewInt(10), true)}
+			opts := PreparationOptions{ChainID: big.NewInt(1), Stage: func(p chainio.PreparationPin) []chainio.ReadRequest {
+				return []chainio.ReadRequest{chainio.ContractRead(p.Account, accountABI.PackRoot(), big.NewInt(10), true)}
 			}}
-			err := PrepareExecutionWithOptions(t.Context(), batch, r.executor, account, caller, opts, func(Snapshot, Recipe, protocolio.ReadAccessor) ([]byte, []common.Hash, error) {
+			err := PrepareExecutionWithOptions(t.Context(), batch, r.executor, account, caller, opts, func(Snapshot, Recipe, chainio.ReadAccessor) ([]byte, []common.Hash, error) {
 				t.Fatal("unauthenticated build/API reached")
 				return nil, nil, nil
 			})
@@ -111,5 +112,41 @@ func TestInitialStagedFailureNeverFallsBackOrReachesUnauthenticatedBuild(t *test
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+type sharedHeadReader struct {
+	Reader
+	built     *bool
+	earlyHead bool
+}
+
+func (r *sharedHeadReader) HeaderByNumber(ctx context.Context, n *big.Int) (*types.Header, error) {
+	if n == nil && !*r.built {
+		r.earlyHead = true
+	}
+	return r.Reader.HeaderByNumber(ctx, n)
+}
+func TestSharedPreparationPinSkipsHeadAcquisitionAndKeepsClosures(t *testing.T) {
+	r, c := cacheFixture(t, Recipe{})
+	built := false
+	reader := &sharedHeadReader{Reader: r, built: &built}
+	pin := types.CopyHeader(r.headers[10])
+	err := PrepareExecutionWithOptions(t.Context(), reader, r.executor, r.account, r.caller, PreparationOptions{ChainID: big.NewInt(1), Cache: c, Pin: pin}, func(s Snapshot, _ Recipe, _ chainio.ReadAccessor) ([]byte, []common.Hash, error) {
+		built = true
+		r.validating = true
+		if s.BlockNumber != 10 {
+			t.Fatal("shared head lost")
+		}
+		return executionPayload, nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reader.earlyHead {
+		t.Fatal("reacquired opening head")
+	}
+	if r.headerReads == 0 {
+		t.Fatal("omitted fresh canonical closures")
 	}
 }

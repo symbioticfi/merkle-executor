@@ -38,6 +38,7 @@ type RecipeCache struct {
 	count        int
 	version      uint64
 	first, last  *recipeEvidence
+	index        map[evidenceKey]*recipeEvidence
 }
 
 // NewRecipeCache returns nil when either bound disables caching. Host callers
@@ -46,7 +47,7 @@ func NewRecipeCache(capacity int, bytes int64) *RecipeCache {
 	if capacity <= 0 || bytes <= recipeCacheOverhead {
 		return nil
 	}
-	return &RecipeCache{capacity: capacity, budget: bytes, used: recipeCacheOverhead}
+	return &RecipeCache{capacity: capacity, budget: bytes, used: recipeCacheOverhead, index: make(map[evidenceKey]*recipeEvidence)}
 }
 func cloneRecipe(r Recipe) Recipe {
 	clone := func(src [][]byte) [][]byte {
@@ -77,12 +78,7 @@ func (c *RecipeCache) load(key evidenceKey) *recipeEvidence {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for e := c.first; e != nil; e = e.next {
-		if e.key == key {
-			return cloneEvidence(e)
-		}
-	}
-	return nil
+	return cloneEvidence(c.index[key])
 }
 
 // discard only removes the frozen hint, never a concurrent newer replacement.
@@ -92,14 +88,12 @@ func (c *RecipeCache) discard(hint *recipeEvidence) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for e := c.first; e != nil; e = e.next {
-		if e.key == hint.key && e.version == hint.version {
-			c.remove(e)
-			return
-		}
+	if e := c.index[hint.key]; e != nil && e.version == hint.version {
+		c.remove(e)
 	}
 }
 func (c *RecipeCache) remove(e *recipeEvidence) {
+	delete(c.index, e.key)
 	if e.prev == nil {
 		c.first = e.next
 	} else {
@@ -148,11 +142,8 @@ func (c *RecipeCache) put(evidence *recipeEvidence) {
 	e.cost = cost
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for old := c.first; old != nil; old = old.next {
-		if old.key == e.key {
-			c.remove(old)
-			break
-		}
+	if old := c.index[e.key]; old != nil {
+		c.remove(old)
 	}
 	for c.count >= c.capacity || cost > c.budget-c.used {
 		c.remove(c.first)
@@ -166,6 +157,7 @@ func (c *RecipeCache) put(evidence *recipeEvidence) {
 		c.last.next = e
 	}
 	c.last = e
+	c.index[e.key] = e
 	c.count++
 	c.used += cost
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 type cachedReader struct {
@@ -48,15 +48,15 @@ func (r *cachedReader) CallContract(ctx context.Context, m ethereum.CallMsg, b *
 
 type cachedBatch struct{ *cachedReader }
 
-func (r cachedBatch) BatchRead(ctx context.Context, qs []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
-	out := make([]protocolio.ReadResult, len(qs))
+func (r cachedBatch) BatchRead(ctx context.Context, qs []chainio.ReadRequest) ([]chainio.ReadResult, error) {
+	out := make([]chainio.ReadResult, len(qs))
 	for i, q := range qs {
 		switch q.Kind {
-		case protocolio.ReadHeader:
+		case chainio.ReadHeader:
 			out[i].Header, out[i].Err = r.HeaderByNumber(ctx, q.Block)
-		case protocolio.ReadCall:
+		case chainio.ReadCall:
 			out[i].Data, out[i].Err = r.CallContract(ctx, q.Call, q.Block)
-		case protocolio.ReadLogs:
+		case chainio.ReadLogs:
 			out[i].Logs, out[i].Err = r.FilterLogs(ctx, q.Filter)
 		}
 	}
@@ -75,7 +75,7 @@ func cachedPrepare(t *testing.T, r *cachedReader, c *RecipeCache, batched bool, 
 	if batched {
 		reader = cachedBatch{r}
 	}
-	return PrepareExecutionWithOptions(t.Context(), reader, r.executor, r.account, common.HexToAddress("0x3333"), PreparationOptions{ChainID: big.NewInt(1), Cache: c}, func(s Snapshot, recipe Recipe, _ protocolio.ReadAccessor) ([]byte, []common.Hash, error) {
+	return PrepareExecutionWithOptions(t.Context(), reader, r.executor, r.account, common.HexToAddress("0x3333"), PreparationOptions{ChainID: big.NewInt(1), Cache: c}, func(s Snapshot, recipe Recipe, _ chainio.ReadAccessor) ([]byte, []common.Hash, error) {
 		r.validating = true
 		if build != nil {
 			if err := build(s, recipe); err != nil {

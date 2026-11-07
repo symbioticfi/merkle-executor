@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 var executionPayload = []byte{0xde, 0xad, 0xbe, 0xef}
@@ -95,17 +95,17 @@ func (r *executionReader) CallContract(ctx context.Context, m ethereum.CallMsg, 
 
 type executionBatchReader struct {
 	*executionReader
-	groups [][]protocolio.ReadRequest
+	groups [][]chainio.ReadRequest
 }
 
-func (r *executionBatchReader) BatchRead(ctx context.Context, requests []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
+func (r *executionBatchReader) BatchRead(ctx context.Context, requests []chainio.ReadRequest) ([]chainio.ReadResult, error) {
 	if r.validating {
-		r.groups = append(r.groups, append([]protocolio.ReadRequest(nil), requests...))
+		r.groups = append(r.groups, append([]chainio.ReadRequest(nil), requests...))
 	}
-	out := make([]protocolio.ReadResult, len(requests))
+	out := make([]chainio.ReadResult, len(requests))
 	for i, q := range requests {
 		switch q.Kind {
-		case protocolio.ReadCall:
+		case chainio.ReadCall:
 			if bytes.Equal(q.Call.Data, executionPayload) {
 				if q.MulticallSafe {
 					r.t.Fatal("simulation marked aggregate-safe")
@@ -114,9 +114,9 @@ func (r *executionBatchReader) BatchRead(ctx context.Context, requests []protoco
 				r.t.Fatal("verified getter lost aggregation eligibility")
 			}
 			out[i].Data, out[i].Err = r.CallContract(ctx, q.Call, q.Block)
-		case protocolio.ReadHeader:
+		case chainio.ReadHeader:
 			out[i].Header, out[i].Err = r.HeaderByNumber(ctx, q.Block)
-		case protocolio.ReadLogs:
+		case chainio.ReadLogs:
 			out[i].Logs, out[i].Err = r.FilterLogs(ctx, q.Filter)
 		default:
 			r.t.Fatal("unexpected request")
@@ -178,7 +178,7 @@ func TestPrepareExecutionChecksEveryRoleAcrossChunks(t *testing.T) {
 					t.Fatal("closing pins not deduplicated")
 				}
 				for _, q := range closing {
-					if q.Kind != protocolio.ReadHeader || q.Block == nil {
+					if q.Kind != chainio.ReadHeader || q.Block == nil {
 						t.Fatal("closing fence not after all contract chunks")
 					}
 				}

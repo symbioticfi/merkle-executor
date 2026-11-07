@@ -8,7 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 // ExecutorIdentity contains the account and authorized caller observed together.
@@ -29,7 +29,7 @@ func DiscoverExecutors(ctx context.Context, reader Reader, executors []common.Ad
 		return nil, errors.New("invalid executor discovery block")
 	}
 	pin := new(big.Int).Set(header.Number)
-	var requests []protocolio.ReadRequest
+	var requests []chainio.ReadRequest
 	var unique []common.Address
 	seen := map[common.Address]bool{}
 	binding := executor.NewRecipeExecutor()
@@ -43,11 +43,11 @@ func DiscoverExecutors(ctx context.Context, reader Reader, executors []common.Ad
 		seen[target] = true
 		unique = append(unique, target)
 		requests = append(requests,
-			protocolio.ContractRead(target, binding.PackAccount(), pin, true),
-			protocolio.ContractRead(target, binding.PackCaller(), pin, true),
+			chainio.ContractRead(target, binding.PackAccount(), pin, true),
+			chainio.ContractRead(target, binding.PackCaller(), pin, true),
 		)
 	}
-	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
+	reads, err := chainio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
 		return nil, errors.New("read executor accounts failed")
 	}

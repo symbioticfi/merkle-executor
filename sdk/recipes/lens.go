@@ -12,8 +12,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 //go:embed lens/bytecode.json
@@ -25,14 +25,14 @@ var lensResults = abi.Arguments{{Type: mustType("uint256[]", nil)}}
 
 // ResolveValues resolves a pure numerical prefix. Hosts with authenticated prior
 // effects use ResolveValuesWithRuntime with the already prepared runtime data.
-func ResolveValues(ctx context.Context, reader provider.Reader, snapshot Snapshot, recipe Recipe, expressions []Value) (map[uint]*big.Int, error) {
+func ResolveValues(ctx context.Context, reader chainio.Reader, snapshot Snapshot, recipe Recipe, expressions []Value) (map[uint]*big.Int, error) {
 	return ResolveValuesWithRuntime(ctx, reader, snapshot, recipe, expressions, PrefixRuntime{})
 }
 
 // ResolveValuesWithRuntime uses one same-executor code override for the union of
 // signed-value dependencies, replaying authenticated Manage/Approve/Call effects
 // before later reads. The full original execute validates the durable witness.
-func ResolveValuesWithRuntime(ctx context.Context, reader provider.Reader, snapshot Snapshot, recipe Recipe, expressions []Value, runtime PrefixRuntime) (map[uint]*big.Int, error) {
+func ResolveValuesWithRuntime(ctx context.Context, reader chainio.Reader, snapshot Snapshot, recipe Recipe, expressions []Value, runtime PrefixRuntime) (map[uint]*big.Int, error) {
 	program, err := buildPrefix(recipe, expressions, runtime)
 	if err != nil {
 		return nil, err
@@ -60,7 +60,7 @@ func ResolveValuesWithRuntime(ctx context.Context, reader provider.Reader, snaps
 		}
 	}
 	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
-	override, ok := reader.(provider.CodeOverrideReader)
+	override, ok := reader.(chainio.CodeOverrideReader)
 	if !ok {
 		return nil, errors.New("recipe-derived amounts require RPC code-override support")
 	}

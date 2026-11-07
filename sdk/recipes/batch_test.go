@@ -9,12 +9,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 )
 
 type batchingRecipeReader struct {
 	*fakeReader
-	groups                     [][]protocolio.ReadRequest
+	groups                     [][]chainio.ReadRequest
 	singleCalls, singleHeaders int
 	reorgFence                 bool
 }
@@ -33,12 +33,12 @@ func (r *batchingRecipeReader) HeaderByNumber(ctx context.Context, block *big.In
 	}
 	return h, e
 }
-func (r *batchingRecipeReader) BatchRead(ctx context.Context, requests []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
+func (r *batchingRecipeReader) BatchRead(ctx context.Context, requests []chainio.ReadRequest) ([]chainio.ReadResult, error) {
 	r.groups = append(r.groups, requests)
-	results := make([]protocolio.ReadResult, len(requests))
+	results := make([]chainio.ReadResult, len(requests))
 	for i, req := range requests {
 		switch req.Kind {
-		case protocolio.ReadCall:
+		case chainio.ReadCall:
 			if !req.MulticallSafe || req.Call.From != (common.Address{}) {
 				r.t.Fatal("verified metadata getter lost aggregate eligibility")
 			}
@@ -47,9 +47,9 @@ func (r *batchingRecipeReader) BatchRead(ctx context.Context, requests []protoco
 				continue
 			}
 			results[i].Data, results[i].Err = r.fakeReader.CallContract(ctx, req.Call, req.Block)
-		case protocolio.ReadHeader:
+		case chainio.ReadHeader:
 			results[i].Header, results[i].Err = r.fakeReader.HeaderByNumber(ctx, req.Block)
-		case protocolio.ReadLogs:
+		case chainio.ReadLogs:
 			results[i].Logs, results[i].Err = r.FilterLogs(ctx, req.Filter)
 		default:
 			r.t.Fatal("unexpected discovery request")

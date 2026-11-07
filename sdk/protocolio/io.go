@@ -17,10 +17,10 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 
+	"github.com/symbioticfi/merkle-executor/sdk/chainio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
@@ -120,12 +120,7 @@ func (c *Client) JSON(ctx context.Context, method, path string, in, out any) (in
 	}
 	return resp.StatusCode, nil
 }
-func Snapshot(s provider.Snapshot) error {
-	if s.ChainID == nil || s.ChainID.Sign() <= 0 || s.ChainID.BitLen() > 256 || s.BlockNumber == nil || s.BlockNumber.Sign() < 0 || s.Account == (common.Address{}) {
-		return errors.New("provider requires a pinned chain/account snapshot")
-	}
-	return nil
-}
+func Snapshot(s provider.Snapshot) error { return chainio.ValidateSnapshot(s) }
 
 // CallData performs a pinned raw read; callers use generated typed Pack/Unpack methods.
 func CallData(ctx context.Context, r provider.Reader, s provider.Snapshot, to common.Address, data []byte) ([]byte, error) {
@@ -180,21 +175,5 @@ func Digest(domain, structure common.Hash) common.Hash {
 // Canonical checks the pinned hash after external I/O and before external mutations.
 // Numeric-block eth_call alone cannot detect an intervening reorganization.
 func Canonical(ctx context.Context, r provider.Reader, s provider.Snapshot) error {
-	if err := Snapshot(s); err != nil {
-		return err
-	}
-	reader, ok := r.(interface {
-		HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
-	})
-	if !ok {
-		return errors.New("protocol external phase requires canonical header reader")
-	}
-	if s.BlockHash == (common.Hash{}) {
-		return errors.New("protocol snapshot block hash is required")
-	}
-	h, err := reader.HeaderByNumber(ctx, s.BlockNumber)
-	if err != nil || h == nil || h.Number == nil || h.Number.Cmp(s.BlockNumber) != 0 || h.Hash() != s.BlockHash || h.Time != s.Timestamp {
-		return errors.New("protocol pinned snapshot is no longer canonical")
-	}
-	return nil
+	return chainio.Canonical(ctx, r, s)
 }
