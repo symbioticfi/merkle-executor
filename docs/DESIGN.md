@@ -78,6 +78,16 @@ then validates intermediate results and the exact unchanged-code envelope with
 the transaction gas budget. Closing guards cover every distinct pin. Probe code
 is never deployed and never substitutes for the final exact simulation.
 
+External envelopes use `ValidatePreparedBatchWithSimulation` through the same
+admission core. Fresh recipe/identity/role checks, original and fresh opening and
+closing pins, and cache publication rules remain shared. A mandatory host callback
+receives copied selected calls, caller, fresh block and gas limit and simulates
+the exact calls inside the unchanged complete external envelope. The host owns
+that envelope's usefulness and settlement semantics; this entry point takes no
+numerical witnesses and does not require inner execution results or apply generic
+`HasWork`. The normal validator retains its full result/witness/readiness checks
+and grouped direct-call simulation. Neither path invents execution results.
+
 ## Process-local lifecycle
 
 `Keeper.Tick` is the sole lifecycle driver. One immutable active envelope owns

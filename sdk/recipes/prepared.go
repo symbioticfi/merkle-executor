@@ -1,6 +1,7 @@
 package recipes
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"strconv"
@@ -20,7 +21,7 @@ type PreparationOptions struct {
 }
 
 // PreparedRecipe is provisional authenticated discovery. Providers may inspect a
-// copy of Recipe; only ValidatePreparedBatch admits assembled execution bytes.
+// copy of Recipe; prepared-batch admission authenticates assembled execution bytes.
 type PreparedRecipe struct {
 	Snapshot Snapshot
 	Recipe   Recipe
@@ -44,7 +45,7 @@ func (e *MemberError) Error() string {
 func (e *MemberError) Unwrap() error { return e.Err }
 
 // DiscoveryResult keeps one candidate's authenticated evidence or local failure.
-// An error-free result still requires ValidatePreparedBatch before execution.
+// An error-free result still requires prepared-batch admission before execution.
 type DiscoveryResult struct {
 	Prepared PreparedRecipe
 	Err      error
@@ -283,7 +284,35 @@ func decodeBatchSnapshots(snapshots []Snapshot, header *types.Header, reads *pro
 // simulates the exact transaction and closes every distinct block pin together.
 // Cache entries become visible only after complete admission succeeds.
 func ValidatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller common.Address) error {
-	if len(prepared) == 0 || len(prepared) != len(calls) || len(prepared) != len(leaves) || len(prepared) != len(witnesses) || caller == (common.Address{}) {
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, nil)
+}
+
+// PreparedBatchSimulationRequest contains independent copies of authenticated
+// calls and their fresh execution context. Mutating it cannot change admission.
+type PreparedBatchSimulationRequest struct {
+	Calls       []ExecutorCall
+	Caller      common.Address
+	BlockNumber *big.Int
+	GasLimit    uint64
+}
+
+// PreparedBatchSimulation must simulate the exact selected calls inside the
+// unchanged external envelope at the supplied block and gas limit. The host owns
+// external usefulness and settlement semantics; no inner return bytes are needed.
+type PreparedBatchSimulation func(context.Context, PreparedBatchSimulationRequest) error
+
+// ValidatePreparedBatchWithSimulation shares recipe, identity, role and canonical
+// guards with ValidatePreparedBatch. Its mandatory callback validates an external
+// envelope instead of generic result witnesses and HasWork classification.
+func ValidatePreparedBatchWithSimulation(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, caller common.Address, simulate PreparedBatchSimulation) error {
+	if simulate == nil {
+		return errors.New("external prepared batch simulation required")
+	}
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, nil, caller, simulate)
+}
+
+func validatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller common.Address, simulate PreparedBatchSimulation) error {
+	if len(prepared) == 0 || len(prepared) != len(calls) || len(prepared) != len(leaves) || (simulate == nil && len(prepared) != len(witnesses)) || caller == (common.Address{}) {
 		return errors.New("prepared batch member count or caller mismatch")
 	}
 	snapshots := make([]Snapshot, len(prepared))
@@ -343,7 +372,7 @@ func ValidatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 	}
 	openingStart := len(requests)
 	requests = append(requests, pinReads(pins)...)
-	direct := len(calls) == 1 && !isMulticall(calls[0].Data)
+	direct := simulate == nil && len(calls) == 1 && !isMulticall(calls[0].Data)
 	simulationIndex := len(requests)
 	if direct {
 		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: caller, To: &calls[0].Executor, Data: calls[0].Data, Gas: current.GasLimit}, Block: current.Number})
@@ -369,53 +398,66 @@ func ValidatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 			return &MemberError{Index: roleOwners[i], Err: err}
 		}
 	}
-	var results [][]byte
-	if len(calls) == 1 {
-		pin := snapshots[0]
-		pin.BlockNumber, pin.BlockHash, pin.Timestamp = current.Number.Uint64(), current.Hash(), current.Time
-		if isMulticall(calls[0].Data) {
-			backend, ok := reader.(BatchReader)
-			if !ok {
-				return errors.New("batch validation requires code-override support")
-			}
-			entries, _ := Executions(calls[0].Data)
-			returned, e := SimulateBatch(ctx, backend, pin, entries, current.GasLimit)
-			if e != nil {
-				return e
-			}
-			raw, e := batchArguments.Pack(returned)
-			if e != nil {
-				return e
-			}
-			results = [][]byte{raw}
-		} else {
-			simulation := reads.At(simulationIndex)
-			if simulation.Err != nil {
-				return simulationFailure(ctx, simulation.Err)
-			}
-			results = [][]byte{simulation.Data}
+	var inactive []int
+	if simulate != nil {
+		request := PreparedBatchSimulationRequest{Calls: make([]ExecutorCall, len(calls)), Caller: caller, BlockNumber: new(big.Int).Set(current.Number), GasLimit: current.GasLimit}
+		for i, call := range calls {
+			request.Calls[i] = ExecutorCall{Executor: call.Executor, Data: bytes.Clone(call.Data)}
 		}
-	} else {
-		backend, ok := reader.(BatchReader)
-		if !ok {
-			return errors.New("executor batch requires code-override support")
+		if err = simulate(ctx, request); err != nil {
+			return simulationFailure(ctx, err)
 		}
-		results, err = SimulateExecutors(ctx, backend, caller, calls, current.Number, current.GasLimit)
-		if err != nil {
+		if err = ctx.Err(); err != nil {
 			return err
 		}
-	}
-	var inactive []int
-	for i, call := range calls {
-		if err = VerifyResults(call.Data, results[i], witnesses[i]); err != nil {
-			return &MemberError{Index: i, Err: err}
+	} else {
+		var results [][]byte
+		if len(calls) == 1 {
+			pin := snapshots[0]
+			pin.BlockNumber, pin.BlockHash, pin.Timestamp = current.Number.Uint64(), current.Hash(), current.Time
+			if isMulticall(calls[0].Data) {
+				backend, ok := reader.(BatchReader)
+				if !ok {
+					return errors.New("batch validation requires code-override support")
+				}
+				entries, _ := Executions(calls[0].Data)
+				returned, e := SimulateBatch(ctx, backend, pin, entries, current.GasLimit)
+				if e != nil {
+					return e
+				}
+				raw, e := batchArguments.Pack(returned)
+				if e != nil {
+					return e
+				}
+				results = [][]byte{raw}
+			} else {
+				simulation := reads.At(simulationIndex)
+				if simulation.Err != nil {
+					return simulationFailure(ctx, simulation.Err)
+				}
+				results = [][]byte{simulation.Data}
+			}
+		} else {
+			backend, ok := reader.(BatchReader)
+			if !ok {
+				return errors.New("executor batch requires code-override support")
+			}
+			results, err = SimulateExecutors(ctx, backend, caller, calls, current.Number, current.GasLimit)
+			if err != nil {
+				return err
+			}
 		}
-		work, e := HasWork(call.Data, results[i])
-		if e != nil {
-			return &MemberError{Index: i, Err: e}
-		}
-		if !work {
-			inactive = append(inactive, i)
+		for i, call := range calls {
+			if err = VerifyResults(call.Data, results[i], witnesses[i]); err != nil {
+				return &MemberError{Index: i, Err: err}
+			}
+			work, e := HasWork(call.Data, results[i])
+			if e != nil {
+				return &MemberError{Index: i, Err: e}
+			}
+			if !work {
+				inactive = append(inactive, i)
+			}
 		}
 	}
 	closing, err := protocolio.ReadGroup(ctx, reader, pinReads(pins)...)

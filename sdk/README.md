@@ -25,6 +25,15 @@ Discovery shares a block pin and independent read stages across executors.
 Validation checks selected calls, leaves, numerical witnesses and the exact final
 envelope together, then closes canonical pins.
 Immutable recipe cache evidence publishes only after successful admission.
+Hosts executing authorized calls inside an external transaction envelope use
+`ValidatePreparedBatchWithSimulation` with a mandatory simulation callback. It
+shares recipe, fresh identity/role and opening/closing canonical guards; the
+callback receives copied calls, caller, fresh block and gas limit and must
+simulate those exact calls inside the unchanged complete envelope. External
+usefulness and settlement belong to the host: this entry point accepts no
+numerical witnesses and requires no inner return values or generic `HasWork`
+classification. `ValidatePreparedBatch` retains all result, witness and readiness
+checks and grouped direct-call simulation.
 The planner uses `DiscoverCandidates` from the same discovery core to isolate
 candidate errors while preserving grouped reads and the common canonical pin.
 `ExecutionPlan.Failures` reports skipped failures alongside healthy work;

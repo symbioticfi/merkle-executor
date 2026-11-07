@@ -239,6 +239,18 @@ func (r *preparedReader) CallContract(ctx context.Context, call ethereum.CallMsg
 		}
 	}
 	if call.To != nil && *call.To == r.members[0].account {
+		method := accountABI.GetABI().Methods["hasRole"]
+		if len(call.Data) >= 4 && bytes.Equal(call.Data[:4], method.ID) {
+			args, err := method.Inputs.Unpack(call.Data[4:])
+			if err != nil {
+				return nil, err
+			}
+			for _, member := range r.members {
+				if member.executor == args[1].(common.Address) {
+					return member.CallContract(ctx, call, block)
+				}
+			}
+		}
 		return r.members[0].CallContract(ctx, call, block)
 	}
 	return nil, errors.New("unknown speculative account")
