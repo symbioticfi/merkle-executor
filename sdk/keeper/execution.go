@@ -12,8 +12,9 @@ type PlanMember struct {
 	Plan Plan   `json:"plan"`
 }
 type ExecutionPlan struct {
-	To      common.Address `json:"to"`
-	Members []PlanMember   `json:"members"`
+	To       common.Address   `json:"to"`
+	Members  []PlanMember     `json:"members"`
+	Failures map[string]error `json:"-"`
 }
 
 // Transaction encodes a direct call or an ordered delegated self-call.

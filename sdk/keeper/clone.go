@@ -21,6 +21,7 @@ func cloneSnapshot(s provider.Snapshot) provider.Snapshot {
 }
 
 func freezeExecution(plan ExecutionPlan) ExecutionPlan {
+	plan.Failures = maps.Clone(plan.Failures)
 	plan.Members = slices.Clone(plan.Members)
 	for i := range plan.Members {
 		p := &plan.Members[i].Plan

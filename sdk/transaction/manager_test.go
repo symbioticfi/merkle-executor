@@ -134,6 +134,33 @@ func TestAmbiguousBroadcastRetainsExactBytesAndNonce(t *testing.T) {
 	}
 }
 
+func TestKnownBroadcastKeepsPendingOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		message string
+		known   bool
+	}{
+		{"already known", true},
+		{"Transaction rejected: transaction already imported", true},
+		{"insufficient funds", false},
+		{"relay timed out", false},
+	} {
+		t.Run(tc.message, func(t *testing.T) {
+			b := newBackend()
+			b.sendErr = errors.New(tc.message)
+			m := newManager(t, b)
+			if err := m.Submit(t.Context(), testRequest()); (err == nil) != tc.known || !m.Busy() {
+				t.Fatalf("submit err=%v busy=%v", err, m.Busy())
+			}
+			if result, err := m.Poll(t.Context()); result != nil || (err == nil) != tc.known || !m.Busy() {
+				t.Fatalf("pending result=%+v err=%v busy=%v", result, err, m.Busy())
+			}
+			if len(b.sent) != 2 || b.sent[0].Hash() != b.sent[1].Hash() {
+				t.Fatal("retry changed pending transaction identity")
+			}
+		})
+	}
+}
+
 func TestSubmitRefusesOutstandingOrInconsistentNonceBeforeSigning(t *testing.T) {
 	for _, tc := range []struct {
 		name           string

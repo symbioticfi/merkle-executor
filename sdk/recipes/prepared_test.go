@@ -23,6 +23,69 @@ type preparedReader struct {
 	afterBatch         func(int)
 }
 
+type finalMemberFailureReader struct {
+	*preparedReader
+	bad      common.Address
+	metadata bool
+}
+
+func (r *finalMemberFailureReader) CallContract(ctx context.Context, call ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	if call.To != nil && *call.To == r.bad && r.metadata {
+		return nil, errors.New("executor metadata unavailable")
+	}
+	method := accountABI.GetABI().Methods["hasRole"]
+	if len(call.Data) >= 4 && bytes.Equal(call.Data[:4], method.ID) {
+		args, err := method.Inputs.Unpack(call.Data[4:])
+		if err != nil {
+			return nil, err
+		}
+		return method.Outputs.Pack(args[1].(common.Address) != r.bad)
+	}
+	return r.preparedReader.CallContract(ctx, call, block)
+}
+
+// Override the grouped adapter too: embedded methods otherwise call the base reader.
+func (r *finalMemberFailureReader) BatchRead(ctx context.Context, requests []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
+	out := make([]protocolio.ReadResult, len(requests))
+	for i, request := range requests {
+		switch request.Kind {
+		case protocolio.ReadCall:
+			out[i].Data, out[i].Err = r.CallContract(ctx, request.Call, request.Block)
+		case protocolio.ReadHeader:
+			out[i].Header, out[i].Err = r.HeaderByNumber(ctx, request.Block)
+		case protocolio.ReadLogs:
+			out[i].Logs, out[i].Err = r.FilterLogs(ctx, request.Filter)
+		}
+	}
+	return out, nil
+}
+
+func TestPreparedBatchAttributesFinalMetadataAndRoleFailures(t *testing.T) {
+	for _, metadata := range []bool{false, true} {
+		t.Run(map[bool]string{false: "revoked role", true: "metadata read"}[metadata], func(t *testing.T) {
+			base, executors, accounts := preparedFixture(t, 2)
+			prepared, err := DiscoverBatch(t.Context(), base, executors, accounts, base.members[0].caller, PreparationOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader := &finalMemberFailureReader{preparedReader: base, bad: executors[1], metadata: metadata}
+			calls := make([]ExecutorCall, len(prepared))
+			for i, p := range prepared {
+				data, _, e := Assemble(p.Recipe, &Tree{}, nil, nil, nil)
+				if e != nil {
+					t.Fatal(e)
+				}
+				calls[i] = ExecutorCall{Executor: executors[i], Data: data}
+			}
+			err = ValidatePreparedBatch(t.Context(), reader, prepared, calls, [][]common.Hash{{common.Hash{1}}, {common.Hash{2}}}, make([]map[uint]string, len(calls)), base.members[0].caller)
+			var member *MemberError
+			if !errors.As(err, &member) || member.Index != 1 {
+				t.Fatalf("member failure became global or misattributed: %v", err)
+			}
+		})
+	}
+}
+
 type idleEnvelopeReader struct {
 	*preparedReader
 	envelopes, overrides int
@@ -212,6 +275,59 @@ func TestDiscoverBatchSharesHeadRootAndEventHeader(t *testing.T) {
 		if member.Snapshot.Executor != executors[i] || member.Snapshot.BlockHash != prepared[0].Snapshot.BlockHash {
 			t.Fatal("batch lost order or common pin")
 		}
+	}
+}
+
+func TestDiscoverCandidatesIsolatesInvalidMembersAtSharedPin(t *testing.T) {
+	for _, failure := range []string{"first caller", "last caller", "first recipe", "last recipe", "missing events", "reorganized shared pin"} {
+		t.Run(failure, func(t *testing.T) {
+			r, executors, accounts := preparedFixture(t, 3)
+			caller := r.members[0].caller
+			bad := 0
+			if failure == "last caller" || failure == "last recipe" {
+				bad = 2
+			}
+			switch failure {
+			case "first caller", "last caller":
+				r.members[bad].caller = common.Address{99}
+			case "first recipe", "last recipe":
+				r.members[bad].recipeHash = common.Hash{}
+			case "missing events":
+				r.members[bad].logs = nil
+			case "reorganized shared pin":
+				r.afterBatch = func(stage int) {
+					if stage == 2 {
+						h := types.CopyHeader(r.members[0].headers[10])
+						h.Extra = []byte{1}
+						r.members[0].headers[10] = h
+					}
+				}
+			}
+			results, err := DiscoverCandidates(t.Context(), r, executors, accounts, caller, PreparationOptions{})
+			if failure == "reorganized shared pin" {
+				if err == nil || len(results) != 0 {
+					t.Fatal("partial discovery bypassed common canonical guard")
+				}
+				return
+			}
+			if err != nil || len(results) != 3 {
+				t.Fatalf("shared discovery failed: %v", err)
+			}
+			for i, result := range results {
+				if (result.Err != nil) != (i == bad) {
+					t.Fatalf("candidate%d error=%v", i, result.Err)
+				}
+				if i != bad && (result.Prepared.Snapshot.Executor != executors[i] || result.Prepared.Snapshot.BlockHash != r.members[0].headers[10].Hash()) {
+					t.Fatal("healthy candidate lost identity or shared pin")
+				}
+			}
+			if r.heads != 1 || len(r.groups) != 3 || len(r.groups[0]) != 13 || len(r.groups[2]) != 1 {
+				t.Fatalf("partial discovery retried independent RPCs: heads=%d groups=%d", r.heads, len(r.groups))
+			}
+			if _, err := DiscoverBatch(t.Context(), r, executors, accounts, caller, PreparationOptions{}); err == nil {
+				t.Fatal("strict discovery accepted invalid startup member")
+			}
+		})
 	}
 }
 

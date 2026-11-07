@@ -188,8 +188,11 @@ func (m *Manager) broadcast(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	err := m.backend.SendTransaction(ctx, m.active)
-	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already known") {
-		return failure("broadcast transaction; ownership retained", err)
+	if err != nil {
+		message := strings.ToLower(err.Error())
+		if !strings.Contains(message, "already known") && !strings.Contains(message, "already imported") {
+			return failure("broadcast transaction; ownership retained", err)
+		}
 	}
 	return nil
 }

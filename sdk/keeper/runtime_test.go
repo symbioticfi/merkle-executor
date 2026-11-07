@@ -26,6 +26,7 @@ func (*testProvider) PrepareRecipe(context.Context, provider.Snapshot, recipes.R
 type runtimePlanner struct {
 	plans         map[string]Plan
 	visits        [][]string
+	failures      map[string]error
 	err, guardErr error
 }
 
@@ -40,7 +41,7 @@ func (p *runtimePlanner) PrepareExecution(_ context.Context, strategies []Strate
 	}
 	for _, s := range strategies {
 		if plan, ok := p.plans[s.Config.Name]; ok {
-			return ExecutionPlan{To: plan.Snapshot.Executor, Members: []PlanMember{{Name: s.Config.Name, Plan: plan}}}, nil
+			return ExecutionPlan{To: plan.Snapshot.Executor, Members: []PlanMember{{Name: s.Config.Name, Plan: plan}}, Failures: p.failures}, nil
 		}
 	}
 	return ExecutionPlan{}, provider.ErrNotReady
@@ -56,6 +57,7 @@ type runtimeSender struct {
 	busy               bool
 	requests           []transaction.Request
 	result             *transaction.Result
+	polls              int
 	submitErr, pollErr error
 }
 
@@ -65,6 +67,7 @@ func (s *runtimeSender) Submit(_ context.Context, r transaction.Request) error {
 	return s.submitErr
 }
 func (s *runtimeSender) Poll(context.Context) (*transaction.Result, error) {
+	s.polls++
 	if s.pollErr != nil {
 		return nil, s.pollErr
 	}
@@ -75,6 +78,179 @@ func (s *runtimeSender) Poll(context.Context) (*transaction.Result, error) {
 		return r, nil
 	}
 	return nil, nil
+}
+
+type immediateSender struct {
+	runtimeSender
+	afterSubmit func()
+	afterPoll   func()
+}
+
+func (s *immediateSender) Submit(ctx context.Context, request transaction.Request) error {
+	err := s.runtimeSender.Submit(ctx, request)
+	s.result = confirmedResult()
+	if s.afterSubmit != nil {
+		s.afterSubmit()
+	}
+	return err
+}
+
+func (s *immediateSender) Poll(ctx context.Context) (*transaction.Result, error) {
+	result, err := s.runtimeSender.Poll(ctx)
+	if result != nil && s.afterPoll != nil {
+		s.afterPoll()
+	}
+	return result, err
+}
+
+func addRuntimeStrategy(t *testing.T, k *Keeper, planner *runtimePlanner, name string, account, executor byte) {
+	t.Helper()
+	strategy := k.Strategies[0]
+	strategy.Config.Name = name
+	strategy.Config.Account = common.Address{account}.Hex()
+	strategy.Config.Executor = common.Address{executor}.Hex()
+	plan := freezeExecution(ExecutionPlan{Members: []PlanMember{{Plan: planner.plans["one"]}}}).Members[0].Plan
+	plan.Snapshot.Account, plan.Recipe.Account = common.Address{account}, common.Address{account}
+	plan.Snapshot.Executor, plan.Recipe.Executor = common.Address{executor}, common.Address{executor}
+	k.Strategies = append(k.Strategies, strategy)
+	planner.plans[name] = plan
+}
+
+func TestRAMDrainsImmediatelyConfirmedExecutorsInOneTick(t *testing.T) {
+	for _, interval := range []time.Duration{0, time.Hour} {
+		t.Run(interval.String(), func(t *testing.T) {
+			k, planner, _ := runtimeHarness(t)
+			k.Strategies[0].Config.Interval = interval
+			addRuntimeStrategy(t, k, planner, "two", 0x11, 0x21)
+			addRuntimeStrategy(t, k, planner, "three", 0x12, 0x22)
+			sender := &immediateSender{}
+			k.Sender = sender
+			if err := k.Tick(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if len(sender.requests) != 3 || sender.polls != 3 || k.Pending() {
+				t.Fatalf("sends=%d polls=%d pending=%v", len(sender.requests), sender.polls, k.Pending())
+			}
+			for i, name := range []string{"one", "two", "three"} {
+				if len(planner.visits[i]) == 0 || planner.visits[i][0] != name {
+					t.Fatalf("priority changed: %v", planner.visits)
+				}
+			}
+		})
+	}
+}
+
+func TestRAMDrainRechecksIdleExecutorAfterConfirmedEffects(t *testing.T) {
+	k, planner, _ := runtimeHarness(t)
+	k.Strategies[0].Config.Interval = 0
+	addRuntimeStrategy(t, k, planner, "two", 0x11, 0x21)
+	first := planner.plans["one"]
+	delete(planner.plans, "one")
+	sender := &immediateSender{}
+	sender.afterPoll = func() { planner.plans["one"] = first }
+	k.Sender = sender
+	if err := k.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.requests) != 2 || sender.polls != 2 || k.Pending() {
+		t.Fatalf("sends=%d polls=%d pending=%v", len(sender.requests), sender.polls, k.Pending())
+	}
+	if sender.requests[0].To != planner.plans["two"].Snapshot.Executor || sender.requests[1].To != first.Snapshot.Executor {
+		t.Fatal("idle executor did not run after the other executor confirmed")
+	}
+	if len(planner.visits) != 2 || len(planner.visits[1]) != 1 || planner.visits[1][0] != "one" {
+		t.Fatalf("confirmed executor was retried or idle executor was skipped: %v", planner.visits)
+	}
+}
+
+func TestRAMDrainStopsOnPendingWithoutRepeatedPolling(t *testing.T) {
+	k, planner, sender := runtimeHarness(t)
+	addRuntimeStrategy(t, k, planner, "two", 0x11, 0x21)
+	if err := k.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.requests) != 1 || sender.polls != 1 || len(planner.visits) != 1 || !k.Pending() {
+		t.Fatalf("pending work spun: sends=%d polls=%d prepares=%d", len(sender.requests), sender.polls, len(planner.visits))
+	}
+}
+
+func TestRAMDrainCancellationRetainsSubmission(t *testing.T) {
+	k, planner, _ := runtimeHarness(t)
+	addRuntimeStrategy(t, k, planner, "two", 0x11, 0x21)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	sender := &immediateSender{afterSubmit: cancel}
+	k.Sender = sender
+	if err := k.Tick(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation lost: %v", err)
+	}
+	if len(sender.requests) != 1 || sender.polls != 0 || !k.Pending() {
+		t.Fatal("canceled drain consumed or replaced signed ownership")
+	}
+}
+
+func TestRAMReportsFailedCandidateWithoutBlockingHealthyWork(t *testing.T) {
+	for _, mode := range []string{"send", "simulate"} {
+		t.Run(mode, func(t *testing.T) {
+			k, planner, _ := runtimeHarness(t)
+			k.Mode = mode
+			addRuntimeStrategy(t, k, planner, "two", 0x11, 0x21)
+			delete(planner.plans, "two")
+			failure := errors.New("second executor unavailable")
+			planner.failures = map[string]error{"two": failure}
+			sender := &immediateSender{}
+			k.Sender = sender
+			outcomes := map[string]string{}
+			k.Observe = func(name, outcome string) { outcomes[name] = outcome }
+			if err := k.Tick(t.Context()); !errors.Is(err, failure) {
+				t.Fatalf("candidate failure lost: %v", err)
+			}
+			if outcomes["one"] != "ok" || outcomes["two"] != "error" {
+				t.Fatalf("incorrect member outcomes: %v", outcomes)
+			}
+			wantSends := 1
+			if mode == "simulate" {
+				wantSends = 0
+			}
+			if len(sender.requests) != wantSends || len(planner.visits) != 1 || k.Pending() {
+				t.Fatalf("healthy work blocked or candidate retried: sends=%d prepares=%d pending=%v", len(sender.requests), len(planner.visits), k.Pending())
+			}
+		})
+	}
+}
+
+func TestRAMDrainAdvancesWaitingExternalTaskOnce(t *testing.T) {
+	k, planner, pending := runtimeHarness(t)
+	plan := planner.plans["one"]
+	calls := 0
+	plan.Outputs[0][0].Task = provider.TaskFunc(func(context.Context, provider.Snapshot) (provider.Progress, error) {
+		calls++
+		return provider.Progress{}, nil
+	})
+	planner.plans["one"] = plan
+	if err := k.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	addRuntimeStrategy(t, k, planner, "two", 0x11, 0x21)
+	addRuntimeStrategy(t, k, planner, "three", 0x12, 0x22)
+	for _, name := range []string{"two", "three"} {
+		planner.plans[name].Outputs[0][0].Task = nil
+	}
+	sender := &immediateSender{runtimeSender: *pending}
+	sender.result = confirmedResult()
+	k.Sender = sender
+	if err := k.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || len(sender.requests) != 3 || !k.Pending() {
+		t.Fatalf("task calls=%d sends=%d pending=%v", calls, len(sender.requests), k.Pending())
+	}
+	if err := k.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || len(sender.requests) != 3 {
+		t.Fatal("waiting task was starved or repeated during a drain")
+	}
 }
 func (s *runtimeSender) Busy() bool { return s.busy }
 func runtimeHarness(t *testing.T) (*Keeper, *runtimePlanner, *runtimeSender) {

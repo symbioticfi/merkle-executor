@@ -25,6 +25,10 @@ Discovery shares a block pin and independent read stages across executors.
 Validation checks selected calls, leaves, numerical witnesses and the exact final
 envelope together, then closes canonical pins.
 Immutable recipe cache evidence publishes only after successful admission.
+The planner uses `DiscoverCandidates` from the same discovery core to isolate
+candidate errors while preserving grouped reads and the common canonical pin.
+`ExecutionPlan.Failures` reports skipped failures alongside healthy work;
+`DiscoverBatch` retains strict all-or-error behavior for startup callers.
 
 The HTTP backend sends compatible getters through Multicall3 as an ordinary
 `eth_call`. Caller-sensitive, gas-limited and different-block calls retain their
@@ -37,6 +41,8 @@ Failed aggregates never fall back to individual calls.
 ERC-7579 caller delegation. RPC-only probes inspect sequential intermediate
 results; unchanged-code simulation remains mandatory. Native repetition uses
 exponential growth and boundary search, bounded by gas, progress and cancellation.
+After final envelope rejection, descending prefixes consider intermediate batch
+sizes without assuming arbitrary EVM execution has monotone success.
 
 Providers declare owned inputs/actions and required results before preparing.
 Only exact deterministic recipe constraints resolve native inputs; bounds alone
@@ -53,7 +59,12 @@ replay envelope or settlement method. Native claim validity stays in the native
 contracts, with recipe constraints and full simulation checked by the SDK.
 
 The host calls `Keeper.Tick` and, for a one-shot session, continues while
-`Keeper.Pending()` is true. `transaction.Manager` exposes Submit/Poll/Busy and
+`Keeper.Pending()` is true. Each tick drains immediately confirmed work while
+submitting each executor and advancing each settlement at most once. Idle candidates
+can become ready after earlier confirmed effects. Pending work yields after one
+poll. A host may select `Keeper.Wakeup()` alongside its normal timer when its
+sender provides canonical-completion notifications; the SDK starts no worker.
+`transaction.Manager` exposes Submit/Poll/Busy and
 retains signed bytes through ambiguous submission. There are no stores, journals,
 acknowledgement callbacks, fee replacement engines or restart recovery. Process
 exit loses tracking while live transactions/orders may continue externally.

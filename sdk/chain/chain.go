@@ -146,7 +146,7 @@ func (e *rpcError) Error() string {
 	// The sender uses these bounded classifications to handle nonce races,
 	// rejected broadcasts and exact-byte retries. Never echo a provider message.
 	message := strings.ToLower(e.cause.Error())
-	for _, kind := range []string{"nonce too low", "nonce is too low", "nonce has already been used", "replacement transaction underpriced", "already known", "insufficient funds", "intrinsic gas too low", "invalid sender", "transaction type not supported", "execution reverted"} {
+	for _, kind := range []string{"nonce too low", "nonce is too low", "nonce has already been used", "replacement transaction underpriced", "already known", "already imported", "insufficient funds", "intrinsic gas too low", "invalid sender", "transaction type not supported", "execution reverted"} {
 		if strings.Contains(message, kind) {
 			return e.operation + " failed: " + kind
 		}

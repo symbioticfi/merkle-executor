@@ -14,7 +14,7 @@ import (
 )
 
 func TestTransactionErrorsKeepClassificationWithoutSecrets(t *testing.T) {
-	for _, code := range []string{"nonce too low", "replacement transaction underpriced", "insufficient funds", "already known", "execution reverted"} {
+	for _, code := range []string{"nonce too low", "replacement transaction underpriced", "insufficient funds", "already known", "already imported", "execution reverted"} {
 		t.Run(code, func(t *testing.T) {
 			cause := errors.New(code + " at https://rpc.example/private-key?secret=hidden")
 			err := rpcFailure("submit", cause)

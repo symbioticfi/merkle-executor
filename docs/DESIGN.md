@@ -32,6 +32,12 @@ A bounded RAM recipe cache holds immutable authenticated event evidence only;
 fresh metadata, roots, roles and simulation are always checked again. Cache
 entries publish only after successful final validation.
 
+The planner uses partial results from the same discovery core: an invalid
+candidate is reported without blocking authenticated healthy candidates. Shared
+transport or canonical-pin failures still stop preparation. Strict discovery
+callers retain all-or-error semantics. Healthy plans carry candidate failures
+back to the keeper for reporting; errors are never silently discarded.
+
 The planner obtains each unique permission artifact within its account/root scope
 once per cycle. The SDK decodes and verifies every leaf and proof, checks chain,
 account and active root, and checks provider ownership before acquiring runtime
@@ -62,7 +68,9 @@ an already installed caller delegation supporting ERC-7579 batches; the runtime
 never installs delegation. Configuration order determines execution order.
 Receipt ownership conflicts and stale state-dependent witnesses defer work.
 Oversized call inventories shrink to an executable prefix, leaving the rest for
-later cycles. Repetition uses exponential and boundary probes bounded by gas,
+later cycles. After an envelope rejection, descending prefixes consider every
+intermediate size within the operation deadline; arbitrary EVM execution does
+not guarantee monotone success. Repetition uses exponential and boundary probes bounded by gas,
 progress and context rather than simulating lengths 1 through N.
 
 `ValidatePreparedBatch` groups fresh metadata, roles and canonical opening pins,
@@ -78,6 +86,13 @@ envelope. A successful receipt fans out directly into per-member RAM settlement.
 Stateless providers have no settlement method. Optional `Output.Task` values
 retain exact order identity and progress in typed Go state. Their account remains
 reserved until every task finishes; unrelated accounts can continue.
+
+A tick drains immediately confirmed work and continues other eligible executors,
+submitting each executor and advancing each settlement at most once. Idle
+candidates may be prepared again after confirmed effects make them useful. Pending transactions yield
+after one poll; all work shares the operation deadline. Hosts may select the
+keeper's optional sender wakeup channel alongside their normal cadence. Canonical
+host completion wakes promptly; ambiguous errors retain normal retry cadence.
 
 External publication happens only after canonical account authorization. Tasks
 receive confirmed execution logs and a fresh pinned snapshot, with a closing
