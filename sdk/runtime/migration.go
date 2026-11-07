@@ -239,7 +239,7 @@ func (r *Runtime) importLegacy(strategies map[string]Strategy) error {
 		if err = r.validateWorkflow(w, strategies); err != nil {
 			return errors.Errorf("validate imported workflow: %w", err)
 		}
-		if w.active() {
+		if w.ownsAccount() {
 			account := w.Plan.Snapshot.Account
 			if accounts[account] != "" {
 				return errors.New("multiple imported workflows own one account")

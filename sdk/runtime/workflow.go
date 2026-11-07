@@ -56,6 +56,12 @@ func cloneTransaction(tx Transaction) Transaction {
 func (w Workflow) active() bool {
 	return w.Phase == "prepared" || w.Phase == "pending" || w.Phase == "authorized"
 }
+
+// Prepared bytes without an admission are safe to refresh. Configuration remains
+// active, but account ownership begins with a durable signer reservation.
+func (w Workflow) ownsAccount() bool {
+	return w.Reserved || w.Phase == "pending" || w.Phase == "authorized"
+}
 func validateTransaction(w Workflow, chainID *big.Int, caller common.Address) error {
 	tx := w.Transaction
 	if tx == nil {

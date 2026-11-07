@@ -76,7 +76,7 @@ func (r *Runtime) saveLocked(w Workflow) error {
 		return r.fault
 	}
 	r.workflows[w.Name] = w.Clone()
-	if w.active() {
+	if w.ownsAccount() {
 		r.accounts[w.Plan.Snapshot.Account] = w.Name
 	} else if r.accounts[w.Plan.Snapshot.Account] == w.Name {
 		delete(r.accounts, w.Plan.Snapshot.Account)

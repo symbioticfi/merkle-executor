@@ -177,7 +177,7 @@ func TestMigrationTerminalEvidenceAndUnsignedPreparation(t *testing.T) {
 func TestMigrationAccountConflictDoesNotActivateNamespace(t *testing.T) {
 	r, s, _ := coordinatorHarness(t)
 	name := r.Strategies[0].Config.Name
-	w := signedCoordinatorWorkflow(t, r, name, "pending")
+	w := signedCoordinatorWorkflow(t, r, name, "authorized")
 	writeLegacyFixture(t, r, s, w, false)
 	second := r.Strategies[0]
 	second.Config.Name = "other"
@@ -189,6 +189,7 @@ func TestMigrationAccountConflictDoesNotActivateNamespace(t *testing.T) {
 		t.Fatal(found, err)
 	}
 	old.ID = "other-id"
+	old.Result.ID = old.ID
 	old.Plan.Snapshot.Executor = common.HexToAddress(second.Config.Executor)
 	old.Plan.Recipe.Executor = old.Plan.Snapshot.Executor
 	if err := s.Save("strategy.other.v1", old); err != nil {

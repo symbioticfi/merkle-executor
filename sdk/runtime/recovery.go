@@ -291,7 +291,7 @@ func (r *Runtime) start(ctx context.Context) error {
 		if _, exists := workflows[w.Name]; exists {
 			return errors.New("duplicate workflow checkpoint")
 		}
-		if w.active() {
+		if w.ownsAccount() {
 			a := w.Plan.Snapshot.Account
 			if accounts[a] != "" {
 				return errors.New("multiple active workflows own one account")
