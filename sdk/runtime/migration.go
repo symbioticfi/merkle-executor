@@ -106,6 +106,8 @@ func (r *Runtime) importLegacy(strategies map[string]Strategy) error {
 	}
 	values := map[string]any{"deployment": Deployment{Kind: "deployment", Version: 2, ChainID: new(big.Int).Set(r.ChainID), Caller: r.Caller}}
 	seen := map[string]bool{}
+	accounts := map[common.Address]string{}
+	signerOwner := ""
 	matched := !hasJournal
 	for _, name := range names {
 		if name == "" || seen[name] {
@@ -236,6 +238,19 @@ func (r *Runtime) importLegacy(strategies map[string]Strategy) error {
 		}
 		if err = r.validateWorkflow(w, strategies); err != nil {
 			return errors.Errorf("validate imported workflow: %w", err)
+		}
+		if w.active() {
+			account := w.Plan.Snapshot.Account
+			if accounts[account] != "" {
+				return errors.New("multiple imported workflows own one account")
+			}
+			accounts[account] = w.Name
+		}
+		if w.Reserved {
+			if signerOwner != "" {
+				return errors.New("multiple imported workflows own signer")
+			}
+			signerOwner = w.Name
 		}
 		values[WorkflowKey(name)] = w
 	}

@@ -173,3 +173,35 @@ func TestMigrationTerminalEvidenceAndUnsignedPreparation(t *testing.T) {
 		})
 	}
 }
+
+func TestMigrationAccountConflictDoesNotActivateNamespace(t *testing.T) {
+	r, s, _ := coordinatorHarness(t)
+	name := r.Strategies[0].Config.Name
+	w := signedCoordinatorWorkflow(t, r, name, "pending")
+	writeLegacyFixture(t, r, s, w, false)
+	second := r.Strategies[0]
+	second.Config.Name = "other"
+	second.Config.Executor = common.HexToAddress("0x99").Hex()
+	r.Strategies = append(r.Strategies, second)
+	r.LegacyConverters["other"] = []LegacyConverter{nil}
+	var old legacyJob
+	if found, err := s.Load("strategy."+name+".v1", &old); err != nil || !found {
+		t.Fatal(found, err)
+	}
+	old.ID = "other-id"
+	old.Plan.Snapshot.Executor = common.HexToAddress(second.Config.Executor)
+	old.Plan.Recipe.Executor = old.Plan.Snapshot.Executor
+	if err := s.Save("strategy.other.v1", old); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save("strategies.v1", []string{name, "other"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(context.Background()); err == nil {
+		t.Fatal("duplicate account owners accepted")
+	}
+	var identity Deployment
+	if found, err := s.LoadNamespace(Namespace, "deployment", &identity); err != nil || found {
+		t.Fatal("rejected account conflict activated namespace", found, err)
+	}
+}
