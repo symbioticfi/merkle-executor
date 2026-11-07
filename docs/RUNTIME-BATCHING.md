@@ -21,6 +21,7 @@ The effective policy comes from strict YAML, with defaults in
 | Resource | Default limit |
 | --- | ---: |
 | Concurrent preparations | 16 |
+| Read partition timeout | 30 seconds |
 | Logical members per partition | 256 |
 | Encoded RPC request | 2,097,152 bytes |
 | RPC response | 33,554,432 bytes |

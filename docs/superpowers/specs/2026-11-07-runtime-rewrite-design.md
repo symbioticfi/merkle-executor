@@ -1,6 +1,6 @@
 # Clean-slate Merkle runtime
 
-Status: approved by the user on 2026-11-07; implementation in progress.
+Status: approved and implemented on 2026-11-07. Final local checks, Anvil integration, artifact regeneration and container smoke pass; see `docs/VERIFICATION.md`.
 Independent builder review found no planning blockers.
 
 ## Intent and scope

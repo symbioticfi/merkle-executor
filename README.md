@@ -105,7 +105,8 @@ be reused after fresh metadata and canonical event-header checks; account state,
 permissions and simulation remain fresh. The retained recipe cache defaults to a configurable
 16777216-byte (16 MiB) budget. Entries are also limited by
 the number of configured strategies and are cleared on restart.
-[Batching scopes, counts and compatibility](docs/PROVIDERS.md#shared-numerical-prefix-and-read-batching).
+[Batching scopes and compatibility](docs/PROVIDERS.md#shared-numerical-prefix-and-read-batching);
+[measured automatic-path scale](docs/RUNTIME-BATCHING.md).
 
 ## Permissions and runtime inputs
 
