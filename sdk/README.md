@@ -16,8 +16,9 @@ state on disk.
 - `permissions`: bounded active-root curator artifact acquisition.
 - `protocolio`, `chain`: bounded HTTP/RPC, strict read batches, safe Multicall3
   getters and code-override simulations using host-owned transports.
-- `transaction`, `signer`: optional small standalone sender and key primitive;
-  hosts with an existing shared sender implement `keeper.Sender` instead.
+- `transaction`: the shared transaction engine for native sends and keeper execution;
+  one explicitly started manager owns each host signer and its nonce lane.
+- `signer`: signing primitive receiving credentials from the host.
 - `abi`, `bindings`, `protocoltypes`, `schemas`: generated interfaces and provenance.
 
 `recipes.DiscoverBatch` and `recipes.ValidatePreparedBatch` are the discovery and
@@ -76,18 +77,29 @@ process-owned work. Each tick drains immediately confirmed work while
 submitting each executor and advancing each settlement at most once. Idle candidates
 can become ready after earlier confirmed effects. Pending work yields after one
 poll. Polling, each settlement, and preparation/submission have independent
-operation budgets and honor the host context's cancellation. A host may select
-`Keeper.Wakeup()` alongside its normal timer when its
-sender provides canonical-completion notifications; the SDK starts no worker.
+operation budgets and honor the host context's cancellation. Hosts use
+a timer while the shared transaction engine tracks admitted work.
 Hosts pass the same gas budget to `keeper.Planner.MaxGas` and
-`transaction.Config.MaxGas`; zero selects 16,777,216, and fresh block gas also caps
-admission. `transaction.Manager` exposes Submit/Poll/Busy. Before signing it requires
-a fresh `Backend.TransactionSenderBalanceAt` balance covering the final maximum gas cost;
-the SDK chain client reads that balance from the sending endpoint. Funding read
-errors, invalid values and insufficient balance leave no signed work or busy lane.
-Signed bytes remain owned through ambiguous submission. There are no stores, journals,
-acknowledgement callbacks, fee replacement engines or restart recovery. Process
-exit loses tracking while live transactions/orders may continue externally.
+`transaction.Config.MaxGas`; zero selects 16,777,216, bounded by the current block.
+
+Each solver process configures its own signer and `transaction.Manager`, then
+initializes it and explicitly runs `Start` on the host lifecycle context. Both
+services use `Send`/`SendAsync` or `manager.Sender(name)` with
+`ExecutionRequest`/`ExecutionResult` for the same admission, signing, nonce,
+funding, fee-replacement and canonical-receipt lifecycle. Solver orchestration
+and providers select and prioritize existing orders or claims. The transaction
+engine receives chosen calls; it does not own a domain work queue. Hosts retain
+YAML, credentials, RPC transport selection and telemetry setup. Separate signers
+across processes are a trusted configuration assumption.
+
+Before every signature, fresh sender funding must cover the final maximum gas
+cost. Signed identities enter RAM before broadcast and remain owned
+through uncertain responses. Native callers receive signed hashes and canonical receipts for their
+protocol reconciliation; keeper tickets retain ownership until a canonical owned
+receipt or proven supersession. Deadlines stop new signing without discarding an earlier owned attempt.
+Explicit shutdown drains admitted work within the configured bound. There are
+no stores, journals or restart recovery. Process exit loses tracking while live
+transactions/orders may continue externally. See [transactions](../docs/TRANSACTIONS.md).
 
 Run `make check`, `make integration` and `make generate` from this module without
 the daemon or a Go workspace. Generation uses pinned abigen v2 and recompiles

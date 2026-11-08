@@ -62,8 +62,11 @@ The sender estimates gas, applies bounded EIP-1559 fees and checks a fresh
 sending-endpoint balance against the final maximum gas cost before signing.
 The sending endpoint must serve `eth_getBalance`; invalid, unavailable or
 insufficient funding leaves no signed transaction or active nonce ownership.
-Signed work is held in RAM until canonical confirmation. Ambiguous sends retain the nonce
-and rebroadcast identical signed bytes. There are no automatic fee replacements.
+Each solver process configures its own signer. Both services reuse the SDK
+transaction lifecycle for nonce admission, fees, signing and receipts. Solver
+orchestration and providers select existing orders or claims. Signed recipe work stays owned in RAM until canonical confirmation.
+Ambiguous sends retain their identity; exact rebroadcasts and bounded fee
+replacements use the same nonce. Shutdown drains admitted work before RPC closes.
 An unknown consumed nonce retains ownership until its exact receipt is found. After a
 canonical successful receipt, native work finishes and optional external tasks
 continue with their original order identity. External tasks reserve their account.

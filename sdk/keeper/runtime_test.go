@@ -55,18 +55,18 @@ func (p *runtimePlanner) VerifyConfirmedSnapshot(context.Context, provider.Snaps
 
 type runtimeSender struct {
 	busy               bool
-	requests           []transaction.Request
-	result             *transaction.Result
+	requests           []transaction.ExecutionRequest
+	result             *transaction.ExecutionResult
 	polls              int
 	submitErr, pollErr error
 }
 
-func (s *runtimeSender) Submit(_ context.Context, r transaction.Request) error {
+func (s *runtimeSender) Submit(_ context.Context, r transaction.ExecutionRequest) error {
 	s.requests = append(s.requests, r)
 	s.busy = true
 	return s.submitErr
 }
-func (s *runtimeSender) Poll(context.Context) (*transaction.Result, error) {
+func (s *runtimeSender) Poll(context.Context) (*transaction.ExecutionResult, error) {
 	s.polls++
 	if s.pollErr != nil {
 		return nil, s.pollErr
@@ -86,7 +86,7 @@ type immediateSender struct {
 	afterPoll   func()
 }
 
-func (s *immediateSender) Submit(ctx context.Context, request transaction.Request) error {
+func (s *immediateSender) Submit(ctx context.Context, request transaction.ExecutionRequest) error {
 	err := s.runtimeSender.Submit(ctx, request)
 	s.result = confirmedResult()
 	if s.afterSubmit != nil {
@@ -95,7 +95,7 @@ func (s *immediateSender) Submit(ctx context.Context, request transaction.Reques
 	return err
 }
 
-func (s *immediateSender) Poll(ctx context.Context) (*transaction.Result, error) {
+func (s *immediateSender) Poll(ctx context.Context) (*transaction.ExecutionResult, error) {
 	result, err := s.runtimeSender.Poll(ctx)
 	if result != nil && s.afterPoll != nil {
 		s.afterPoll()
@@ -262,9 +262,9 @@ func runtimeHarness(t *testing.T) (*Keeper, *runtimePlanner, *runtimeSender) {
 	k := &Keeper{Planner: p, Sender: s, Mode: "send", OperationTimeout: time.Second, Log: logr.Discard(), Strategies: []Strategy{{Config: Config{Name: "one", Executor: executor.Hex(), Account: account.Hex(), Interval: time.Hour}, Providers: []Provider{&testProvider{}}}}}
 	return k, p, s
 }
-func confirmedResult() *transaction.Result {
+func confirmedResult() *transaction.ExecutionResult {
 	hash := common.HexToHash("0x123")
-	return &transaction.Result{Hash: hash, Execution: &provider.Execution{TxHash: hash, BlockNumber: big.NewInt(4), BlockHash: common.HexToHash("0x456")}}
+	return &transaction.ExecutionResult{Hash: hash, Execution: &provider.Execution{TxHash: hash, BlockNumber: big.NewInt(4), BlockHash: common.HexToHash("0x456")}}
 }
 func TestRAMRejectsAmbiguousStrategyNamesBeforeWork(t *testing.T) {
 	for _, mode := range []string{"send", "simulate"} {
@@ -303,6 +303,35 @@ func TestRAMPendingRetainsOneImmutableExecution(t *testing.T) {
 				t.Fatalf("lost ownership: pending=%v prepares=%d sends=%d", k.Pending(), len(p.visits), len(s.requests))
 			}
 		})
+	}
+}
+func TestRAMSupersededExecutionReplansWithoutSettlement(t *testing.T) {
+	k, p, s := runtimeHarness(t)
+	plan := p.plans["one"]
+	settled := false
+	plan.Outputs[0][0].Task = provider.TaskFunc(func(context.Context, provider.Snapshot) (provider.Progress, error) {
+		settled = true
+		return provider.Progress{Done: true}, nil
+	})
+	p.plans["one"] = plan
+	if err := k.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// The manager proved an older owned call consumed this nonce, not this plan.
+	s.busy = false
+	s.pollErr = transaction.ErrNonceConsumed
+	if err := k.Tick(t.Context()); !errors.Is(err, transaction.ErrNonceConsumed) {
+		t.Fatalf("superseded result: %v", err)
+	}
+	if k.Pending() || settled || len(p.visits) != 1 {
+		t.Fatalf("superseded plan retained or settled: pending=%v settled=%v prepares=%d", k.Pending(), settled, len(p.visits))
+	}
+	s.pollErr = nil
+	if err := k.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.visits) != 2 || len(s.requests) != 2 || !k.Pending() || settled {
+		t.Fatal("superseded execution was not freshly planned")
 	}
 }
 func TestRAMSettlementReservesAccountAndRetriesTask(t *testing.T) {
