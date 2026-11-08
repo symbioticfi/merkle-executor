@@ -33,30 +33,129 @@ func value(source uint8, n int64) *big.Int {
 func instruction(t *testing.T, op uint8, args abi.Arguments, values ...any) []byte {
 	return append([]byte{op}, pack(t, args, values...)...)
 }
-func capacityFixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree, int) {
+func capacityFixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
 	s := provider.Snapshot{Account: common.HexToAddress("0xa1"), Executor: common.HexToAddress("0xe1"), Caller: common.HexToAddress("0xc1"), BlockNumber: big.NewInt(9)}
-	pool, asset, helper := common.HexToAddress("0x11"), common.HexToAddress("0x22"), common.HexToAddress("0x33")
-	borrowData := append(selector("borrow(address,uint256,uint256,uint16,address)"), pack(t, borrowArgs, asset, new(big.Int), big.NewInt(2), uint16(0), s.Account)...)
-	health := append(selector("getHealthFactor(address,address)"), pack(t, healthArgs, pool, s.Account)...)
-	queries := [][]byte{pack(t, queryArgs, helper, health, []*big.Int{}, new(big.Int))}
-	steps := [][]byte{instruction(t, recipes.Call, callArgs, pool, borrowData, []*big.Int{}), instruction(t, recipes.Read, uintArgs, new(big.Int)), instruction(t, recipes.LessOrEqual, binaryArgs, big.NewInt(1_250_000_000_000_000_000), value(recipes.Result, 1))}
-	data := append(selector("execute(bytes[],bytes[],uint256[])"), pack(t, executeArgs, queries, steps, []*big.Int{})...)
-	offset := bytes.Index(data, borrowData) + 36
+	pool, asset := common.HexToAddress("0x11"), common.HexToAddress("0x22")
+	data := append(selector("borrow(address,uint256,uint256,uint16,address)"), pack(t, borrowArgs, asset, new(big.Int), big.NewInt(2), uint16(0), s.Account)...)
 	mask := make([]byte, len(data))
-	for i := offset; i < offset+32; i++ {
+	for i := 36; i < 68; i++ {
 		mask[i] = 255
 	}
-	leaf := recipes.Leaf{Target: s.Account, Value: new(big.Int), Data: data, DataMask: mask}
+	leaf := recipes.Leaf{Target: pool, Value: new(big.Int), Data: data, DataMask: mask}
 	leaf.Hash, _ = recipes.HashLeaf(leaf)
-	binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(int64(offset)), 224), value(recipes.Result, 0))
-	r := recipes.Recipe{Steps: [][]byte{instruction(t, recipes.Min, binaryArgs, value(recipes.Input, 0), big.NewInt(100)), instruction(t, recipes.Manage, manageArgs, value(recipes.Result, 0), [][32]byte{leaf.Hash}, [][]*big.Int{{binding}})}}
-	return s, r, &recipes.Tree{Root: leaf.Hash, Leaves: []recipes.Leaf{leaf}}, offset
+	binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), value(recipes.Result, 0))
+	health := append(selector("getUserAccountData(address)"), pack(t, accountArgs, s.Account)...)
+	r := recipes.Recipe{
+		Queries: [][]byte{pack(t, queryArgs, pool, health, []*big.Int{}, big.NewInt(160))},
+		Steps: [][]byte{
+			instruction(t, recipes.Min, binaryArgs, value(recipes.Input, 0), big.NewInt(100)),
+			instruction(t, recipes.Manage, manageArgs, value(recipes.Result, 0), [][32]byte{leaf.Hash}, [][]*big.Int{{binding}}),
+			instruction(t, recipes.Read, uintArgs, new(big.Int)),
+			instruction(t, recipes.LessOrEqual, binaryArgs, big.NewInt(1_250_000_000_000_000_000), value(recipes.Result, 2)),
+		},
+	}
+	return s, r, &recipes.Tree{Root: leaf.Hash, Leaves: []recipes.Leaf{leaf}}
 }
 
 type noRPC struct {
 	calls int
 	raw   []byte
 	err   error
+}
+
+func TestAuthenticatedCapacityPreflight(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mutate    func(*recipes.Recipe, *recipes.Tree)
+		invalid   bool
+		unclaimed bool
+	}{
+		{"valid", func(*recipes.Recipe, *recipes.Tree) {}, false, false},
+		{"mutable asset", func(_ *recipes.Recipe, tree *recipes.Tree) { tree.Leaves[0].DataMask[35] = 255 }, true, false},
+		{"other account", func(_ *recipes.Recipe, tree *recipes.Tree) { tree.Leaves[0].Data[163] ^= 1 }, true, false},
+		{"stable debt", func(_ *recipes.Recipe, tree *recipes.Tree) { tree.Leaves[0].Data[99] = 1 }, true, false},
+		{"referral", func(_ *recipes.Recipe, tree *recipes.Tree) { tree.Leaves[0].Data[131] = 1 }, true, false},
+		{"missing health floor", func(r *recipes.Recipe, _ *recipes.Tree) { r.Steps = r.Steps[:2] }, true, false},
+		{"wrong health pool", func(r *recipes.Recipe, _ *recipes.Tree) { r.Queries[0][31] ^= 1 }, true, false},
+		{"wrong health account", func(r *recipes.Recipe, _ *recipes.Tree) { r.Queries[0][195] ^= 1 }, true, false},
+		{"wrong health position", func(r *recipes.Recipe, _ *recipes.Tree) {
+			r.Queries[0] = pack(t, queryArgs, common.HexToAddress("0x11"), append(selector("getUserAccountData(address)"), pack(t, argTypes("address"), common.HexToAddress("0xa1"))...), []*big.Int{}, big.NewInt(128))
+		}, true, false},
+		{"unsafe floor", func(r *recipes.Recipe, _ *recipes.Tree) {
+			r.Steps[3] = instruction(t, recipes.LessOrEqual, binaryArgs, big.NewInt(999_999_999_999_999_999), value(recipes.Result, 2))
+		}, true, false},
+		{"health after another effect", func(r *recipes.Recipe, _ *recipes.Tree) {
+			r.Steps = append(r.Steps[:2], append([][]byte{instruction(t, recipes.Call, callArgs, common.HexToAddress("0x99"), []byte{1}, []*big.Int{})}, r.Steps[2:]...)...)
+			r.Steps[4] = instruction(t, recipes.LessOrEqual, binaryArgs, big.NewInt(1_250_000_000_000_000_000), value(recipes.Result, 3))
+		}, true, false},
+		{"direct input", func(r *recipes.Recipe, _ *recipes.Tree) {
+			r.Steps[0] = instruction(t, recipes.Add, binaryArgs, value(recipes.Input, 0), big.NewInt(0))
+		}, false, true},
+		{"range only", func(r *recipes.Recipe, _ *recipes.Tree) {
+			r.Steps = append(r.Steps, instruction(t, recipes.LessOrEqual, binaryArgs, value(recipes.Input, 0), big.NewInt(100)))
+		}, true, false},
+		{"multiple groups", func(r *recipes.Recipe, _ *recipes.Tree) {
+			r.Steps = append(r.Steps, r.Steps[1], r.Steps[2], instruction(t, recipes.LessOrEqual, binaryArgs, big.NewInt(1_250_000_000_000_000_000), value(recipes.Result, 5)))
+		}, true, false},
+		{"interleaved effect", func(r *recipes.Recipe, _ *recipes.Tree) {
+			effect := instruction(t, recipes.Call, callArgs, common.HexToAddress("0x99"), []byte{1, 2, 3, 4}, []*big.Int{})
+			r.Steps = append([][]byte{r.Steps[0], effect}, r.Steps[1:]...)
+			r.Steps[4] = instruction(t, recipes.LessOrEqual, binaryArgs, big.NewInt(1_250_000_000_000_000_000), value(recipes.Result, 3))
+		}, true, false},
+		{"recipe-derived unrelated shape", func(r *recipes.Recipe, tree *recipes.Tree) {
+			r.Steps[0] = instruction(t, recipes.Min, binaryArgs, big.NewInt(100), big.NewInt(100))
+			tree.Leaves[0].Data = append(tree.Leaves[0].Data, 0)
+			tree.Leaves[0].DataMask = append(tree.Leaves[0].DataMask, 0)
+		}, false, true},
+		{"noncanonical borrow", func(_ *recipes.Recipe, tree *recipes.Tree) {
+			tree.Leaves[0].Data = append(tree.Leaves[0].Data, 0)
+			tree.Leaves[0].DataMask = append(tree.Leaves[0].DataMask, 0)
+		}, true, false},
+		{"unresolved prefix", func(r *recipes.Recipe, tree *recipes.Tree) {
+			binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), value(recipes.Result, 1))
+			r.Steps = [][]byte{
+				instruction(t, recipes.Min, binaryArgs, value(recipes.Input, 1), big.NewInt(100)),
+				instruction(t, recipes.Min, binaryArgs, value(recipes.Input, 0), value(recipes.Result, 0)),
+				instruction(t, recipes.Manage, manageArgs, value(recipes.Result, 1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{binding}}),
+				r.Steps[2],
+				instruction(t, recipes.LessOrEqual, binaryArgs, big.NewInt(1_250_000_000_000_000_000), value(recipes.Result, 3)),
+			}
+		}, true, false},
+		{"wrong binding", func(r *recipes.Recipe, tree *recipes.Tree) {
+			binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(68), 224), value(recipes.Result, 0))
+			r.Steps[1] = instruction(t, recipes.Manage, manageArgs, value(recipes.Result, 0), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{binding}})
+		}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, r, tree := capacityFixture(t)
+			old := tree.Leaves[0].Hash
+			tc.mutate(&r, tree)
+			tree.Leaves[0].Hash, _ = recipes.HashLeaf(tree.Leaves[0])
+			tree.Root = tree.Leaves[0].Hash
+			for i := range r.Steps {
+				r.Steps[i] = bytes.ReplaceAll(r.Steps[i], old[:], tree.Root[:])
+			}
+			reader := &noRPC{}
+			req, err := (&Provider{reader: reader}).RecipeRequirements(s, r, tree)
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("unsafe native capacity recipe accepted")
+				}
+			} else if tc.unclaimed {
+				if err != nil || len(req.Inputs) != 0 {
+					t.Fatalf("unrelated recipe claimed: %v %v", req, err)
+				}
+				if _, err = recipes.AnchoredInputs(r, nil); err == nil && tc.name == "direct input" {
+					t.Fatal("unrecognized direct input escaped generic exact-source check")
+				}
+			} else if err != nil || len(req.Inputs) != 1 || req.Inputs[0] != 0 {
+				t.Fatalf("native capacity ownership missing: %v %v", req, err)
+			}
+			if reader.calls != 0 {
+				t.Fatal("preflight performed network I/O")
+			}
+		})
+	}
 }
 
 func (r *noRPC) CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
@@ -67,99 +166,8 @@ func (r *noRPC) CallContractWithCode(context.Context, ethereum.CallMsg, *big.Int
 	r.calls++
 	return r.raw, r.err
 }
-func TestAuthenticatedCapacityPreflight(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		mutate func(*recipes.Recipe, *recipes.Tree, int)
-		want   string
-	}{
-		{"valid", func(*recipes.Recipe, *recipes.Tree, int) {}, ""},
-		{"direct input", func(r *recipes.Recipe, _ *recipes.Tree, _ int) {
-			r.Steps[0] = instruction(t, recipes.Add, binaryArgs, value(recipes.Input, 0), big.NewInt(0))
-		}, ""},
-		{"range only", func(r *recipes.Recipe, _ *recipes.Tree, _ int) {
-			r.Steps = append(r.Steps, instruction(t, recipes.LessOrEqual, binaryArgs, value(recipes.Input, 0), big.NewInt(100)))
-		}, "only feed"},
-		{"multiple groups", func(r *recipes.Recipe, _ *recipes.Tree, _ int) { r.Steps = append(r.Steps, r.Steps[1]) }, "multiple"},
-		{"mutable health", func(_ *recipes.Recipe, tree *recipes.Tree, _ int) { tree.Leaves[0].DataMask[4] = 255 }, "unpinned"},
-		{"stable rate", func(_ *recipes.Recipe, tree *recipes.Tree, offset int) { tree.Leaves[0].Data[offset+63] = 1 }, "unpinned"},
-		{"referral", func(_ *recipes.Recipe, tree *recipes.Tree, offset int) { tree.Leaves[0].Data[offset+95] = 1 }, "unpinned"},
-		{"other account", func(_ *recipes.Recipe, tree *recipes.Tree, offset int) { tree.Leaves[0].Data[offset+127] ^= 1 }, "unpinned"},
-		{"health pool mismatch", func(_ *recipes.Recipe, tree *recipes.Tree, _ int) {
-			data := tree.Leaves[0].Data
-			at := bytes.Index(data, selector("getHealthFactor(address,address)"))
-			data[at+35] ^= 1
-		}, "unpinned"},
-		{"health account mismatch", func(_ *recipes.Recipe, tree *recipes.Tree, _ int) {
-			data := tree.Leaves[0].Data
-			at := bytes.Index(data, selector("getHealthFactor(address,address)"))
-			data[at+67] ^= 1
-		}, "unpinned"},
-		{"interleaved effect", func(r *recipes.Recipe, _ *recipes.Tree, _ int) {
-			effect := instruction(t, recipes.Call, callArgs, common.HexToAddress("0x99"), []byte{1, 2, 3, 4}, []*big.Int{})
-			r.Steps = [][]byte{r.Steps[0], effect, r.Steps[1]}
-		}, "effects between"},
-		{"recipe-derived unrelated shape", func(r *recipes.Recipe, tree *recipes.Tree, _ int) {
-			r.Steps[0] = instruction(t, recipes.Min, binaryArgs, big.NewInt(100), big.NewInt(100))
-			tree.Leaves[0].Data = append(tree.Leaves[0].Data, 0)
-			tree.Leaves[0].DataMask = append(tree.Leaves[0].DataMask, 0)
-		}, ""},
-
-		{"invalid health floor", func(_ *recipes.Recipe, tree *recipes.Tree, _ int) {
-			data := tree.Leaves[0].Data
-			needle := pack(t, uintArgs, big.NewInt(1_250_000_000_000_000_000))
-			at := bytes.Index(data, needle)
-			big.NewInt(999999999999999999).FillBytes(data[at : at+32])
-		}, "unpinned"},
-		{"noncanonical capacity guard", func(_ *recipes.Recipe, tree *recipes.Tree, _ int) {
-			tree.Leaves[0].Data = append(tree.Leaves[0].Data, 0)
-			tree.Leaves[0].DataMask = append(tree.Leaves[0].DataMask, 0)
-		}, "unpinned"},
-		{"unresolved prefix", func(r *recipes.Recipe, tree *recipes.Tree, offset int) {
-			binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(int64(offset)), 224), value(recipes.Result, 1))
-			r.Steps = [][]byte{instruction(t, recipes.Min, binaryArgs, value(recipes.Input, 1), big.NewInt(100)), instruction(t, recipes.Min, binaryArgs, value(recipes.Input, 0), value(recipes.Result, 0)), instruction(t, recipes.Manage, manageArgs, value(recipes.Result, 1), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{binding}})}
-		}, "input"},
-
-		{"wrong binding", func(r *recipes.Recipe, tree *recipes.Tree, offset int) {
-			binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(int64(offset+32)), 224), value(recipes.Result, 0))
-			r.Steps[1] = instruction(t, recipes.Manage, manageArgs, value(recipes.Result, 0), [][32]byte{tree.Leaves[0].Hash}, [][]*big.Int{{binding}})
-		}, "unpinned"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s, r, tree, offset := capacityFixture(t)
-			tc.mutate(&r, tree, offset)
-			old := tree.Leaves[0].Hash
-			tree.Leaves[0].Hash, _ = recipes.HashLeaf(tree.Leaves[0])
-			tree.Root = tree.Leaves[0].Hash
-			for i, step := range r.Steps {
-				r.Steps[i] = bytes.ReplaceAll(step, old[:], tree.Root[:])
-			}
-			reader := &noRPC{}
-			p := &Provider{reader: reader}
-			req, err := p.RecipeRequirements(s, r, tree)
-			if tc.want != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.want) {
-					t.Fatalf("expected %q: %v", tc.want, err)
-				}
-			} else if err != nil {
-				t.Fatal(err)
-			}
-			if tc.name == "valid" && (len(req.Inputs) != 1 || req.Inputs[0] != 0) {
-				t.Fatal("capacity ownership missing")
-			}
-			if tc.name == "direct input" {
-				if _, err = recipes.AnchoredInputs(r, nil); err == nil {
-					t.Fatal("unrecognized direct input escaped generic exact-source check")
-				}
-			}
-			if reader.calls != 0 {
-				t.Fatal("preflight performed network I/O")
-			}
-		})
-	}
-}
 func TestCapacityProbeErrorsAndOutput(t *testing.T) {
-	s, r, tree, _ := capacityFixture(t)
+	s, r, tree := capacityFixture(t)
 	reader := &noRPC{err: errors.New("secret RPC payload")}
 	p := &Provider{reader: reader}
 	ctx, cancel := context.WithCancel(t.Context())

@@ -97,7 +97,7 @@ func derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (*borrow, er
 		if !candidate {
 			continue
 		}
-		b, amount, matched, err := guardedBorrow(s, action)
+		b, amount, matched, err := nativeBorrow(s, r, action)
 		if err != nil {
 			return nil, err
 		}
@@ -194,79 +194,64 @@ func capacityChain(r recipes.Recipe, v recipes.Value, nodes map[uint]bool) (bool
 	return a || b, nil
 }
 
-func guardedBorrow(s provider.Snapshot, a recipes.ManagedAction) (*borrow, recipes.Value, bool, error) {
+// Native permissions pin the pool and every argument except the amount. The
+// outer recipe must check this account's native health immediately after borrowing.
+func nativeBorrow(s provider.Snapshot, r recipes.Recipe, a recipes.ManagedAction) (*borrow, recipes.Value, bool, error) {
 	d := a.Leaf.Data
-	if a.Leaf.Target != s.Account || len(d) < 4 || !bytes.Equal(d[:4], selector("execute(bytes[],bytes[],uint256[])")) {
+	if len(d) < 4 || !bytes.Equal(d[:4], selector("borrow(address,uint256,uint256,uint16,address)")) {
 		return nil, recipes.Value{}, false, nil
 	}
 	fail := func() (*borrow, recipes.Value, bool, error) {
-		return nil, recipes.Value{}, true, errors.New("Aave guarded borrow has unsupported or unpinned shape")
+		return nil, recipes.Value{}, true, errors.New("Aave native borrow requires pinned identity and post-borrow health floor")
 	}
-	decoded, err := executeArgs.Unpack(d[4:])
-	if err != nil {
+	if a.Leaf.Target == (common.Address{}) || a.Leaf.Value == nil || a.Leaf.Value.Sign() != 0 || len(d) != 164 || len(a.Slot.Leaves) != 1 || len(a.Bindings) != 1 || a.Bindings[0].Offset != 36 || a.Pinned(0, 36) != nil || a.Pinned(68, len(d)-68) != nil {
 		return fail()
 	}
-	queries, steps, inputs := decoded[0].([][]byte), decoded[1].([][]byte), decoded[2].([]*big.Int)
-	// Other account capabilities belong to their existing providers.
-	if len(steps) == 0 || len(steps[0]) == 0 || steps[0][0] != recipes.Call {
-		return nil, recipes.Value{}, false, nil
-	}
-	call, err := callArgs.Unpack(steps[0][1:])
-	if err != nil {
+	args, err := borrowArgs.Unpack(d[4:])
+	if err != nil || args[0].(common.Address) == (common.Address{}) || args[2].(*big.Int).Cmp(big.NewInt(2)) != 0 || args[3].(uint16) != 0 || args[4].(common.Address) != s.Account {
 		return fail()
 	}
-	data := call[1].([]byte)
-	if len(data) < 4 || !bytes.Equal(data[:4], selector("borrow(address,uint256,uint256,uint16,address)")) {
-		return nil, recipes.Value{}, false, nil
-	}
-	canonical, err := executeArgs.Pack(decoded...)
+	canonical, err := borrowArgs.Pack(args...)
 	if err != nil || !bytes.Equal(canonical, d[4:]) {
 		return fail()
 	}
-
-	if len(inputs) != 0 || len(queries) != 1 || len(steps) != 3 || len(call[2].([]*big.Int)) != 0 || len(data) != 164 || len(steps[1]) == 0 || len(steps[2]) == 0 || steps[1][0] != recipes.Read || steps[2][0] != recipes.LessOrEqual || a.Leaf.Value == nil || a.Leaf.Value.Sign() != 0 {
+	account, _ := accountArgs.Pack(s.Account)
+	expected := append(selector("getUserAccountData(address)"), account...)
+	healthReads := map[uint]bool{}
+	var floor *big.Int
+	for i := a.Step + 1; i < uint(len(r.Steps)); i++ {
+		step := r.Steps[i]
+		if step[0] == recipes.Manage || step[0] == recipes.Call || step[0] == recipes.Approve {
+			break
+		}
+		if step[0] == recipes.Read {
+			read, e := uintArgs.Unpack(step[1:])
+			if e != nil {
+				return fail()
+			}
+			q, e := queryArgs.Unpack(r.Queries[read[0].(*big.Int).Uint64()])
+			if e != nil {
+				return fail()
+			}
+			if q[0].(common.Address) == a.Leaf.Target && bytes.Equal(q[1].([]byte), expected) && len(q[2].([]*big.Int)) == 0 && q[3].(*big.Int).Cmp(big.NewInt(160)) == 0 {
+				healthReads[i] = true
+			}
+		}
+		if step[0] == recipes.LessOrEqual {
+			check, e := binaryArgs.Unpack(step[1:])
+			if e != nil {
+				return fail()
+			}
+			left, right := operand(check[0].(*big.Int)), operand(check[1].(*big.Int))
+			if left.Source == recipes.Literal && left.Value.Cmp(big.NewInt(1_000_000_000_000_000_000)) >= 0 && right.Source == recipes.Result && healthReads[uint(right.Value.Uint64())] && (floor == nil || left.Value.Cmp(floor) > 0) {
+				floor = left.Value
+			}
+		}
+	}
+	if floor == nil {
 		return fail()
 	}
-	args, err := borrowArgs.Unpack(data[4:])
-	if err != nil {
-		return fail()
-	}
-	if args[0].(common.Address) == (common.Address{}) || args[2].(*big.Int).Cmp(big.NewInt(2)) != 0 || args[3].(uint16) != 0 || args[4].(common.Address) != s.Account {
-		return fail()
-	}
-	q, err := queryArgs.Unpack(queries[0])
-	if err != nil {
-		return fail()
-	}
-	health := q[1].([]byte)
-	pool := call[0].(common.Address)
-	if pool == (common.Address{}) || q[0].(common.Address) == (common.Address{}) || len(q[2].([]*big.Int)) != 0 || q[3].(*big.Int).Sign() != 0 || len(health) != 68 || !bytes.Equal(health[:4], selector("getHealthFactor(address,address)")) {
-		return fail()
-	}
-	expected, _ := healthArgs.Pack(pool, s.Account)
-	if !bytes.Equal(health[4:], expected) {
-		return fail()
-	}
-	read, err := uintArgs.Unpack(steps[1][1:])
-	if err != nil || read[0].(*big.Int).Sign() != 0 {
-		return fail()
-	}
-	check, err := binaryArgs.Unpack(steps[2][1:])
-	if err != nil {
-		return fail()
-	}
-	floor, result := operand(check[0].(*big.Int)), operand(check[1].(*big.Int))
-	if floor.Source != recipes.Literal || floor.Value.Cmp(big.NewInt(1_000_000_000_000_000_000)) < 0 || result.Source != recipes.Result || result.Value.Cmp(big.NewInt(1)) != 0 {
-		return fail()
-	}
-	if bytes.Count(d, data) != 1 {
-		return fail()
-	}
-	offset := bytes.Index(d, data) + 36
-	if len(a.Slot.Leaves) != 1 || len(a.Bindings) != 1 || int(a.Bindings[0].Offset) != offset || a.Pinned(0, offset) != nil || a.Pinned(offset+32, len(d)-offset-32) != nil {
-		return fail()
-	}
-	return &borrow{Pool: pool, Asset: args[0].(common.Address), Floor: floor.Value, Step: a.Step}, a.Bindings[0].Value, true, nil
+	return &borrow{Pool: a.Leaf.Target, Asset: args[0].(common.Address), Floor: floor, Step: a.Step}, a.Bindings[0].Value, true, nil
 }
 
 func stepOperands(r recipes.Recipe, index uint) ([]recipes.Value, error) {
@@ -338,11 +323,10 @@ func argTypes(names ...string) abi.Arguments {
 }
 
 var (
-	executeArgs  = argTypes("bytes[]", "bytes[]", "uint256[]")
 	callArgs     = argTypes("address", "bytes", "uint256[]")
 	queryArgs    = argTypes("address", "bytes", "uint256[]", "uint256")
 	borrowArgs   = argTypes("address", "uint256", "uint256", "uint16", "address")
-	healthArgs   = argTypes("address", "address")
+	accountArgs  = argTypes("address")
 	capacityArgs = argTypes("address", "address", "address", "uint256")
 	uintArgs     = argTypes("uint256")
 	binaryArgs   = argTypes("uint256", "uint256")

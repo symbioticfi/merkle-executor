@@ -66,6 +66,7 @@ type Provider struct {
 	client                          *Client
 	settlement, sellToken, buyToken common.Address
 	sellAmount, minBuy              *big.Int
+	pinnedAppData                   *common.Hash
 	volumeBPS                       func(context.Context, *big.Int, common.Address, common.Address) (uint64, error)
 }
 type prepared struct {
@@ -173,7 +174,12 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	}
 	validTo := int64(s.Timestamp + p.cfg.ValiditySeconds)
 	initialAppData, initialHash := appData(defaultSlippageBPS)
-	q, e := p.client.Quote(ctx, wire.CowQuoteRequest{SellToken: p.sellToken.Hex(), BuyToken: p.buyToken.Hex(), From: s.Account.Hex(), Receiver: s.Account.Hex(), SellAmountBeforeFee: p.sellAmount.String(), Kind: "sell", SigningScheme: "eip1271", ValidTo: validTo, AppData: initialAppData, AppDataHash: initialHash.Hex(), PriceQuality: "verified", SellTokenBalance: "erc20", BuyTokenBalance: "erc20", PartiallyFillable: false})
+	appDataHash := initialHash.Hex()
+	if p.pinnedAppData != nil {
+		initialHash = *p.pinnedAppData
+		initialAppData, appDataHash = initialHash.Hex(), ""
+	}
+	q, e := p.client.Quote(ctx, wire.CowQuoteRequest{SellToken: p.sellToken.Hex(), BuyToken: p.buyToken.Hex(), From: s.Account.Hex(), Receiver: s.Account.Hex(), SellAmountBeforeFee: p.sellAmount.String(), Kind: "sell", SigningScheme: "eip1271", ValidTo: validTo, AppData: initialAppData, AppDataHash: appDataHash, PriceQuality: "verified", SellTokenBalance: "erc20", BuyTokenBalance: "erc20", PartiallyFillable: false})
 	if e != nil {
 		return provider.Output{}, e
 	}
@@ -227,6 +233,9 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	o.BuyAmount = buy.String()
 	o.SellAmount = grossSell.String()
 	fullAppData, finalHash := appData(slippageBPS)
+	if p.pinnedAppData != nil {
+		fullAppData, finalHash = "", *p.pinnedAppData
+	}
 	o.AppData = finalHash.Hex()
 	o.AppDataHash = ""
 	o.QuoteID = q.ID
@@ -369,8 +378,10 @@ func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared)
 		return provider.Progress{}, e
 	}
 	postOrder := d.Order
-	postOrder.AppData = d.FullAppData
-	postOrder.AppDataHash = d.Order.AppData
+	if d.FullAppData != "" {
+		postOrder.AppData = d.FullAppData
+		postOrder.AppDataHash = d.Order.AppData
+	}
 	returned, code, postErr := p.client.Post(ctx, postOrder)
 	if postErr != nil {
 		// A timeout, duplicate response or gateway error can hide acceptance. Keep the exact UID

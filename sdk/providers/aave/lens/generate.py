@@ -19,12 +19,13 @@ with tempfile.TemporaryDirectory(prefix="aave-borrow-probe-") as directory:
     (root/"foundry.toml").write_text('[profile.default]\nsolc="0.8.38"\nevm_version="cancun"\noptimizer=true\noptimizer_runs=200\nvia_ir=true\nbytecode_hash="none"\n')
     subprocess.run(["forge","build","--root",directory],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     artifact=json.loads((root/"out/AaveBorrowProbe.sol/AaveBorrowProbe.json").read_text())
-    fixture=json.loads((root/"out/FixtureAave.sol/FixtureAave.json").read_text())
-    fixture_text=json.dumps({"abi":fixture["abi"],"bytecode":fixture["bytecode"]["object"],"sourceSHA256":hashlib.sha256((HERE/"FixtureAave.sol").read_bytes()).hexdigest()},indent=2)+"\n"
-    fixture_path=HERE/"FixtureAave.json"
-    if args.check:
-        if fixture_path.read_text()!=fixture_text:raise SystemExit("stale Aave fixture artifact")
-    else:fixture_path.write_text(fixture_text)
+    for name in ("FixtureAave", "FixtureAavePurchase", "FixtureAaveToken"):
+        fixture=json.loads((root/f"out/FixtureAave.sol/{name}.json").read_text())
+        fixture_text=json.dumps({"abi":fixture["abi"],"bytecode":fixture["bytecode"]["object"],"sourceSHA256":hashlib.sha256((HERE/"FixtureAave.sol").read_bytes()).hexdigest()},indent=2)+"\n"
+        fixture_path=HERE/f"{name}.json"
+        if args.check:
+            if fixture_path.read_text()!=fixture_text:raise SystemExit(f"stale {name} fixture artifact")
+        else:fixture_path.write_text(fixture_text)
     result={"compiler":artifact["metadata"]["compiler"]["version"],"evmVersion":"cancun","sources":{n:hashlib.sha256(p.read_bytes()).hexdigest() for n,p in SOURCES.items()},"runtime":artifact["deployedBytecode"]["object"]}
     text=json.dumps(result,indent=2)+"\n"
     path=HERE/"AaveBorrowProbe.json"

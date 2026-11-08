@@ -23,7 +23,7 @@ The implementation follows CoW SDK commit
   signs gross sell amount (quoted net sell plus quoted network fee), with zero
   `feeAmount`. The buy amount uses the subtract-floor rule from
   `getQuoteAmountsAfterSlippage.ts`.
-- `packages/trading/src/getQuote.ts` rebuilds appData after AUTO without another
+- When the permission allows dynamic appData, `packages/trading/src/getQuote.ts` rebuilds appData after AUTO without another
   quote. `postCoWProtocolTrade.ts` posts the full document, its signed hash and
   quote identity. The local appData document uses schema 1.15.0, app code
   `merkle-executor`, market order class and smart slippage metadata.
@@ -46,7 +46,16 @@ parent preparation still stops the operation. No decimals, prices or gas feeds
 are consulted.
 
 The authenticated recipe supplies the token pair, exact gross budget and minimum
-proceeds floor. AUTO never weakens that floor. The RAM task retains the
+proceeds floor. AUTO never weakens that floor. Bounded signing recipes select the
+exact gross budget as `min(sell balance, maxAmount)`, and the provider honors their
+committed clock and maximum duration when it caps the default order lifetime.
+
+A fully pinned appData word stays pinned, including the zero hash. Quotes and
+orders then use the hash-only `appData` form without `appDataHash`; the pinned
+OpenAPI specification supports both hash-only and full-document forms. The provider
+still applies AUTO slippage to the buy amount within the recipe floor, but does
+not invent or replace metadata whose hash the curator committed. Permissions
+that authorize mutable appData retain the full AUTO document and its hash. The RAM task retains the
 chosen slippage, final full document, signed hash, order, quote identity, digest
 and UID before any external POST. The task validates the exact authorization and never obtains another quote or
 slippage suggestion during reconciliation. Restart loses that task identity.
@@ -55,3 +64,24 @@ Fixture tests cover upstream rounding vectors, verification refusal, BFF failure
 and cancellation, gross fee accounting, recipe floor rejection, appData identity
 and retries with the same UID. These are local encoding/API fixture evidence;
 they do not establish acceptance by a live orderbook or deployed authorization.
+
+The bounded CoW fixture is exported by the real frontend `signing` builder and
+checked byte-for-byte against Solidity `SigningRecipe`. The SDK test resolves its
+exact dependencies, prepares the automatic order and simulates the original recipe
+on ephemeral Anvil, retaining the original permission mask. It also executes the
+local authorization and rejects changed amounts and excessive expiry.
+
+Regenerate all three copies with the locked frontend dependencies (no RPC):
+
+```sh
+node sdk/providers/cowswap/testdata/generate-frontend.mjs "$FRONTEND_REPO" \
+  sdk/providers/cowswap/testdata/frontend-bounded-cow.json \
+  "$ADAPTERS_REPO/test/fixtures/recipes/bounded-cow.json" \
+  "$FRONTEND_REPO/src/shared/lib/merkle/operations/authoring/recipes/templates/__fixtures__/bounded-cow.json"
+```
+
+Replace the output arguments with `--check` followed by those same three paths to
+check fixture drift without writing. `go test ./providers/cowswap` covers the
+HTTP fixture; `MERKLE_ANVIL_TEST=1 go test ./providers/cowswap` also runs original
+recipe simulation. These are local and API-fixture evidence, not live API or
+deployment evidence.
