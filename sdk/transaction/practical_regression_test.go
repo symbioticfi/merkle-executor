@@ -431,6 +431,10 @@ func TestPracticalReplacementDeadlineCapturesWithoutBroadcast(t *testing.T) {
 		if !admitted {
 			t.Fatal("request was not admitted")
 		}
+		practicalAttempt(t, chain, 1)
+		chain.mu.Lock()
+		chain.advanceLocked("replacement block")
+		chain.mu.Unlock()
 		result := <-results
 		lateBroadcast := false
 		for _, tx := range chain.attempts() {

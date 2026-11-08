@@ -108,7 +108,7 @@ preflight reduces avoidable rejections; it does not prove later execution or
 change ownership after a broadcast attempt.
 
 `transaction.Manager` is the shared transaction engine used by the daemon and
-vault-solver. Each solver process configures its own signer and manager, then
+vault-solver's Merkle integrations. Each Merkle solver process configures its own signer and manager, then
 explicitly initializes and starts it. Distinct signers across processes are a
 trusted deployment assumption. Send APIs and keeper sender views use the same
 nonce, fee and receipt implementation. Constructors start no workers. Existing
