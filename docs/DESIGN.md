@@ -80,8 +80,10 @@ progress and context rather than simulating lengths 1 through N.
 
 `ValidatePreparedBatch` groups fresh metadata, roles and canonical opening pins,
 then validates intermediate results and the exact unchanged-code envelope with
-the transaction gas budget. Closing guards cover every distinct pin. Probe code
-is never deployed and never substitutes for the final exact simulation.
+the transaction gas budget. The host supplies the same YAML `txManager.maxGas`
+to the planner and sender; the default is 16,777,216, with the fresh block gas
+limit also bounding admission. Closing guards cover every distinct pin. Probe
+code is never deployed and never substitutes for the final exact simulation.
 
 External envelopes use `ValidatePreparedBatchWithSimulation` through the same
 admission core. Fresh recipe/identity/role checks, original and fresh opening and

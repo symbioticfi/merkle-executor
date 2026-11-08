@@ -32,6 +32,8 @@ type plannerScaleReader struct {
 	emptyResults      bool
 	accepted          map[int]bool
 	probes            []int
+	gasBudgets        []uint64
+	gasPerCall        uint64
 }
 
 func scaleArgs(t *testing.T, names ...string) abi.Arguments {
@@ -95,6 +97,9 @@ func (r *plannerScaleReader) FilterLogs(_ context.Context, q ethereum.FilterQuer
 	return []types.Log{r.logs[q.Addresses[0]]}, nil
 }
 func (r *plannerScaleReader) CallContract(_ context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	if msg.Gas != 0 {
+		r.gasBudgets = append(r.gasBudgets, msg.Gas)
+	}
 	if block == nil || block.Cmp(r.header.Number) != 0 {
 		r.t.Fatal("lost pinned call")
 	}
@@ -139,7 +144,7 @@ func (r *plannerScaleReader) CallContract(_ context.Context, msg ethereum.CallMs
 			if e != nil {
 				return nil, e
 			}
-			return r.accept(len(calls))
+			return r.accept(len(calls), msg.Gas)
 		default:
 			return nil, errors.New("unknown executor method")
 		}
@@ -177,13 +182,13 @@ func (r *plannerScaleReader) CallContract(_ context.Context, msg ethereum.CallMs
 			Target   common.Address
 			Value    *big.Int
 			CallData []byte
-		})))
+		})), msg.Gas)
 	}
 	return nil, errors.New("unknown target")
 }
-func (r *plannerScaleReader) accept(count int) ([]byte, error) {
+func (r *plannerScaleReader) accept(count int, gas uint64) ([]byte, error) {
 	r.probes = append(r.probes, count)
-	if !r.accepted[count] {
+	if !r.accepted[count] || r.gasPerCall != 0 && uint64(count)*r.gasPerCall > gas {
 		return nil, errors.New("out of gas")
 	}
 	return nil, nil

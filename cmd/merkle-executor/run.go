@@ -55,6 +55,15 @@ func planBotWithHTTP(ctx context.Context, path string, out io.Writer, httpClient
 	if err != nil {
 		return err
 	}
+	return env.writePlan(out, plan)
+}
+
+func (env *environment) writePlan(out io.Writer, plan keeper.ExecutionPlan) error {
+	for _, strategy := range env.strategies {
+		if failure := plan.Failures[strategy.Config.Name]; failure != nil {
+			env.log.Error(failure, "strategy planning failed", "strategy", strategy.Config.Name)
+		}
+	}
 	to, data, err := plan.Transaction()
 	if err != nil {
 		return err
@@ -139,7 +148,7 @@ func openEnvironment(ctx context.Context, path string, httpClient *http.Client) 
 		s.Providers = append(s.Providers, capacity, claims)
 		strategies = append(strategies, s)
 	}
-	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}
+	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, MaxGas: cfg.TxManager.MaxGas, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}
 	return &environment{cfg: cfg, client: client, planner: planner, strategies: strategies, log: log,
 		close: func() { client.Close(); flush() }}, nil
 }

@@ -9,6 +9,7 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -283,8 +284,10 @@ func decodeBatchSnapshots(snapshots []Snapshot, header *types.Header, reads *pro
 // ValidatePreparedBatch authenticates all selected members at one fresh head,
 // simulates the exact transaction and closes every distinct block pin together.
 // Cache entries become visible only after complete admission succeeds.
-func ValidatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller common.Address) error {
-	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, nil)
+// The optional maxGas budget defaults to 16,777,216 when omitted or zero and is
+// bounded by the fresh block gas limit. More than one budget is invalid.
+func ValidatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller common.Address, maxGas ...uint64) error {
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, nil, maxGas)
 }
 
 // PreparedBatchSimulationRequest contains independent copies of authenticated
@@ -304,14 +307,22 @@ type PreparedBatchSimulation func(context.Context, PreparedBatchSimulationReques
 // ValidatePreparedBatchWithSimulation shares recipe, identity, role and canonical
 // guards with ValidatePreparedBatch. Its mandatory callback validates an external
 // envelope instead of generic result witnesses and HasWork classification.
-func ValidatePreparedBatchWithSimulation(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, caller common.Address, simulate PreparedBatchSimulation) error {
+// The optional maxGas budget has the same defaults and bounds as that entry point.
+func ValidatePreparedBatchWithSimulation(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, caller common.Address, simulate PreparedBatchSimulation, maxGas ...uint64) error {
 	if simulate == nil {
 		return errors.New("external prepared batch simulation required")
 	}
-	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, nil, caller, simulate)
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, nil, caller, simulate, maxGas)
 }
 
-func validatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller common.Address, simulate PreparedBatchSimulation) error {
+func validatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller common.Address, simulate PreparedBatchSimulation, maxGas []uint64) error {
+	if len(maxGas) > 1 {
+		return errors.New("one transaction gas budget allowed")
+	}
+	gasLimit := params.MaxTxGas
+	if len(maxGas) == 1 && maxGas[0] != 0 {
+		gasLimit = maxGas[0]
+	}
 	if len(prepared) == 0 || len(prepared) != len(calls) || len(prepared) != len(leaves) || (simulate == nil && len(prepared) != len(witnesses)) || caller == (common.Address{}) {
 		return errors.New("prepared batch member count or caller mismatch")
 	}
@@ -345,6 +356,10 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 	if err = validateHeader(current, nil); err != nil {
 		return err
 	}
+	gasLimit = min(gasLimit, current.GasLimit)
+	if gasLimit == 0 {
+		return errors.New("positive block gas limit required")
+	}
 	pins, err := preparedPins(snapshots, current)
 	if err != nil {
 		return err
@@ -375,7 +390,7 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 	direct := simulate == nil && len(calls) == 1 && !isMulticall(calls[0].Data)
 	simulationIndex := len(requests)
 	if direct {
-		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: caller, To: &calls[0].Executor, Data: calls[0].Data, Gas: current.GasLimit}, Block: current.Number})
+		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: caller, To: &calls[0].Executor, Data: calls[0].Data, Gas: gasLimit}, Block: current.Number})
 	}
 	reads, err := protocolio.ReadGroup(ctx, reader, requests...)
 	if err != nil {
@@ -400,7 +415,7 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 	}
 	var inactive []int
 	if simulate != nil {
-		request := PreparedBatchSimulationRequest{Calls: make([]ExecutorCall, len(calls)), Caller: caller, BlockNumber: new(big.Int).Set(current.Number), GasLimit: current.GasLimit}
+		request := PreparedBatchSimulationRequest{Calls: make([]ExecutorCall, len(calls)), Caller: caller, BlockNumber: new(big.Int).Set(current.Number), GasLimit: gasLimit}
 		for i, call := range calls {
 			request.Calls[i] = ExecutorCall{Executor: call.Executor, Data: bytes.Clone(call.Data)}
 		}
@@ -421,7 +436,7 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 					return errors.New("batch validation requires code-override support")
 				}
 				entries, _ := Executions(calls[0].Data)
-				returned, e := SimulateBatch(ctx, backend, pin, entries, current.GasLimit)
+				returned, e := SimulateBatch(ctx, backend, pin, entries, gasLimit)
 				if e != nil {
 					return e
 				}
@@ -442,7 +457,7 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 			if !ok {
 				return errors.New("executor batch requires code-override support")
 			}
-			results, err = SimulateExecutors(ctx, backend, caller, calls, current.Number, current.GasLimit)
+			results, err = SimulateExecutors(ctx, backend, caller, calls, current.Number, gasLimit)
 			if err != nil {
 				return err
 			}

@@ -13,9 +13,21 @@ value, gas and fee payload. Signed bytes enter RAM before broadcast.
 
 Fees use a one-block median priority reward (minimum one wei), with a fee cap of
 `min(2*baseFee+tip, txManager.maxFeeGwei)`. If base fee plus tip exceeds the ceiling,
-no transaction is signed. Gas receives ten percent headroom, bounded by the block
-gas limit. The fee ceiling must be finite and positive. There is no fee-horizon
-model, replacement ladder, cancellation transfer or abandonment timer.
+no transaction is signed. `txManager.maxGas` supplies one deployment gas budget to
+planning, repetition, final admission and signing. Omitted or zero uses 16,777,216;
+an explicit override supports chains with different transaction limits. Operators
+must review this budget when their chain rules change. Every envelope simulation
+and estimate uses the lesser of this budget and the fresh block gas limit.
+Estimates above that limit fail before signing. Gas receives ten percent headroom,
+clamped to the same limit. The fee ceiling must be finite and positive. There is
+no fee-horizon model, replacement ladder, cancellation transfer or abandonment timer.
+
+SDK hosts pass the same `MaxGas` to `keeper.Planner` and `transaction.Config`.
+Both default zero to 16,777,216. `recipes.ValidatePreparedBatch` and
+`ValidatePreparedBatchWithSimulation` accept one optional gas budget with the same
+omitted/zero default, bounded by the fresh block gas limit. Simulation helpers
+with an explicit gas argument continue to honor that argument. Canonical header
+hashes and the authenticated recipe remain unchanged by gas budgeting.
 
 A send error can follow a successful node acceptance. `Busy` remains true after
 signing even on timeout or cancellation. `Poll` checks the owned hash, verifies

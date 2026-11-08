@@ -50,6 +50,7 @@ type Planner struct {
 	ChainID          *big.Int
 	Caller           common.Address
 	Confirmations    uint64
+	MaxGas           uint64 // Zero uses the conservative 16,777,216 gas budget.
 	RecipeCache      *recipes.RecipeCache
 }
 

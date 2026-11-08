@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -71,6 +72,11 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 	if err = validHeader(header, block); err != nil {
 		return batch, err
 	}
+	gasLimit := p.MaxGas
+	if gasLimit == 0 {
+		gasLimit = params.MaxTxGas
+	}
+	gasLimit = min(gasLimit, header.GasLimit)
 	type treeKey struct {
 		account common.Address
 		root    common.Hash
@@ -137,7 +143,7 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 			continue
 		}
 		if repeat && supportsBatch {
-			repeated, batchErr := recipes.BatchExecution(ctx, reader, snap, plan.Calldata, header.GasLimit)
+			repeated, batchErr := recipes.BatchExecution(ctx, reader, snap, plan.Calldata, gasLimit)
 			err = batchErr
 			if errors.Is(err, provider.ErrNotReady) {
 				if !delegated {
@@ -174,7 +180,7 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 		if !delegated {
 			batch.To = snap.Executor
 			calls, leaves, witnesses := batch.validation()
-			err = recipes.ValidatePreparedBatch(ctx, p.Chain, selected, calls, leaves, witnesses, p.Caller)
+			err = recipes.ValidatePreparedBatch(ctx, p.Chain, selected, calls, leaves, witnesses, p.Caller, p.MaxGas)
 			if errors.Is(err, provider.ErrNotReady) {
 				batch = ExecutionPlan{Failures: failures}
 				selected = nil
@@ -229,7 +235,7 @@ func (p *Planner) fit(ctx context.Context, batch ExecutionPlan, selected []recip
 		err := prior
 		prior = nil
 		if err == nil {
-			err = recipes.ValidatePreparedBatch(ctx, p.Chain, selected, calls, leaves, witnesses, p.Caller)
+			err = recipes.ValidatePreparedBatch(ctx, p.Chain, selected, calls, leaves, witnesses, p.Caller, p.MaxGas)
 		}
 		if err == nil {
 			return batch, nil

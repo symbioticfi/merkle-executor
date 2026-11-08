@@ -51,8 +51,10 @@ their exact identity in RAM without a new curator fetch.
 Transaction and keeper tests cover capture before broadcast, ambiguous sends,
 identical-byte rebroadcast, foreign nonce consumption, cancellation, canonical
 confirmation, receipt reorgs, account reservations, terminal revert and private
-settlement state. Runtime state disappears when the process exits; there is no
-journal, restart test contract, replacement ladder or acknowledgement handshake.
+settlement state. CLI tests check partial-failure diagnostics preserve healthy
+calldata and strategy order. Runtime state disappears when the process exits;
+there is no journal, restart test contract, replacement ladder or acknowledgement
+handshake.
 
 ## Off-chain providers
 

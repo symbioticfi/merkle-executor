@@ -36,7 +36,9 @@ classification. `ValidatePreparedBatch` retains all result, witness and readines
 checks and grouped direct-call simulation.
 The planner uses `DiscoverCandidates` from the same discovery core to isolate
 candidate errors while preserving grouped reads and the common canonical pin.
-`ExecutionPlan.Failures` reports skipped failures alongside healthy work;
+`ExecutionPlan.Failures` reports skipped failures alongside healthy work; hosts
+must report these diagnostics explicitly because the error map is excluded from
+JSON.
 `DiscoverBatch` retains strict all-or-error behavior for startup callers.
 
 The HTTP backend sends compatible getters through Multicall3 as an ordinary
@@ -75,8 +77,10 @@ poll. Polling, each settlement, and preparation/submission have independent
 operation budgets and honor the host context's cancellation. A host may select
 `Keeper.Wakeup()` alongside its normal timer when its
 sender provides canonical-completion notifications; the SDK starts no worker.
-`transaction.Manager` exposes Submit/Poll/Busy. Before signing it requires a fresh
-`Backend.TransactionSenderBalanceAt` balance covering the final maximum gas cost;
+Hosts pass the same gas budget to `keeper.Planner.MaxGas` and
+`transaction.Config.MaxGas`; zero selects 16,777,216, and fresh block gas also caps
+admission. `transaction.Manager` exposes Submit/Poll/Busy. Before signing it requires
+a fresh `Backend.TransactionSenderBalanceAt` balance covering the final maximum gas cost;
 the SDK chain client reads that balance from the sending endpoint. Funding read
 errors, invalid values and insufficient balance leave no signed work or busy lane.
 Signed bytes remain owned through ambiguous submission. There are no stores, journals,

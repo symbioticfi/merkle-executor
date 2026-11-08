@@ -138,7 +138,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 			}
 			_ = json.Unmarshal(q.Params[0], &call)
 			if simulationBlock != "" && call.To == target && bytes.Equal(call.Input[:4], executorABI.GetABI().Methods["execute"].ID) {
-				if call.From != owner || string(q.Params[1]) != simulationBlock || uint64(call.Gas) != simulationGas {
+				if call.From != owner || string(q.Params[1]) != simulationBlock || uint64(call.Gas) != min(simulationGas, uint64(16_777_216)) {
 					t.Errorf("simulation context changed caller=%s block=%s gas=%d", call.From, q.Params[1], call.Gas)
 				}
 			}

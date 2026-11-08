@@ -123,12 +123,16 @@ simulations remain isolated while independent calls may share an HTTP array.
 Failed/malformed aggregates never fall back to individual calls.
 [Getter provenance and compatibility limits](../sdk/schemas/READ_BATCHING.md).
 
-Each Merkl claim action performs one dedicated strict aggregate of effective root, default recipient,
-and claimed/recipient getters for each token: `2 + 2N` inner reads, at most 66 for
-32 tokens. The automatic adapter learns the distributor from authenticated recipe
-bytes after metadata discovery, so this aggregate is a later stage. A recipe with
-numeric economics adds exactly one shared lens call regardless of field/provider
-count. Opening/canonical headers, recipe event evidence, current metadata/roles and
+Merkl shares pinned effective-root, default-recipient and token claimed/recipient
+getters across claim actions, deduplicating identical reads. Fixed tokens and
+standalone all-reward inventories use aggregates of at most 256 getters. Composed
+runtime-token claims read only candidates visited in address order: the first
+candidate needs four getters, and each later candidate adds two. Getter failures
+are checked when their claim consumes them, so an unused later failure cannot mask
+an earlier claim's validation. The automatic adapter learns the distributor from
+authenticated recipe bytes after metadata discovery, so these aggregates are a
+later stage. A recipe with numeric economics adds exactly one shared lens call
+regardless of field/provider count. Opening/canonical headers, recipe event evidence, current metadata/roles and
 original full simulation remain necessary separate stages. The 16 MiB recipe cache
 retains only canonical event bodies, never balances, roots, roles or quotes.
 

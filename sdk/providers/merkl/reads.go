@@ -17,6 +17,11 @@ type rewardReadKey struct {
 	data   string
 }
 
+type rewardReadResult struct {
+	value multicall.Multicall3Result
+	err   error
+}
+
 // rewardReads shares only immutable results from this preparation's pinned block.
 // Getter failures remain local to the claim consuming them, in recipe order.
 type rewardReads struct {
@@ -24,13 +29,13 @@ type rewardReads struct {
 	deps     provider.Deps
 	snapshot provider.Snapshot
 	calls    []multicall.Multicall3Call3
-	indices  map[rewardReadKey]int
-	group    *protocolio.ReadResults
-	chunks   map[int][]multicall.Multicall3Result
+	seen     map[rewardReadKey]bool
+	results  map[rewardReadKey]rewardReadResult
 }
 
+// entries preplans runtime tokens only when every reward will be considered.
 func newRewardReads(ctx context.Context, deps provider.Deps, s provider.Snapshot, claims []recipeClaim, entries []wire.MerklEntry) *rewardReads {
-	reads := &rewardReads{ctx: ctx, deps: deps, snapshot: s, indices: map[rewardReadKey]int{}, chunks: map[int][]multicall.Multicall3Result{}}
+	reads := &rewardReads{ctx: ctx, deps: deps, snapshot: s, seen: map[rewardReadKey]bool{}, results: map[rewardReadKey]rewardReadResult{}}
 	for _, claim := range claims {
 		var tokens []common.Address
 		for _, raw := range claim.cfg.Tokens {
@@ -48,19 +53,23 @@ func newRewardReads(ctx context.Context, deps provider.Deps, s provider.Snapshot
 				}
 			}
 		}
-		for _, call := range rewardCalls(common.HexToAddress(claim.cfg.Distributor), s.Account, tokens) {
-			key := rewardReadKey{call.Target, string(call.CallData)}
-			if _, ok := reads.indices[key]; ok {
-				continue
-			}
-			reads.indices[key] = len(reads.calls)
-			// Inspect each result when its claim consumes it. A later failed
-			// getter must not override an earlier claim's validation branch.
-			call.AllowFailure = true
-			reads.calls = append(reads.calls, call)
-		}
+		reads.add(rewardCalls(common.HexToAddress(claim.cfg.Distributor), s.Account, tokens))
 	}
 	return reads
+}
+
+func (r *rewardReads) add(calls []multicall.Multicall3Call3) {
+	for _, call := range calls {
+		key := rewardReadKey{call.Target, string(call.CallData)}
+		if r.seen[key] {
+			continue
+		}
+		r.seen[key] = true
+		// Inspect each result when its claim consumes it. A later failed
+		// getter must not override an earlier claim's validation branch.
+		call.AllowFailure = true
+		r.calls = append(r.calls, call)
+	}
 }
 
 func rewardCalls(distributor, account common.Address, tokens []common.Address) []multicall.Multicall3Call3 {
@@ -79,7 +88,9 @@ func rewardCalls(distributor, account common.Address, tokens []common.Address) [
 }
 
 func (r *rewardReads) forProvider(p *Provider) ([]multicall.Multicall3Result, error) {
-	if r.group == nil {
+	calls := rewardCalls(p.distributor, r.snapshot.Account, p.tokens)
+	r.add(calls)
+	if len(r.calls) != 0 {
 		var requests []protocolio.ReadRequest
 		for start := 0; start < len(r.calls); start += protocolio.MaxReadBatch {
 			end := min(start+protocolio.MaxReadBatch, len(r.calls))
@@ -93,31 +104,36 @@ func (r *rewardReads) forProvider(p *Provider) ([]multicall.Multicall3Result, er
 		if err != nil {
 			return nil, err
 		}
-		r.group = group
+		for start := 0; start < len(r.calls); start += protocolio.MaxReadBatch {
+			count := min(protocolio.MaxReadBatch, len(r.calls)-start)
+			raw, err := group.At(start / protocolio.MaxReadBatch).CallData()
+			var values []multicall.Multicall3Result
+			if err == nil {
+				values, err = multicall.NewMulticall3().UnpackAggregate3(raw)
+				if err != nil {
+					err = errors.New("invalid Merkl aggregate response")
+				} else if len(values) != count {
+					err = errors.New("Merkl aggregate result count mismatch")
+				}
+			}
+			for i := range count {
+				call := r.calls[start+i]
+				result := rewardReadResult{err: err}
+				if err == nil {
+					result.value = values[i]
+				}
+				r.results[rewardReadKey{call.Target, string(call.CallData)}] = result
+			}
+		}
+		r.calls = nil
 	}
-	var results []multicall.Multicall3Result
-	for _, call := range rewardCalls(p.distributor, r.snapshot.Account, p.tokens) {
-		index, ok := r.indices[rewardReadKey{call.Target, string(call.CallData)}]
-		if !ok {
-			return nil, errors.New("Merkl getter missing from preparation read plan")
+	results := make([]multicall.Multicall3Result, 0, len(calls))
+	for _, call := range calls {
+		result := r.results[rewardReadKey{call.Target, string(call.CallData)}]
+		if result.err != nil {
+			return nil, result.err
 		}
-		chunk := index / protocolio.MaxReadBatch
-		values, ok := r.chunks[chunk]
-		if !ok {
-			raw, err := r.group.At(chunk).CallData()
-			if err != nil {
-				return nil, err
-			}
-			values, err = multicall.NewMulticall3().UnpackAggregate3(raw)
-			if err != nil {
-				return nil, errors.New("invalid Merkl aggregate response")
-			}
-			if len(values) != min(protocolio.MaxReadBatch, len(r.calls)-chunk*protocolio.MaxReadBatch) {
-				return nil, errors.New("Merkl aggregate result count mismatch")
-			}
-			r.chunks[chunk] = values
-		}
-		results = append(results, values[index%protocolio.MaxReadBatch])
+		results = append(results, result.value)
 	}
 	for _, result := range results {
 		if !result.Success {

@@ -74,7 +74,7 @@ func TestPlannerExclusiveRecipePreflightBeforeProviderIO(t *testing.T) {
 	}
 	for _, mode := range []string{"valid", "unowned target", "direct Call", "early witness", "late witness", "conflicting witness", "invalid witness index", "wrong witness value"} {
 		t.Run(mode, func(t *testing.T) {
-			header := &types.Header{Number: big.NewInt(12)}
+			header := &types.Header{Number: big.NewInt(12), GasLimit: 30_000_000}
 			leaf := recipes.Leaf{Target: target, Value: new(big.Int), Data: []byte{1, 2, 3, 4}, DataMask: make([]byte, 4)}
 			var err error
 			leaf.Hash, err = recipes.HashLeaf(leaf)

@@ -74,7 +74,7 @@ func (r *executionReader) CallContract(ctx context.Context, msg ethereum.CallMsg
 	if isExecutionCall(msg.Data) {
 		r.simulations++
 		r.executed = bytes.Clone(msg.Data)
-		if msg.From != common.HexToAddress("0x3333") || msg.To == nil || *msg.To != r.executor || block == nil || block.Uint64() != r.head || msg.Gas != r.headers[r.head].GasLimit {
+		if msg.From != common.HexToAddress("0x3333") || msg.To == nil || *msg.To != r.executor || block == nil || block.Uint64() != r.head || msg.Gas != min(r.headers[r.head].GasLimit, uint64(16_777_216)) {
 			r.t.Fatalf("simulation context changed: %+v block%v", msg, block)
 		}
 		if r.mode == "during simulation" {

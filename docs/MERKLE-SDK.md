@@ -14,7 +14,9 @@ The host calls `Keeper.Tick(context)` repeatedly and can inspect `Pending()` bef
 ending a one-shot session. `keeper.Planner` groups discovery and final validation
 across executors. `Prepare` prepares one strategy; `PrepareExecution` selects one
 atomic direct, same-executor or delegated envelope. Prepared bytes go unchanged
-to sender admission. Configuration must stay fixed for a Keeper's lifetime;
+to sender admission. Supply one shared budget to `Planner.MaxGas` and
+`transaction.Config.MaxGas` (zero defaults to 16,777,216); the fresh block gas
+limit also caps admission. Configuration must stay fixed for a Keeper's lifetime;
 strategy names must be nonempty and unique so settlement ownership is unambiguous.
 
 At the recipe layer, use `recipes.DiscoverBatch` followed by

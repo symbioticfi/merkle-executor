@@ -55,7 +55,7 @@ func (p *permissionProvider) PrepareRecipe(context.Context, provider.Snapshot, r
 func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 	for _, mode := range []string{"valid", "local tree", "source error", "empty", "missing chain", "null chain", "wrong chain", "root", "account", "invalid unused leaf", "invalid unused proof", "mutate chain", "root during HTTP", "reorg during HTTP"} {
 		t.Run(mode, func(t *testing.T) {
-			header := &types.Header{Number: big.NewInt(12)}
+			header := &types.Header{Number: big.NewInt(12), GasLimit: 30_000_000}
 			recipe := recipes.Recipe{}
 			hash, _ := recipes.HashRecipe(recipe)
 			snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: hash, RecipeBlock: 12, Root: common.HexToHash("0x04")}

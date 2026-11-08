@@ -15,6 +15,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 )
 
 type Config struct {
@@ -81,6 +82,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Signer.KeyEnv == "" {
 		cfg.Signer.KeyEnv = DefaultKeyEnv
+	}
+	if cfg.TxManager.MaxGas == 0 {
+		cfg.TxManager.MaxGas = transaction.DefaultMaxGas
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err

@@ -19,10 +19,14 @@ import (
 )
 
 func rewardBatch(t *testing.T) ([]wire.MerklReward, common.Hash, [][][32]byte) {
+	return rewardInventory(t, addr(3), 32)
+}
+
+func rewardInventory(t *testing.T, account common.Address, count int) ([]wire.MerklReward, common.Hash, [][][32]byte) {
 	t.Helper()
-	levels := [][]common.Hash{make([]common.Hash, 32)}
-	for i := range 32 {
-		levels[0][i] = crypto.Keccak256Hash(protocolio.AddressWord(addr(3)), protocolio.AddressWord(addr(int64(i+100))), protocolio.Word(big.NewInt(100)))
+	levels := [][]common.Hash{make([]common.Hash, count)}
+	for i := range count {
+		levels[0][i] = crypto.Keccak256Hash(protocolio.AddressWord(account), protocolio.AddressWord(addr(int64(i+100))), protocolio.Word(big.NewInt(100)))
 	}
 	for len(levels[len(levels)-1]) > 1 {
 		last := levels[len(levels)-1]
@@ -36,7 +40,7 @@ func rewardBatch(t *testing.T) ([]wire.MerklReward, common.Hash, [][][32]byte) {
 		}
 		levels = append(levels, next)
 	}
-	rows, proofs := make([]wire.MerklReward, 32), make([][][32]byte, 32)
+	rows, proofs := make([]wire.MerklReward, count), make([][][32]byte, count)
 	for i := range rows {
 		rows[i] = wire.MerklReward{Token: wire.MerklToken{Address: addr(int64(i + 100)).Hex(), Decimals: 6}, Amount: "100", Claimed: "0", Pending: "0"}
 		for level := 0; level < len(levels)-1; level++ {

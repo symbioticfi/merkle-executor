@@ -43,7 +43,7 @@ func TestPreparedExternalSimulationUsesFreshPinnedCopiesWithoutResults(t *testin
 			callbacks := 0
 			err := ValidatePreparedBatchWithSimulation(t.Context(), r, prepared, calls, leaves, caller, func(_ context.Context, request PreparedBatchSimulationRequest) error {
 				callbacks++
-				if len(request.Calls) != count || request.Caller != caller || request.BlockNumber.Uint64() != 11 || request.GasLimit != 30_000_000 {
+				if len(request.Calls) != count || request.Caller != caller || request.BlockNumber.Uint64() != 11 || request.GasLimit != 16_777_216 {
 					t.Fatalf("external simulation lost exact context: %+v", request)
 				}
 				for i, call := range request.Calls {

@@ -71,6 +71,31 @@ func TestAnvilTransactionLifecycle(t *testing.T) {
 	}
 }
 
+func TestAnvilTransactionGasHeadroomRespectsDefaultBudget(t *testing.T) {
+	rpcClient, client, endpoint := startAnvil(t)
+	backend := anvilBackend(t, endpoint)
+	m, err := New(backend, anvilSigner(t), big.NewInt(31337), Config{MaxFeeGwei: 30}, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := common.HexToAddress("0xdead")
+	// Expanding memory consumes about 15.5M gas: valid under Osaka's cap, but
+	// adding unbounded 10% headroom would produce a rejected signed transaction.
+	setAnvilCode(t, rpcClient, to, "0x6000622b1fe05200")
+	if err := m.Submit(t.Context(), Request{To: to}); err != nil {
+		t.Fatal(err)
+	}
+	tx, _, err := client.TransactionByHash(t.Context(), m.active.Hash())
+	if err != nil || tx.Gas() != 16_777_216 {
+		t.Fatalf("transaction exceeded deployment budget: %v", err)
+	}
+	mineAnvilBlock(t, rpcClient)
+	result, err := m.Poll(t.Context())
+	if err != nil || result == nil || result.Reverted || m.Busy() {
+		t.Fatalf("bounded high-gas transaction did not confirm: result=%+v err=%v", result, err)
+	}
+}
+
 type anvilRelay struct {
 	*chain.Client
 	forward bool
@@ -209,7 +234,7 @@ func startAnvil(t *testing.T) (*rpc.Client, *ethclient.Client, string) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	cmd := exec.CommandContext(t.Context(), anvil, "--no-mining", "--silent", "--chain-id", "31337", "--port", strconv.Itoa(port))
+	cmd := exec.CommandContext(t.Context(), anvil, "--no-mining", "--silent", "--chain-id", "31337", "--enable-tx-gas-limit", "--port", strconv.Itoa(port))
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	if err := cmd.Start(); err != nil {

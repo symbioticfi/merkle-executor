@@ -111,11 +111,15 @@ func (b *testBackend) TransactionReceipt(context.Context, common.Hash) (*types.R
 }
 func newManager(t *testing.T, b *testBackend) *Manager {
 	t.Helper()
+	return newManagerWithConfig(t, b, Config{MaxFeeGwei: 30, Confirmations: 2})
+}
+func newManagerWithConfig(t *testing.T, b *testBackend, cfg Config) *Manager {
+	t.Helper()
 	s, err := signer.NewFromHexKey(testKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := New(b, s, big.NewInt(31337), Config{MaxFeeGwei: 30, Confirmations: 2}, logr.Discard())
+	m, err := New(b, s, big.NewInt(31337), cfg, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}

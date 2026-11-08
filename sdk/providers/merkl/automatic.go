@@ -143,10 +143,12 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if err != nil {
 		return nil, err
 	}
-	reads := newRewardReads(ctx, p.deps, s, claims, entries)
 	if len(r.Queries) == 0 && len(r.Steps) == 1 && len(claims) == 1 && len(claims[0].action.Bindings) == 0 && len(claims[0].layout.tokens) == 1 && claims[0].action.Slot.Gate.Source == recipes.Literal && claims[0].action.Slot.Gate.Value.Cmp(big.NewInt(1)) == 0 {
-		return p.prepareAll(s, claims[0], entries, reads)
+		return p.prepareAll(s, claims[0], entries, newRewardReads(ctx, p.deps, s, claims, entries))
 	}
+	// Fixed rewards share a read plan. Runtime tokens add their getters only as
+	// selection visits them, rather than reading the entire unused inventory.
+	reads := newRewardReads(ctx, p.deps, s, claims, nil)
 	out := provider.Output{Inputs: map[uint]string{}, Actions: map[string]hexutil.Bytes{}}
 	anyClaimable := false
 	allOptional := true

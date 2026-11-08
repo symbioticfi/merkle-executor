@@ -14,6 +14,7 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -34,9 +35,14 @@ type Backend interface {
 	TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)
 }
 
+// DefaultMaxGas is a conservative deployment budget; hosts may override it for
+// chains with different transaction limits.
+const DefaultMaxGas = params.MaxTxGas
+
 type Config struct {
 	MaxFeeGwei    float64
 	Confirmations uint64
+	MaxGas        uint64 // Zero uses DefaultMaxGas.
 }
 type Request struct {
 	To   common.Address
@@ -61,6 +67,7 @@ type Manager struct {
 	signer            signer.Signer
 	chainID, feeLimit *big.Int
 	confirmations     uint64
+	maxGas            uint64
 	active            *types.Transaction
 	nonceFloor        uint64
 	log               logr.Logger
@@ -77,7 +84,10 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 	if limit.Sign() <= 0 || limit.BitLen() > 256 {
 		return nil, errors.New("maxFeeGwei is outside the transaction fee range")
 	}
-	return &Manager{backend: backend, signer: s, chainID: new(big.Int).Set(chainID), feeLimit: limit, confirmations: cfg.Confirmations, log: log.WithName("transaction")}, nil
+	if cfg.MaxGas == 0 {
+		cfg.MaxGas = DefaultMaxGas
+	}
+	return &Manager{backend: backend, signer: s, chainID: new(big.Int).Set(chainID), feeLimit: limit, confirmations: cfg.Confirmations, maxGas: cfg.MaxGas, log: log.WithName("transaction")}, nil
 }
 
 func (m *Manager) Busy() bool {
@@ -193,12 +203,13 @@ func (m *Manager) quote(ctx context.Context, req Request) (uint64, *big.Int, *bi
 	if fee.Cmp(m.feeLimit) > 0 {
 		fee.Set(m.feeLimit)
 	}
-	gas, err := m.backend.EstimateGas(ctx, ethereum.CallMsg{From: m.signer.Address(), To: &req.To, Data: req.Data, GasFeeCap: fee, GasTipCap: tip})
+	gasLimit := min(m.maxGas, header.GasLimit)
+	gas, err := m.backend.EstimateGas(ctx, ethereum.CallMsg{From: m.signer.Address(), To: &req.To, Data: req.Data, Gas: gasLimit, GasFeeCap: fee, GasTipCap: tip})
 	if err != nil {
 		return 0, nil, nil, failure("estimate transaction gas", err)
 	}
-	if gas == 0 || gas > header.GasLimit {
-		return 0, nil, nil, errors.New("transaction gas exceeds block limit")
+	if gas == 0 || gas > gasLimit {
+		return 0, nil, nil, errors.New("transaction gas exceeds budget or block limit")
 	}
 	margin := gas / 10
 	if gas%10 != 0 {
@@ -207,7 +218,7 @@ func (m *Manager) quote(ctx context.Context, req Request) (uint64, *big.Int, *bi
 	if gas > math.MaxUint64-margin {
 		return 0, nil, nil, errors.New("transaction gas overflows")
 	}
-	gas = min(gas+margin, header.GasLimit)
+	gas = min(gas+margin, gasLimit)
 	return gas, tip, fee, nil
 }
 

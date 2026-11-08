@@ -31,9 +31,10 @@ validated at startup; the signing key must match that caller.
 `strategies` is an ordered list of executor addresses. Accounts come from the
 contracts, and active permission artifacts come from `curator.url`. Duplicate
 executors and unknown YAML fields are rejected. `plan` discovers, assembles and
-simulates without signing or publishing orders. `run` continuously drives
-transaction and external settlement work until stopped; stopping discards RAM
-tracking when the process exits.
+simulates without signing or publishing orders. Partial candidate failures are
+logged to stderr in strategy order while healthy calldata remains on stdout.
+`run` continuously drives transaction and external settlement work until stopped;
+stopping discards RAM tracking when the process exits.
 
 When configured, `/healthz`, `/readyz` and `/metrics` expose process health and
 keeper outcomes. Readiness reflects the latest iteration. `version` prints build
@@ -54,6 +55,8 @@ lists are packed into a verified prefix; remaining work stays eligible for later
 cycles. Native repetition uses bounded growth probes rather than scanning every
 prefix length.
 
+Planning and signing share `txManager.maxGas` (default 16,777,216), bounded also
+by the fresh block gas limit. Set an explicit YAML budget for other chain limits.
 The sender estimates gas, applies bounded EIP-1559 fees and checks a fresh
 sending-endpoint balance against the final maximum gas cost before signing.
 The sending endpoint must serve `eth_getBalance`; invalid, unavailable or
