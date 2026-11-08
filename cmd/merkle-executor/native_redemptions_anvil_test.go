@@ -367,6 +367,11 @@ func TestAnvilNativeRedemptionsAtomicityAndInProcessReorg(t *testing.T) {
 	if err = worker.Tick(ctx); err != nil || !worker.Pending() {
 		t.Fatal("reorg lost RAM ownership", err)
 	}
+	// Anvil drops the orphaned transaction from its pool. Reinclude the exact
+	// signed bytes without depending on the manager's block-based rebroadcast timer.
+	if err = client.SendTransaction(ctx, signed); err != nil {
+		t.Fatal(err)
+	}
 	if servicePendingTransaction(t, ctx, client, caller).Hash() != signed.Hash() {
 		t.Fatal("reorg changed signed attempt")
 	}
@@ -387,8 +392,17 @@ func TestAnvilNativeRedemptionsAtomicityAndInProcessReorg(t *testing.T) {
 	}
 	curatorUnavailable.Store(true)
 	beforeConfirmation := curatorCalls.Load()
-	if err = worker.Tick(ctx); err != nil || worker.Pending() {
-		t.Fatal("canonical confirmation did not finish native work", err)
+	for worker.Pending() {
+		if err = worker.Tick(ctx); err != nil {
+			t.Fatal("canonical confirmation did not finish native work", err)
+		}
+		if worker.Pending() {
+			select {
+			case <-ctx.Done():
+				t.Fatal("canonical confirmation did not finish native work", ctx.Err())
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
 	}
 	if curatorCalls.Load() != beforeConfirmation {
 		t.Fatal("active attempt fetched new permission data")

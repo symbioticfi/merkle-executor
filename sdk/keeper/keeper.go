@@ -16,8 +16,8 @@ import (
 // Sender owns at most one transaction and returns canonical execution evidence.
 // Submit errors may leave Busy true: ambiguous submission retains ownership.
 type Sender interface {
-	Submit(context.Context, transaction.Request) error
-	Poll(context.Context) (*transaction.Result, error)
+	Submit(context.Context, transaction.ExecutionRequest) error
+	Poll(context.Context) (*transaction.ExecutionResult, error)
 	Busy() bool
 }
 type Planning interface {
@@ -107,15 +107,6 @@ func (k *Keeper) Tick(ctx context.Context) error {
 	return k.drain(ctx)
 }
 
-// Wakeup exposes an optional sender progress hint. Hosts still schedule Tick;
-// senders without background work return nil and rely on the host's polling.
-func (k *Keeper) Wakeup() <-chan struct{} {
-	if sender, ok := k.Sender.(interface{ Wakeup() <-chan struct{} }); ok {
-		return sender.Wakeup()
-	}
-	return nil
-}
-
 // drain submits each executor at most once and advances each settlement once.
 // Confirmed effects may make idle executors ready; a missing receipt yields.
 func (k *Keeper) drain(ctx context.Context) error {
@@ -134,6 +125,10 @@ func (k *Keeper) drain(ctx context.Context) error {
 			result, err := k.Sender.Poll(operation)
 			cancel()
 			if err != nil {
+				if !k.Sender.Busy() {
+					// A canonical older call may supersede this plan without executing it.
+					k.active = nil
+				}
 				failures = append(failures, err)
 			} else if result != nil {
 				if err = k.complete(result); err != nil {
@@ -229,14 +224,14 @@ func (k *Keeper) prepareAndSubmit(ctx context.Context, candidates []Strategy) (*
 	// Capture ownership before submission: a timeout can follow a successful send.
 	frozen := freezeExecution(plan)
 	k.active = &frozen
-	err = k.Sender.Submit(operation, transaction.Request{To: to, Data: data})
+	err = k.Sender.Submit(operation, transaction.ExecutionRequest{To: to, Data: data})
 	if err != nil && !k.Sender.Busy() {
 		k.active = nil
 	}
 	return &plan, err
 }
 
-func (k *Keeper) complete(result *transaction.Result) error {
+func (k *Keeper) complete(result *transaction.ExecutionResult) error {
 	if result.Hash == (common.Hash{}) || result.Execution == nil || result.Execution.TxHash != result.Hash {
 		return errors.New("sender returned invalid execution identity")
 	}

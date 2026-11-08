@@ -1,465 +1,335 @@
 package transaction
 
 import (
-	"bytes"
 	"context"
 	"math"
 	"math/big"
+	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-
-	"github.com/symbioticfi/merkle-executor/sdk/signer"
 )
 
-const testKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-
-type testBackend struct {
-	mined, pending                uint64
-	head                          uint64
-	headers                       map[uint64]*types.Header
-	receipt                       *types.Receipt
-	sent                          []*types.Transaction
-	sendErr, receiptErr, nonceErr error
-	balance                       *big.Int
-	balanceErr                    error
-	balanceAccount                common.Address
-	balanceBlock                  *big.Int
-	balanceReads                  int
-	afterBalance                  func()
-	gas                           uint64
-	afterReceipt                  func()
-	afterSend                     func()
-	receiptMisses                 int
+type admissionBackend struct {
+	*practicalChain
+	gas           uint64
+	balance       *big.Int
+	balanceErr    error
+	gasBudget     uint64
+	afterEstimate func()
 }
 
-func newBackend() *testBackend {
-	b := &testBackend{headers: map[uint64]*types.Header{}, gas: 21_000, balance: big.NewInt(1_000_000_000_000_000_000)}
-	for i := range uint64(5) {
-		h := &types.Header{Number: new(big.Int).SetUint64(i), BaseFee: big.NewInt(1_000_000_000), GasLimit: 30_000_000, Time: 100 + i}
-		if i > 0 {
-			h.ParentHash = b.headers[i-1].Hash()
-		}
-		b.headers[i] = h
+func (b *admissionBackend) EstimateGas(_ context.Context, msg ethereum.CallMsg) (uint64, error) {
+	b.gasBudget = msg.Gas
+	if b.afterEstimate != nil {
+		b.afterEstimate()
 	}
-	return b
-}
-func (b *testBackend) NonceAt(context.Context, common.Address, *big.Int) (uint64, error) {
-	return b.mined, b.nonceErr
-}
-func (b *testBackend) PendingNonceAt(context.Context, common.Address) (uint64, error) {
-	return b.pending, b.nonceErr
-}
-func (b *testBackend) TransactionSenderBalanceAt(_ context.Context, account common.Address, block *big.Int) (*big.Int, error) {
-	b.balanceAccount, b.balanceBlock = account, block
-	b.balanceReads++
-	if b.afterBalance != nil {
-		b.afterBalance()
-	}
-	return b.balance, b.balanceErr
-}
-func (b *testBackend) FeeHistory(context.Context, uint64, *big.Int, []float64) (*ethereum.FeeHistory, error) {
-	return &ethereum.FeeHistory{Reward: [][]*big.Int{{big.NewInt(100_000_000)}}}, nil
-}
-func (b *testBackend) HeaderByNumber(_ context.Context, n *big.Int) (*types.Header, error) {
-	if n == nil {
-		return b.headers[b.head], nil
-	}
-	if !n.IsUint64() || n.Uint64() > b.head {
-		return nil, ethereum.NotFound
-	}
-	return b.headers[n.Uint64()], nil
-}
-func (b *testBackend) HeaderByHash(_ context.Context, hash common.Hash) (*types.Header, error) {
-	for _, h := range b.headers {
-		if h.Hash() == hash {
-			return h, nil
-		}
-	}
-	return nil, ethereum.NotFound
-}
-func (b *testBackend) EstimateGas(context.Context, ethereum.CallMsg) (uint64, error) {
 	return b.gas, nil
 }
-func (b *testBackend) SendTransaction(_ context.Context, tx *types.Transaction) error {
-	b.sent = append(b.sent, tx)
-	if b.afterSend != nil {
-		b.afterSend()
-	}
-	return b.sendErr
+func (b *admissionBackend) TransactionSenderBalanceAt(context.Context, common.Address, *big.Int) (*big.Int, error) {
+	return b.balance, b.balanceErr
 }
-func (b *testBackend) TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error) {
-	if b.receiptMisses > 0 {
-		b.receiptMisses--
-		return nil, ethereum.NotFound
-	}
-	if b.receiptErr != nil {
-		return nil, b.receiptErr
-	}
-	if b.receipt == nil {
-		return nil, ethereum.NotFound
-	}
-	r := b.receipt
-	if b.afterReceipt != nil {
-		b.afterReceipt()
-	}
-	return r, nil
-}
-func newManager(t *testing.T, b *testBackend) *Manager {
+func startAdmissionManager(t *testing.T, b Backend, cfg Config) (*Manager, *practicalSigner) {
 	t.Helper()
-	return newManagerWithConfig(t, b, Config{MaxFeeGwei: 30, Confirmations: 2})
-}
-func newManagerWithConfig(t *testing.T, b *testBackend, cfg Config) *Manager {
-	t.Helper()
-	s, err := signer.NewFromHexKey(testKey)
+	cfg.PollInterval = time.Millisecond
+	cfg.ShutdownTimeout = time.Millisecond
+	s := &practicalSigner{Signer: practicalSigning(t, "1")}
+	m, err := New(b, s, big.NewInt(1), cfg, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := New(b, s, big.NewInt(31337), cfg, logr.Discard())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return m
-}
-func testRequest() Request { return Request{To: common.HexToAddress("0xdead"), Data: []byte{1, 2, 3}} }
-func include(b *testBackend, status uint64) {
-	tx := b.sent[0]
-	b.head = 3
-	b.mined = tx.Nonce() + 1
-	b.pending = b.mined
-	b.receipt = &types.Receipt{TxHash: tx.Hash(), BlockNumber: big.NewInt(1), BlockHash: b.headers[1].Hash(), Status: status, TransactionIndex: 2}
-	b.receipt.Logs = []*types.Log{{Address: common.HexToAddress("0xbeef"), Topics: []common.Hash{common.HexToHash("0x1234")}, Data: []byte{9}, BlockNumber: 1, BlockHash: b.receipt.BlockHash, TxHash: tx.Hash(), TxIndex: 2, Index: 0}}
-}
-
-func TestAmbiguousBroadcastRetainsExactBytesAndNonce(t *testing.T) {
-	b := newBackend()
-	b.sendErr = errors.New("relay timed out")
-	m := newManager(t, b)
-	req := testRequest()
-	if err := m.Submit(t.Context(), req); err == nil || !m.Busy() {
-		t.Fatalf("ambiguous submit: err=%v busy=%v", err, m.Busy())
-	}
-	req.Data[0] = 99
-	if err := m.Submit(t.Context(), testRequest()); !errors.Is(err, ErrBusy) {
-		t.Fatalf("second submit: %v", err)
-	}
-	b.sendErr = nil
-	if result, err := m.Poll(t.Context()); result != nil || err != nil || !m.Busy() {
-		t.Fatalf("pending poll: result=%+v err=%v busy=%v", result, err, m.Busy())
-	}
-	if len(b.sent) != 2 || b.sent[0].Hash() != b.sent[1].Hash() || !bytes.Equal(b.sent[1].Data(), []byte{1, 2, 3}) || b.sent[1].Nonce() != 0 {
-		t.Fatalf("retry changed signed intent: %+v", b.sent)
-	}
-}
-
-func TestKnownBroadcastKeepsPendingOwnership(t *testing.T) {
-	for _, tc := range []struct {
-		message string
-		known   bool
-	}{
-		{"already known", true},
-		{"Transaction rejected: transaction already imported", true},
-		{"insufficient funds", false},
-		{"relay timed out", false},
-	} {
-		t.Run(tc.message, func(t *testing.T) {
-			b := newBackend()
-			b.sendErr = errors.New(tc.message)
-			m := newManager(t, b)
-			if err := m.Submit(t.Context(), testRequest()); (err == nil) != tc.known || !m.Busy() {
-				t.Fatalf("submit err=%v busy=%v", err, m.Busy())
-			}
-			if result, err := m.Poll(t.Context()); result != nil || (err == nil) != tc.known || !m.Busy() {
-				t.Fatalf("pending result=%+v err=%v busy=%v", result, err, m.Busy())
-			}
-			if len(b.sent) != 2 || b.sent[0].Hash() != b.sent[1].Hash() {
-				t.Fatal("retry changed pending transaction identity")
-			}
-		})
-	}
-}
-
-func TestSubmitRefusesOutstandingOrInconsistentNonceBeforeSigning(t *testing.T) {
-	for _, tc := range []struct {
-		name           string
-		mined, pending uint64
-	}{{"existing pending", 0, 1}, {"inconsistent endpoint", 2, 1}, {"exhausted nonce", math.MaxUint64, math.MaxUint64}} {
-		t.Run(tc.name, func(t *testing.T) {
-			b := newBackend()
-			b.mined, b.pending = tc.mined, tc.pending
-			m := newManager(t, b)
-			if err := m.Submit(t.Context(), testRequest()); err == nil || m.Busy() || len(b.sent) != 0 {
-				t.Fatalf("unsafe admission: err=%v busy=%v sends=%d", err, m.Busy(), len(b.sent))
-			}
-		})
-	}
-}
-
-func TestCanonicalReceiptCompletesAndReleasesOwnership(t *testing.T) {
-	for _, status := range []uint64{types.ReceiptStatusSuccessful, types.ReceiptStatusFailed} {
-		t.Run(map[uint64]string{0: "reverted", 1: "confirmed"}[status], func(t *testing.T) {
-			b := newBackend()
-			m := newManager(t, b)
-			if err := m.Submit(t.Context(), testRequest()); err != nil {
-				t.Fatal(err)
-			}
-			include(b, status)
-			result, err := m.Poll(t.Context())
-			if err != nil || result == nil || result.Hash != b.sent[0].Hash() || result.Reverted != (status == 0) || result.Execution == nil || m.Busy() {
-				t.Fatalf("terminal poll: result=%+v err=%v busy=%v", result, err, m.Busy())
-			}
-			if err := result.Execution.Validate(); err != nil {
-				t.Fatal(err)
-			}
-			b.receipt.Logs[0].Data[0] = 42
-			if result.Execution.Logs[0].Data[0] != 9 {
-				t.Fatal("execution aliases RPC receipt")
-			}
-			if result, err := m.Poll(t.Context()); err != nil || result != nil {
-				t.Fatalf("terminal result repeated: %+v %v", result, err)
-			}
-			if err := m.Submit(t.Context(), testRequest()); err != nil || b.sent[1].Nonce() != 1 {
-				t.Fatalf("next nonce: err=%v", err)
-			}
-		})
-	}
-}
-
-func TestReceiptArrivingBeforeAdvancedNonceRetainsOwnedIdentity(t *testing.T) {
-	b := newBackend()
-	m := newManager(t, b)
-	if err := m.Submit(t.Context(), testRequest()); err != nil {
-		t.Fatal(err)
-	}
-	include(b, types.ReceiptStatusSuccessful)
-	// Inclusion can happen between the initial receipt lookup and the mined
-	// nonce read. Resolve the owned hash before reporting foreign consumption.
-	b.receiptMisses = 1
-	result, err := m.Poll(t.Context())
-	if err != nil || result == nil || result.Hash != b.sent[0].Hash() || m.Busy() || len(b.sent) != 1 {
-		t.Fatalf("owned inclusion misclassified: result=%+v err=%v busy=%v sends=%d", result, err, m.Busy(), len(b.sent))
-	}
-}
-
-func TestInclusionRacingRebroadcastRequiresOwnedCanonicalReceipt(t *testing.T) {
-	readFailure := errors.New("receipt read unavailable")
-	for _, tc := range []struct {
-		name       string
-		include    func(*testBackend)
-		wantResult bool
-		wantErr    error
-	}{
-		{"confirmed", func(b *testBackend) { include(b, types.ReceiptStatusSuccessful) }, true, nil},
-		{"reverted", func(b *testBackend) { include(b, types.ReceiptStatusFailed) }, true, nil},
-		{"insufficient depth", func(b *testBackend) {
-			include(b, types.ReceiptStatusSuccessful)
-			b.head = 2
-		}, false, nil},
-		{"orphaned", func(b *testBackend) {
-			include(b, types.ReceiptStatusSuccessful)
-			b.receipt.BlockHash = common.HexToHash("0x99")
-			b.receipt.Logs[0].BlockHash = b.receipt.BlockHash
-		}, false, nil},
-		{"foreign transaction", func(b *testBackend) { b.mined++ }, false, ErrNonceConsumed},
-		{"receipt unavailable", func(b *testBackend) { b.receiptErr = readFailure }, false, readFailure},
-		{"nonce unavailable", func(b *testBackend) { b.nonceErr = readFailure }, false, readFailure},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			b := newBackend()
-			m := newManager(t, b)
-			if err := m.Submit(t.Context(), testRequest()); err != nil {
-				t.Fatal(err)
-			}
-			b.afterSend = func() {
-				tc.include(b)
-				b.sendErr = errors.New("Transaction rejected: nonce too low")
-			}
-			result, err := m.Poll(t.Context())
-			if (result != nil) != tc.wantResult || (tc.wantErr == nil && err != nil) || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) || m.Busy() == tc.wantResult {
-				t.Fatalf("result=%+v err=%v busy=%v", result, err, m.Busy())
-			}
-			if len(b.sent) != 2 || b.sent[0].Hash() != b.sent[1].Hash() {
-				t.Fatal("rebroadcast changed the owned identity")
-			}
-			if result != nil && (result.Hash != b.sent[0].Hash() || result.Reverted != (tc.name == "reverted")) {
-				t.Fatal("foreign or incorrect execution returned")
-			}
-		})
-	}
-}
-
-func TestRebroadcastErrorsWithoutOwnedEvidenceRetainOwnership(t *testing.T) {
-	for _, message := range []string{"nonce too low", "insufficient funds", "relay timed out"} {
-		t.Run(message, func(t *testing.T) {
-			b := newBackend()
-			m := newManager(t, b)
-			if err := m.Submit(t.Context(), testRequest()); err != nil {
-				t.Fatal(err)
-			}
-			failure := errors.New(message)
-			b.sendErr = failure
-			if message != "nonce too low" {
-				// An unrelated rejection remains visible even when inclusion races it.
-				b.afterSend = func() { include(b, types.ReceiptStatusSuccessful) }
-			}
-			result, err := m.Poll(t.Context())
-			if result != nil || !errors.Is(err, failure) || !m.Busy() || len(b.sent) != 2 {
-				t.Fatalf("unproven rejection cleared or masked: result=%+v err=%v busy=%v", result, err, m.Busy())
-			}
-		})
-	}
-}
-
-func TestNonterminalEvidenceNeverReleasesOwnership(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		change  func(*testBackend)
-		wantErr bool
-	}{
-		{"insufficient depth", func(b *testBackend) { b.head = 2 }, false},
-		{"orphaned receipt", func(b *testBackend) {
-			b.receipt.BlockHash = common.HexToHash("0x99")
-			b.receipt.Logs[0].BlockHash = b.receipt.BlockHash
-		}, false},
-		{"invalid receipt hash", func(b *testBackend) { b.receipt.TxHash = common.HexToHash("0x99") }, true},
-		{"invalid status", func(b *testBackend) { b.receipt.Status = 2 }, true},
-		{"invalid log identity", func(b *testBackend) { b.receipt.Logs[0].TxHash = common.HexToHash("0x99") }, true},
-		{"invalid log index", func(b *testBackend) { b.receipt.Logs[0].TxIndex = 0 }, true},
-		{"removed log", func(b *testBackend) { b.receipt.Logs[0].Removed = true }, true},
-		{"receipt RPC error", func(b *testBackend) { b.receiptErr = errors.New("read unavailable") }, true},
-		{"unknown consumed nonce", func(b *testBackend) { b.receipt = nil }, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			b := newBackend()
-			m := newManager(t, b)
-			if err := m.Submit(t.Context(), testRequest()); err != nil {
-				t.Fatal(err)
-			}
-			include(b, 1)
-			tc.change(b)
-			result, err := m.Poll(t.Context())
-			if result != nil || (err != nil) != tc.wantErr || !m.Busy() {
-				t.Fatalf("unproven terminal: result=%+v err=%v busy=%v", result, err, m.Busy())
-			}
-			if len(b.sent) != 1 {
-				t.Fatal("rebroadcast obsolete transaction")
-			}
-		})
-	}
-}
-
-func TestConfirmationRechecksReceiptAndCanonicalWitness(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		change func(*testBackend)
-	}{
-		{"witness reorg", func(b *testBackend) {
-			h := *b.headers[3]
-			h.Extra = []byte{1}
-			b.headers[3] = &h
-		}},
-		{"receipt moved", func(b *testBackend) {
-			r := *b.receipt
-			r.BlockNumber = big.NewInt(2)
-			r.BlockHash = b.headers[2].Hash()
-			log := *r.Logs[0]
-			log.BlockNumber, log.BlockHash = 2, r.BlockHash
-			r.Logs = []*types.Log{&log}
-			b.receipt = &r
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			b := newBackend()
-			m := newManager(t, b)
-			if err := m.Submit(t.Context(), testRequest()); err != nil {
-				t.Fatal(err)
-			}
-			include(b, 1)
-			reads := 0
-			b.afterReceipt = func() {
-				reads++
-				if reads == 2 {
-					tc.change(b)
-				}
-			}
-			if tc.name == "receipt moved" {
-				// Move the receipt after inclusion was read, before its confirmation recheck.
-				b.afterReceipt = func() {
-					reads++
-					if reads == 1 {
-						tc.change(b)
-					}
-				}
-			}
-			result, err := m.Poll(t.Context())
-			if result != nil || err != nil || !m.Busy() {
-				t.Fatalf("changed confirmation accepted: %+v %v", result, err)
-			}
-		})
-	}
-}
-
-func TestCancelledWaitRetainsSubmittedTransaction(t *testing.T) {
-	b := newBackend()
-	m := newManager(t, b)
-	if err := m.Submit(t.Context(), testRequest()); err != nil {
+	if err = m.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	if _, err := m.Poll(ctx); !errors.Is(err, context.Canceled) || !m.Busy() {
-		t.Fatalf("cancelled poll: err=%v busy=%v", err, m.Busy())
-	}
-	include(b, 1)
-	if result, err := m.Poll(t.Context()); result == nil || err != nil {
-		t.Fatalf("resume: %+v %v", result, err)
-	}
+	done := make(chan struct{})
+	go func() { defer close(done); m.Start(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	return m, s
 }
 
-func TestSignerCannotChangeTransactionPayload(t *testing.T) {
-	b := newBackend()
-	s, err := signer.NewFromHexKey(testKey)
+func TestPassiveConfigurationAndStartup(t *testing.T) {
+	for _, fee := range []float64{-1, math.NaN(), math.Inf(1), 1e-20} {
+		if _, err := New(newPracticalChain(), practicalSigning(t, "1"), big.NewInt(1), Config{MaxFeeGwei: fee}, logr.Discard()); err == nil {
+			t.Fatalf("invalid fee %v accepted", fee)
+		}
+	}
+	m, err := New(newPracticalChain(), practicalSigning(t, "1"), big.NewInt(1), Config{}, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := New(b, changedSigner{s}, big.NewInt(31337), Config{MaxFeeGwei: 30}, logr.Discard())
-	if err != nil {
-		t.Fatal(err)
+	if m.Available() || m.LaneReady() {
+		t.Fatal("uninitialized manager advertised readiness")
 	}
-	if err := m.Submit(t.Context(), testRequest()); err == nil || m.Busy() || len(b.sent) != 0 {
-		t.Fatalf("changed signature accepted: err=%v", err)
+	if err = m.Initialize(t.Context()); !errors.Is(err, ErrFeeLimitReached) {
+		t.Fatalf("unconfigured spending initialized: %v", err)
+	}
+	if _, err = m.MaxFeePerGas(t.Context()); !errors.Is(err, ErrFeeLimitReached) {
+		t.Fatalf("unconfigured spending quoted: %v", err)
+	}
+	result := m.Send(t.Context(), Request{To: common.Address{1}})
+	if !result.NotAdmitted || result.Err == nil {
+		t.Fatalf("uninitialized request admitted: %+v", result)
 	}
 }
 
-type changedSigner struct{ signer.Signer }
-
-func (s changedSigner) SignTx(ctx context.Context, tx *types.Transaction, id *big.Int) (*types.Transaction, error) {
-	to := *tx.To()
-	return s.Signer.SignTx(ctx, types.NewTx(&types.DynamicFeeTx{ChainID: id, Nonce: tx.Nonce(), To: &to, Gas: tx.Gas(), GasFeeCap: tx.GasFeeCap(), GasTipCap: tx.GasTipCap(), Data: []byte{7}}), id)
-}
-
-func TestFeeCeilingAndMalformedEstimatesFailBeforeSigning(t *testing.T) {
+func TestGasBudgetBoundsEstimationAndHeadroom(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		change func(*testBackend)
+		name                          string
+		estimate, block, budget, want uint64
 	}{
-		{"expensive base fee", func(b *testBackend) { b.headers[0].BaseFee = big.NewInt(31_000_000_000) }},
-		{"missing base fee", func(b *testBackend) { b.headers[0].BaseFee = nil }},
-		{"zero gas", func(b *testBackend) { b.gas = 0 }},
-		{"overflow gas", func(b *testBackend) { b.gas = math.MaxUint64 }},
-		{"block gas limit", func(b *testBackend) { b.gas = 31_000_000 }},
+		{"default headroom", 15_521_169, 30_000_000, 0, DefaultMaxGas},
+		{"default estimate overflow", DefaultMaxGas + 1, 30_000_000, 0, 0},
+		{"block headroom", 15_521_169, 16_000_000, 0, 16_000_000},
+		{"block estimate overflow", 16_000_001, 16_000_000, 0, 0},
+		{"configured headroom", 21_000, 30_000_000, 22_500, 22_500},
+		{"configured estimate overflow", 25_001, 30_000_000, 25_000, 0},
+		{"zero estimate", 0, 30_000_000, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			b := newBackend()
-			tc.change(b)
-			m := newManager(t, b)
-			if err := m.Submit(t.Context(), testRequest()); err == nil || m.Busy() || len(b.sent) != 0 {
-				t.Fatalf("unsafe estimate admitted: %v", err)
+			chain := newPracticalChain()
+			chain.headers[0].GasLimit = tc.block
+			b := &admissionBackend{practicalChain: chain, gas: tc.estimate, balance: new(big.Int).Lsh(big.NewInt(1), 128)}
+			m, s := startAdmissionManager(t, b, Config{MaxFeeGwei: 100, MaxGas: tc.budget})
+			sender := m.Sender("test")
+			err := sender.Submit(t.Context(), ExecutionRequest{To: common.Address{1}})
+			if tc.want == 0 {
+				if err == nil || s.calls.Load() != 0 || sender.Busy() {
+					t.Fatalf("invalid estimate signed: err=%v signatures=%d", err, s.calls.Load())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			tx := practicalAttempt(t, chain, 1)
+			budget := tc.budget
+			if budget == 0 {
+				budget = DefaultMaxGas
+			}
+			if tx.Gas() != tc.want || b.gasBudget != min(budget, tc.block) {
+				t.Fatalf("gas=%d estimate budget=%d, want %d", tx.Gas(), b.gasBudget, tc.want)
 			}
 		})
 	}
+}
+
+func TestMaximumFundingAdmissionUsesFinalGasAndFee(t *testing.T) {
+	cost := new(big.Int).Mul(big.NewInt(23_100), big.NewInt(41e9))
+	readErr := errors.New("RPC unavailable")
+	for _, tc := range []struct {
+		name    string
+		balance *big.Int
+		err     error
+		ok      bool
+	}{
+		{"exact", cost, nil, true},
+		{"one wei short", new(big.Int).Sub(cost, big.NewInt(1)), nil, false},
+		{"missing", nil, nil, false},
+		{"negative", big.NewInt(-1), nil, false},
+		{"overflow", new(big.Int).Lsh(big.NewInt(1), 256), nil, false},
+		{"failed read", cost, readErr, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := &admissionBackend{practicalChain: newPracticalChain(), gas: 21_000, balance: tc.balance, balanceErr: tc.err}
+			m, s := startAdmissionManager(t, b, Config{MaxFeeGwei: 100})
+			sender := m.Sender("test")
+			err := sender.Submit(t.Context(), ExecutionRequest{To: common.Address{1}})
+			if tc.ok {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tx := practicalAttempt(t, b.practicalChain, 1); tx.Cost().Cmp(cost) != 0 {
+					t.Fatalf("maximum cost %s", tx.Cost())
+				}
+			} else if err == nil || sender.Busy() || s.calls.Load() != 0 {
+				t.Fatalf("unfunded signing: err=%v calls=%d busy=%v", err, s.calls.Load(), sender.Busy())
+			}
+			if tc.err != nil && !errors.Is(err, tc.err) {
+				t.Fatalf("lost typed funding error: %v", err)
+			}
+		})
+	}
+}
+
+func TestFreshAdmissionRefusesUnknownPendingNonce(t *testing.T) {
+	chain := newPracticalChain()
+	chain.pending = 1
+	m, s := startAdmissionManager(t, chain, Config{MaxFeeGwei: 100})
+	result := m.Send(t.Context(), Request{To: common.Address{1}})
+	if result.Err == nil || result.Uncertain() || s.calls.Load() != 0 {
+		t.Fatalf("unknown pending work overwritten: %+v signs=%d", result, s.calls.Load())
+	}
+}
+
+func TestFreshAdmissionRechecksPendingAfterEstimation(t *testing.T) {
+	chain := newPracticalChain()
+	b := &admissionBackend{practicalChain: chain, gas: 21_000, balance: new(big.Int).Lsh(big.NewInt(1), 128)}
+	b.afterEstimate = func() { chain.mu.Lock(); chain.pending = 1; chain.mu.Unlock() }
+	m, s := startAdmissionManager(t, b, Config{MaxFeeGwei: 100})
+	result := m.Send(t.Context(), Request{To: common.Address{1}})
+	if result.Err == nil || result.Uncertain() || s.calls.Load() != 0 {
+		t.Fatalf("pending work appearing during estimate was overwritten: %+v signs=%d", result, s.calls.Load())
+	}
+}
+
+type rejectingReplacementBackend struct {
+	*practicalChain
+	mu       sync.Mutex
+	original *big.Int
+}
+
+func (b *rejectingReplacementBackend) SendTransaction(ctx context.Context, tx *types.Transaction) error {
+	b.mu.Lock()
+	if b.original == nil {
+		b.original = tx.GasFeeCap()
+	}
+	reject := tx.GasFeeCap().Cmp(b.original) > 0
+	b.mu.Unlock()
+	if reject {
+		return errors.New("replacement transaction underpriced")
+	}
+	return b.practicalChain.SendTransaction(ctx, tx)
+}
+func TestRejectedReplacementRetainsIdentityWithoutRatchetingAcceptedFees(t *testing.T) {
+	chain := newPracticalChain()
+	b := &rejectingReplacementBackend{practicalChain: chain}
+	signed := make(chan *types.Transaction, 32)
+	s := &practicalSigner{Signer: practicalSigning(t, "1")}
+	s.sign = func(ctx context.Context, tx *types.Transaction, id *big.Int) (*types.Transaction, error) {
+		out, err := s.Signer.SignTx(ctx, tx, id)
+		if out != nil {
+			signed <- out
+		}
+		return out, err
+	}
+	m, err := New(b, s, big.NewInt(1), Config{MaxFeeGwei: 100, PollInterval: time.Millisecond, ReplacementInterval: 5 * time.Millisecond, ShutdownTimeout: time.Millisecond}, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); m.Start(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	sender := m.Sender("test")
+	if err = sender.Submit(t.Context(), ExecutionRequest{To: common.Address{1}}); err != nil {
+		t.Fatal(err)
+	}
+	next := func() *types.Transaction {
+		t.Helper()
+		select {
+		case tx := <-signed:
+			return tx
+		case <-time.After(time.Second):
+			t.Fatal("replacement not signed")
+			return nil
+		}
+	}
+	original, rejected, retry := next(), next(), next()
+	if rejected.GasFeeCap().Cmp(original.GasFeeCap()) <= 0 || retry.Hash() != rejected.Hash() {
+		t.Fatal("rejected signature ratcheted accepted fee floor")
+	}
+	chain.mine(original, types.ReceiptStatusSuccessful, 0)
+	result := practicalExecution(t, sender)
+	if result.Hash != original.Hash() {
+		t.Fatal("replacement rejection lost original receipt")
+	}
+}
+
+type rejectedInitialBackend struct{ *practicalChain }
+
+func (b *rejectedInitialBackend) SendTransaction(_ context.Context, tx *types.Transaction) error {
+	b.mu.Lock()
+	b.sent = append(b.sent, tx)
+	b.mu.Unlock()
+	return errors.New("transaction underpriced")
+}
+func TestRetainedAttemptBoundFailsClosedWithoutEviction(t *testing.T) {
+	b := &rejectedInitialBackend{newPracticalChain()}
+	m, s := startAdmissionManager(t, b, Config{MaxFeeGwei: 100})
+	for i := range maxAttempts {
+		result := m.Send(t.Context(), Request{To: common.Address{1}, Data: []byte{byte(i)}})
+		if !result.Uncertain() || result.Err == nil {
+			t.Fatalf("signed rejection %d lost identity: %+v", i, result)
+		}
+	}
+	result := m.Send(t.Context(), Request{To: common.Address{2}})
+	if !errors.Is(result.Err, ErrBusy) || result.Uncertain() || s.calls.Load() != maxAttempts || m.Available() {
+		t.Fatalf("full retained ledger admitted another signature: %+v signs=%d", result, s.calls.Load())
+	}
+	// A canonical oldest winner still resolves the retained nonce after the bound is reached.
+	first := b.attempts()[0]
+	b.mine(first, types.ReceiptStatusSuccessful, 0)
+	for deadline := time.Now().Add(time.Second); !m.Available(); {
+		if time.Now().After(deadline) {
+			t.Fatal("retained oldest identity was evicted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+type captureCancelLog struct{ cancel context.CancelFunc }
+
+func (c captureCancelLog) Init(logr.RuntimeInfo) {}
+func (c captureCancelLog) Enabled(int) bool      { return true }
+func (c captureCancelLog) Info(_ int, msg string, _ ...any) {
+	if msg == "transaction signed" {
+		c.cancel()
+		time.Sleep(time.Millisecond)
+	}
+}
+func (c captureCancelLog) Error(error, string, ...any)    {}
+func (c captureCancelLog) WithValues(...any) logr.LogSink { return c }
+func (c captureCancelLog) WithName(string) logr.LogSink   { return c }
+
+type captureContextBackend struct {
+	*practicalChain
+	broadcastContext chan error
+}
+
+func (b *captureContextBackend) SendTransaction(ctx context.Context, tx *types.Transaction) error {
+	select {
+	case b.broadcastContext <- ctx.Err():
+	default:
+	}
+	return b.practicalChain.SendTransaction(ctx, tx)
+}
+func TestCaptureHandoffDetachesCallerBeforePublishingReady(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		caller, cancelCaller := context.WithCancel(t.Context())
+		defer cancelCaller()
+		b := &captureContextBackend{practicalChain: newPracticalChain(), broadcastContext: make(chan error, 1)}
+		m, err := New(b, practicalSigning(t, "1"), big.NewInt(1), Config{MaxFeeGwei: 100, PollInterval: time.Millisecond, ShutdownTimeout: time.Millisecond}, logr.New(captureCancelLog{cancel: cancelCaller}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = m.Initialize(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		managerCtx, stop := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() { defer close(done); m.Start(managerCtx) }()
+		defer func() { stop(); <-done }()
+		sender := m.Sender("test")
+		if err = sender.Submit(caller, ExecutionRequest{To: common.Address{1}}); err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+		if err = <-b.broadcastContext; err != nil {
+			t.Fatalf("capture handoff canceled accepted broadcast: %v", err)
+		}
+		if !sender.Busy() {
+			t.Fatal("capture handoff lost strict ticket")
+		}
+		b.mine(practicalAttempt(t, b.practicalChain, 1), types.ReceiptStatusSuccessful, 0)
+		_ = practicalExecution(t, sender)
+	})
 }

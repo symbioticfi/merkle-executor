@@ -29,10 +29,12 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
+	"github.com/symbioticfi/merkle-executor/sdk/chain"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
@@ -251,11 +253,38 @@ func serviceKeeper(t *testing.T, ctx context.Context, path string, client *http.
 		t.Fatal(err)
 	}
 	t.Cleanup(env.close)
-	k, err := newKeeper(env)
+	k, manager, err := newKeeper(env)
 	if err != nil {
 		t.Fatal(err)
 	}
+	stopSender, err := startTransactionManager(ctx, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(stopSender)
 	return k
+}
+
+func TestKeeperConstructionLeavesTransactionStartupToHost(t *testing.T) {
+	for _, mode := range []string{"simulate", "send"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := testCLIConfig("")
+			cfg.Mode = mode
+			t.Setenv(cfg.Signer.KeyEnv, strings.Repeat("0", 63)+"1")
+			env := &environment{cfg: &cfg, client: new(chain.Client), planner: &keeper.Planner{ChainID: big.NewInt(1), Caller: common.HexToAddress("0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf")}, log: logr.Discard()}
+			// The client has no connection: construction cannot perform RPC or start workers.
+			k, manager, err := newKeeper(env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (manager != nil) != (mode == "send") || (k.Sender != nil) != (mode == "send") {
+				t.Fatal("transaction sender does not match configured mode")
+			}
+			if manager != nil && (manager.Available() || k.Sender.Busy()) {
+				t.Fatal("keeper construction started or admitted transaction work")
+			}
+		})
+	}
 }
 
 // Stop the continuous daemon only after its public metrics report the expected work.
@@ -338,22 +367,31 @@ func runService(t *testing.T, ctx context.Context, path, outcome string, count i
 
 func servicePendingTransaction(t *testing.T, ctx context.Context, client *ethclient.Client, caller common.Address) *types.Transaction {
 	t.Helper()
-	var content struct {
-		Pending map[string]map[string]*types.Transaction
-	}
-	if err := client.Client().CallContext(ctx, &content, "txpool_content"); err != nil {
-		t.Fatal(err)
-	}
-	for address, transactions := range content.Pending {
-		if !strings.EqualFold(address, caller.Hex()) {
-			continue
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	poll := time.NewTicker(10 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		var content struct {
+			Pending map[string]map[string]*types.Transaction
 		}
-		for _, tx := range transactions {
-			return tx
+		if err := client.Client().CallContext(ctx, &content, "txpool_content"); err != nil {
+			t.Fatal(err)
+		}
+		for address, transactions := range content.Pending {
+			if !strings.EqualFold(address, caller.Hex()) {
+				continue
+			}
+			for _, tx := range transactions {
+				return tx
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("caller has no pending local transaction", ctx.Err())
+		case <-poll.C:
 		}
 	}
-	t.Fatal("caller has no pending local transaction")
-	return nil
 }
 
 func serviceRecipe(t *testing.T, leaf common.Hash, token, account common.Address) recipes.Recipe {
@@ -579,11 +617,36 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 	}
 	stopping, stop := context.WithTimeout(ctx, 2500*time.Millisecond)
 	defer stop()
-	if err = runBot(stopping, path); !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "pending work") {
-		t.Fatalf("cancellation silently abandoned pending tracking: %v", err)
+	stopped := make(chan struct{})
+	var stopErr error
+	go func() {
+		defer close(stopped)
+		stopErr = runBot(stopping, path)
+	}()
+	defer func() { stop(); <-stopped }()
+	<-stopping.Done()
+	select {
+	case <-stopped:
+		t.Fatalf("daemon stopped before draining accepted transaction: %v", stopErr)
+	default:
 	}
-	if pending := servicePendingTransaction(t, ctx, client, caller); pending.Nonce() != 1 {
+	pending := servicePendingTransaction(t, ctx, client, caller)
+	if pending.Nonce() != 1 {
 		t.Fatal("cancellation changed or lost pending transaction identity")
+	}
+	if err = client.Client().CallContext(ctx, nil, "evm_mine"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stopped:
+	case <-ctx.Done():
+		t.Fatal("accepted transaction did not drain", ctx.Err())
+	}
+	if !errors.Is(stopErr, context.DeadlineExceeded) || !strings.Contains(stopErr.Error(), "pending work") {
+		t.Fatalf("cancellation silently abandoned pending keeper work: %v", stopErr)
+	}
+	if tx := serviceTransaction(t, ctx, client, caller, 1); tx.Hash() != pending.Hash() {
+		t.Fatal("shutdown drain changed the owned transaction")
 	}
 	entries, err := os.ReadDir(directory)
 	if err != nil || len(entries) != 1 || entries[0].Name() != "keeper.yaml" {

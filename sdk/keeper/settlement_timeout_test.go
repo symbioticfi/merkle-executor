@@ -24,7 +24,7 @@ type settlementTimeoutSender struct {
 	timeout time.Duration
 }
 
-func (s *settlementTimeoutSender) Poll(ctx context.Context) (*transaction.Result, error) {
+func (s *settlementTimeoutSender) Poll(ctx context.Context) (*transaction.ExecutionResult, error) {
 	s.polls++
 	deadline, bounded := ctx.Deadline()
 	if !bounded || time.Until(deadline) > s.timeout+time.Millisecond {
