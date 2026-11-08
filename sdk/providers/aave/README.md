@@ -9,9 +9,6 @@ floor of at least `1e18`, before any further effect. Pool, asset, variable rate,
 referral and account are pinned; only the amount binding may vary. Tighter
 committed health floors are preserved.
 
-Previously committed account-targeted `RecipeCapability.execute` borrow leaves
-with a pinned `getHealthFactor(pool, account)` floor remain supported.
-
 Input 0 supplies borrowing **capacity**, in raw debt-asset units. The committed
 recipe chooses the actual amount with its `Min` chain and policy debt headroom.
 Input 0 must occur once as a direct operand of that chain; other Inputs still

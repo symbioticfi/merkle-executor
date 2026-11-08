@@ -140,11 +140,6 @@ contract FixtureAave {
         return (collateral, debt, available, threshold, 7500, _health());
     }
 
-    function getHealthFactor(address pool, address) external view returns (uint256) {
-        require(pool == address(this));
-        return _health();
-    }
-
     function _health() private view returns (uint256) {
         return debt == 0 ? type(uint256).max : collateral * threshold / 10000 * 1e18 / debt;
     }

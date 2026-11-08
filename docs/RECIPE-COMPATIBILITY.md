@@ -21,6 +21,10 @@ simulation remains mandatory before signing.
 | Signing | The bounded builder selects the wallet balance up to its amount cap and checks the minimum amount, price and expiry. Existing CoW/RFQ providers acquire external quotes for recognized, pinned authorization shapes. Browser authoring requires verified matching read descriptors. A generic arbitrary signature buffer does not create a provider. |
 | Custom | Unchanged masked preimages come from the trusted curator artifact. Runtime Inputs need an exact recipe value or an owning provider. |
 
+Aave capacity belongs to one direct pool borrow. The outer recipe reads the same
+pool's `getUserAccountData(account)` health word after borrowing and checks a
+committed floor of at least `1e18` before any further effect.
+
 ## Claim discovery and batching
 
 The SDK admits and batches the separate ready-claim outputs through its common

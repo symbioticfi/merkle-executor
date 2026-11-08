@@ -221,27 +221,24 @@ func TestAnvilAavePostSupplyCapacity(t *testing.T) {
 		}
 		return serviceSeedTransaction(t, ctx, client, owner, nil, data).ContractAddress
 	}
-	aa, ca, ea := loadGuardedMerklArtifact(t, "FixtureGuardedAccount"), loadGuardedMerklArtifact(t, "RecipeCapability"), loadServiceArtifact(t, "RecipeExecutor")
-	account, capability, pool := deploy(aa), deploy(ca), deploy(poolArtifact)
+	aa, ea := loadGuardedMerklArtifact(t, "FixtureGuardedAccount"), loadServiceArtifact(t, "RecipeExecutor")
+	account, pool := deploy(aa), deploy(poolArtifact)
 	executor := deploy(ea, owner, account)
 	asset := pool
 	call := func(target common.Address, a serviceArtifact, method string, args ...any) {
 		serviceSeedTransaction(t, ctx, client, owner, &target, servicePack(t, a, method, args...))
 	}
-	call(account, aa, "setCapability", capability)
 	call(pool, poolArtifact, "setAsset", asset)
 	e := executorABI.NewRecipeExecutor()
 	serviceSeedTransaction(t, ctx, client, owner, &executor, e.PackSetCaller(owner))
 	result := func(n int64) *big.Int { return new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(n)) }
 	input := new(big.Int).Lsh(big.NewInt(1), 216)
 	step := func(op uint8, names []string, args ...any) []byte { return issuerStep(t, op, names, args...) }
-	query := func(data []byte) []byte {
-		return step(0, []string{"address", "bytes", "uint256[]", "uint256"}, pool, data, []*big.Int{}, new(big.Int))[1:]
+	query := func(data []byte, offset int64) []byte {
+		return step(0, []string{"address", "bytes", "uint256[]", "uint256"}, pool, data, []*big.Int{}, big.NewInt(offset))[1:]
 	}
 	borrowData := servicePack(t, poolArtifact, "borrow", asset, new(big.Int), big.NewInt(2), uint16(0), account)
-	inner := [][]byte{step(recipes.Call, []string{"address", "bytes", "uint256[]"}, pool, borrowData, []*big.Int{}), step(recipes.Read, []string{"uint256"}, new(big.Int)), step(recipes.LessOrEqual, []string{"uint256", "uint256"}, big.NewInt(1_250_000_000_000_000_000), result(1))}
-	guard := servicePack(t, ca, "execute", [][]byte{query(servicePack(t, poolArtifact, "getHealthFactor", pool, account))}, inner, []*big.Int{})
-	offset := bytes.Index(guard, borrowData) + 36
+	const offset = 36
 	leaf := func(target common.Address, data []byte, offset int) recipes.Leaf {
 		mask := make([]byte, len(data))
 		if offset > 0 {
@@ -254,7 +251,7 @@ func TestAnvilAavePostSupplyCapacity(t *testing.T) {
 		return l
 	}
 	supply := leaf(pool, servicePack(t, poolArtifact, "supply", asset, big.NewInt(1000e6), account, uint16(0)), 0)
-	borrow := leaf(account, guard, offset)
+	borrow := leaf(pool, borrowData, offset)
 	supply.Proof = []common.Hash{borrow.Hash}
 	borrow.Proof = []common.Hash{supply.Hash}
 	first, second := supply.Hash, borrow.Hash
@@ -265,7 +262,7 @@ func TestAnvilAavePostSupplyCapacity(t *testing.T) {
 	tree := &recipes.Tree{Root: root, Leaves: []recipes.Leaf{supply, borrow}}
 	call(account, aa, "configure", root, [][32]byte{supply.Hash, borrow.Hash}, executor)
 	binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(int64(offset)), 224), result(4))
-	r := recipes.Recipe{Queries: [][]byte{query(servicePack(t, poolArtifact, "balanceOf", account))}, Steps: [][]byte{
+	r := recipes.Recipe{Queries: [][]byte{query(servicePack(t, poolArtifact, "balanceOf", account), 0), query(servicePack(t, poolArtifact, "getUserAccountData", account), 160)}, Steps: [][]byte{
 		step(recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{supply.Hash}, [][]*big.Int{{}}),
 		step(recipes.Read, []string{"uint256"}, new(big.Int)),
 		step(recipes.SaturatingSub, []string{"uint256", "uint256"}, big.NewInt(1000e6), result(1)),
@@ -273,6 +270,8 @@ func TestAnvilAavePostSupplyCapacity(t *testing.T) {
 		step(recipes.Min, []string{"uint256", "uint256"}, input, result(3)),
 		step(recipes.LessOrEqual, []string{"uint256", "uint256"}, big.NewInt(1), result(4)),
 		step(recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, result(4), [][32]byte{borrow.Hash}, [][]*big.Int{{binding}}),
+		step(recipes.Read, []string{"uint256"}, big.NewInt(1)),
+		step(recipes.LessOrEqual, []string{"uint256", "uint256"}, big.NewInt(1_250_000_000_000_000_000), result(7)),
 	}}
 	serviceSeedTransaction(t, ctx, client, owner, &executor, e.PackSetRecipe(r.Queries, r.Steps))
 	header, err := client.HeaderByNumber(ctx, nil)

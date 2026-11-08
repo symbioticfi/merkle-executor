@@ -47,9 +47,9 @@ checks the committed contract behavior during preparation. Inputs remain bounded
 ## Aave V3 capacity
 
 The default [Aave provider](../sdk/providers/aave/README.md) owns Input 0 for
-one authenticated native borrow with a committed post-borrow health floor, or the
-previous guarded borrow form. It computes capacity after replaying the supply
-prefix at the pinned block using eth_call-only code. The committed recipe still
+one authenticated direct pool borrow with a committed post-borrow health floor.
+It computes capacity after replaying the supply prefix at the pinned block using
+eth_call-only code. The committed recipe still
 chooses the borrow amount, caps total debt and verifies health. No manual amount
 configuration, deployment catalogue or signing credential is required. Other
 native Inputs retain the exact-source rules below.
