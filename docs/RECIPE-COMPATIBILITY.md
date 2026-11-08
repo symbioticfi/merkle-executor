@@ -13,12 +13,12 @@ simulation remains mandatory before signing.
 
 | Template | Selection and enforcement |
 | --- | --- |
-| Lending | Available collateral up to its policy cap; fresh capacity after supply and total-debt headroom select borrowing. Exact spend, supply/debt rounding and issuer output checks remain in the recipe. |
+| Lending | Available collateral up to its policy cap; fresh capacity after supply and total-debt headroom select borrowing. Native post-borrow health, supply/debt rounding and issuer output checks remain in the recipe. |
 | Claims | The owning claim provider fills authorized arguments for a standalone claim; native contracts enforce validity. Each claim is a separate execution. |
 | Health recovery / health repay | Recipe reads select available liquidity, balances, debt and repayment; exact effect and health checks remain authoritative. |
 | LL executing | Connector acquisition and calldata construction belong to vault-solver's Merkle extension. The RFQ backend supplies awarded trade amounts through `/orders` and signed terms for contract validation. The committed recipe enforces payment, recipient, RWA delta and approval-reset checks; the SDK validates permissions and simulates the complete execution. |
 | 3F executing | The native selector reads a whole current authorization and checks its funding asset, actual collateral underlying, remaining policy budget and yield. The guarded mint rechecks authorization and policy. The library also supports externally selected terms, but the normal daemon requires an owning witness provider or native reads. |
-| Signing | Existing CoW/RFQ providers acquire external quotes for recognized, pinned authorization shapes. Browser authoring requires verified matching read descriptors. A generic arbitrary signature buffer does not create a provider. |
+| Signing | The bounded builder selects the wallet balance up to its amount cap and checks the minimum amount, price and expiry. Existing CoW/RFQ providers acquire external quotes for recognized, pinned authorization shapes. Browser authoring requires verified matching read descriptors. A generic arbitrary signature buffer does not create a provider. |
 | Custom | Unchanged masked preimages come from the trusted curator artifact. Runtime Inputs need an exact recipe value or an owning provider. |
 
 ## Claim discovery and batching
@@ -53,8 +53,8 @@ connector signature verifier. External swap data remains subject to the committe
 permission layout and contract guards, generic SDK runtime validation, full
 execution simulation and canonical receipt checks.
 
-The generic bounded-signing library does not itself acquire a quote. Its
-range-only financial Inputs cannot execute through the native input resolver.
+The generic bounded-signing library does not itself acquire a quote. It commits
+an exact balance-capped amount; range-only financial Inputs do not select amounts.
 CoW/RFQ acquisition still requires a recognized provider shape with an authorized
 recipe-selected budget, including fixed amounts; arbitrary bounded sign buffers remain rejected. Browser
 signing authoring also requires verified matching price/clock facts and exact

@@ -24,6 +24,7 @@ type recipeOrder struct {
 	budget       recipes.EconomicValue
 	floors       []recipes.EconomicValue
 	requirements keeper.RecipeRequirements
+	expiry       []expiryBound
 }
 
 func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
@@ -109,7 +110,14 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 		if err != nil {
 			return nil, err
 		}
+		expiry, err := boundedExpiry(r, sign)
+		if err != nil {
+			return nil, err
+		}
 		economics := append([]recipes.EconomicValue{budget}, floors...)
+		for _, bound := range expiry {
+			economics = append(economics, recipes.EconomicValue{Expression: bound.clock, Exact: true})
+		}
 		for _, binding := range action.Bindings {
 			if binding.Value.Source == recipes.Result {
 				economics = append(economics, recipes.EconomicValue{Expression: binding.Value, Exact: true})
@@ -119,7 +127,7 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 		if err != nil {
 			return nil, err
 		}
-		result = &recipeOrder{template: sign, cfg: Config{HTTP: http, Settlement: settlement.Hex(), SellToken: sell.Hex(), BuyToken: buy.Hex(), Action: action.Key, ValiditySeconds: DefaultValiditySeconds, SellAmountInput: budget.Input}, budget: budget, floors: floors, requirements: requirements}
+		result = &recipeOrder{template: sign, cfg: Config{HTTP: http, Settlement: settlement.Hex(), SellToken: sell.Hex(), BuyToken: buy.Hex(), Action: action.Key, ValiditySeconds: DefaultValiditySeconds, SellAmountInput: budget.Input}, budget: budget, floors: floors, requirements: requirements, expiry: expiry}
 		if minimum.Source == recipes.Input {
 			index := uint(minimum.Value.Uint64())
 			result.cfg.BuyAmountInput = &index
@@ -164,11 +172,30 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if amount.Sign() == 0 || minimum.Sign() == 0 {
 		return nil, provider.ErrNotReady
 	}
+	validTo := new(big.Int).SetUint64(s.Timestamp + DefaultValiditySeconds)
+	for _, bound := range order.expiry {
+		clock, err := recipes.EconomicResult(recipes.EconomicValue{Expression: bound.clock}, results)
+		if err != nil {
+			return nil, err
+		}
+		limit := new(big.Int).Add(clock, new(big.Int).SetUint64(bound.duration))
+		if limit.Cmp(validTo) < 0 {
+			validTo = limit
+		}
+	}
+	if !validTo.IsUint64() || validTo.Uint64() <= s.Timestamp {
+		return nil, provider.ErrNotReady
+	}
+	order.cfg.ValiditySeconds = validTo.Uint64() - s.Timestamp
 	order.cfg.SellAmount = amount.String()
 	order.cfg.MinBuyAmount = minimum.String()
 	runtime, err := New(order.cfg, p.deps)
 	if err != nil {
 		return nil, err
+	}
+	if order.template.PinnedWord(7) == nil {
+		appData := common.BytesToHash(order.template.Buffer[224:256])
+		runtime.pinnedAppData = &appData
 	}
 	out, err := runtime.Prepare(ctx, s)
 	if err != nil {
@@ -225,4 +252,47 @@ func (p *Provider) confirmedTask(out provider.Output, saved prepared) provider.T
 		}
 		return p.advance(ctx, s, saved)
 	})
+}
+
+// expiryBound retains the clock expression from a committed relative lifetime check.
+type expiryBound struct {
+	clock    recipes.Value
+	duration uint64
+}
+
+func boundedExpiry(r recipes.Recipe, sign derived.SignTemplate) ([]expiryBound, error) {
+	deadline, err := sign.Field(6)
+	if err != nil {
+		return nil, nil
+	}
+	decode := func(word []byte) recipes.Value {
+		n := new(big.Int).SetBytes(word)
+		source := uint8(new(big.Int).Rsh(new(big.Int).Set(n), 216).Uint64())
+		n.And(n, new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 216), big.NewInt(1)))
+		return recipes.Value{Source: source, Value: n}
+	}
+	var bounds []expiryBound
+	for i, step := range r.Steps[:sign.Action.Step] {
+		if len(step) != 65 || step[0] != recipes.LessOrEqual {
+			continue
+		}
+		left, limit := decode(step[1:33]), decode(step[33:65])
+		if left.Source != recipes.Result || !left.Value.IsUint64() || left.Value.Uint64() >= uint64(i) || limit.Source != recipes.Literal || !limit.Value.IsUint64() || limit.Value.Sign() == 0 {
+			continue
+		}
+		sub := r.Steps[left.Value.Uint64()]
+		if len(sub) != 65 || sub[0] != recipes.Sub {
+			continue
+		}
+		a, clock := decode(sub[1:33]), decode(sub[33:65])
+		if a.Source != deadline.Source || a.Value.Cmp(deadline.Value) != 0 {
+			continue
+		}
+		exact, err := recipes.ExactValue(r, clock, uint(left.Value.Uint64()))
+		if err != nil {
+			return nil, errors.Errorf("CoW expiry clock: %w", err)
+		}
+		bounds = append(bounds, expiryBound{clock: exact.Expression, duration: limit.Value.Uint64()})
+	}
+	return bounds, nil
 }

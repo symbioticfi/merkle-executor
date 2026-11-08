@@ -47,7 +47,8 @@ checks the committed contract behavior during preparation. Inputs remain bounded
 ## Aave V3 capacity
 
 The default [Aave provider](../sdk/providers/aave/README.md) owns Input 0 for
-one authenticated guarded borrow. It computes capacity after replaying the supply
+one authenticated native borrow with a committed post-borrow health floor, or the
+previous guarded borrow form. It computes capacity after replaying the supply
 prefix at the pinned block using eth_call-only code. The committed recipe still
 chooses the borrow amount, caps total debt and verifies health. No manual amount
 configuration, deployment catalogue or signing credential is required. Other
@@ -208,12 +209,15 @@ settlement domain, sell-kind/full-fill/ERC20-balance identity and action mapping
 from the canonical sign template. Official network API/settlement/relayer constants
 are chain-specific; an unsupported chain fails explicitly. One CoW sign action per
 executor is currently supported. Budget includes the complete net sell plus fee.
-Order validity is 1800 seconds.
+Order validity is at most 1800 seconds, shortened by authenticated relative expiry
+limits in the committed recipe.
 
 Quotes use CoW's AUTO dynamic slippage policy and volume suggestions, with its
 protocol fallback when suggestions are unavailable. There is no operator slippage
-parameter. Deterministic full appData and its signed hash are retained in RAM with the
-selected gross amount, minimum proceeds, quote/order identity and exact sign bytes.
+parameter. When the permission allows appData to vary, deterministic full appData
+and its signed hash are retained in RAM. A pinned appData hash is preserved and
+sent using CoW's hash-only API form. The selected gross amount, minimum proceeds,
+quote/order identity and exact sign bytes are retained with either form.
 The recipe's derived minimum remains binding even when AUTO proposes a lower value.
 [CoW AUTO policy and pinned provenance](../sdk/schemas/COW_AUTO.md).
 

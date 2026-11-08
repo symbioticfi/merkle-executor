@@ -97,7 +97,10 @@ func derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (*borrow, er
 		if !candidate {
 			continue
 		}
-		b, amount, matched, err := guardedBorrow(s, action)
+		b, amount, matched, err := nativeBorrow(s, r, action)
+		if !matched && err == nil {
+			b, amount, matched, err = guardedBorrow(s, action)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -192,6 +195,66 @@ func capacityChain(r recipes.Recipe, v recipes.Value, nodes map[uint]bool) (bool
 		nodes[i] = true
 	}
 	return a || b, nil
+}
+
+// Native permissions pin the pool and every argument except the amount. The
+// outer recipe must check this account's native health immediately after borrowing.
+func nativeBorrow(s provider.Snapshot, r recipes.Recipe, a recipes.ManagedAction) (*borrow, recipes.Value, bool, error) {
+	d := a.Leaf.Data
+	if len(d) < 4 || !bytes.Equal(d[:4], selector("borrow(address,uint256,uint256,uint16,address)")) {
+		return nil, recipes.Value{}, false, nil
+	}
+	fail := func() (*borrow, recipes.Value, bool, error) {
+		return nil, recipes.Value{}, true, errors.New("Aave native borrow requires pinned identity and post-borrow health floor")
+	}
+	if a.Leaf.Target == (common.Address{}) || a.Leaf.Value == nil || a.Leaf.Value.Sign() != 0 || len(d) != 164 || len(a.Slot.Leaves) != 1 || len(a.Bindings) != 1 || a.Bindings[0].Offset != 36 || a.Pinned(0, 36) != nil || a.Pinned(68, len(d)-68) != nil {
+		return fail()
+	}
+	args, err := borrowArgs.Unpack(d[4:])
+	if err != nil || args[0].(common.Address) == (common.Address{}) || args[2].(*big.Int).Cmp(big.NewInt(2)) != 0 || args[3].(uint16) != 0 || args[4].(common.Address) != s.Account {
+		return fail()
+	}
+	canonical, err := borrowArgs.Pack(args...)
+	if err != nil || !bytes.Equal(canonical, d[4:]) {
+		return fail()
+	}
+	account, _ := accountArgs.Pack(s.Account)
+	expected := append(selector("getUserAccountData(address)"), account...)
+	healthReads := map[uint]bool{}
+	var floor *big.Int
+	for i := a.Step + 1; i < uint(len(r.Steps)); i++ {
+		step := r.Steps[i]
+		if step[0] == recipes.Manage || step[0] == recipes.Call || step[0] == recipes.Approve {
+			break
+		}
+		if step[0] == recipes.Read {
+			read, e := uintArgs.Unpack(step[1:])
+			if e != nil {
+				return fail()
+			}
+			q, e := queryArgs.Unpack(r.Queries[read[0].(*big.Int).Uint64()])
+			if e != nil {
+				return fail()
+			}
+			if q[0].(common.Address) == a.Leaf.Target && bytes.Equal(q[1].([]byte), expected) && len(q[2].([]*big.Int)) == 0 && q[3].(*big.Int).Cmp(big.NewInt(160)) == 0 {
+				healthReads[i] = true
+			}
+		}
+		if step[0] == recipes.LessOrEqual {
+			check, e := binaryArgs.Unpack(step[1:])
+			if e != nil {
+				return fail()
+			}
+			left, right := operand(check[0].(*big.Int)), operand(check[1].(*big.Int))
+			if left.Source == recipes.Literal && left.Value.Cmp(big.NewInt(1_000_000_000_000_000_000)) >= 0 && right.Source == recipes.Result && healthReads[uint(right.Value.Uint64())] && (floor == nil || left.Value.Cmp(floor) > 0) {
+				floor = left.Value
+			}
+		}
+	}
+	if floor == nil {
+		return fail()
+	}
+	return &borrow{Pool: a.Leaf.Target, Asset: args[0].(common.Address), Floor: floor, Step: a.Step}, a.Bindings[0].Value, true, nil
 }
 
 func guardedBorrow(s provider.Snapshot, a recipes.ManagedAction) (*borrow, recipes.Value, bool, error) {
@@ -343,6 +406,7 @@ var (
 	queryArgs    = argTypes("address", "bytes", "uint256[]", "uint256")
 	borrowArgs   = argTypes("address", "uint256", "uint256", "uint16", "address")
 	healthArgs   = argTypes("address", "address")
+	accountArgs  = argTypes("address")
 	capacityArgs = argTypes("address", "address", "address", "uint256")
 	uintArgs     = argTypes("uint256")
 	binaryArgs   = argTypes("uint256", "uint256")

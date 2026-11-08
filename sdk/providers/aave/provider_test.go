@@ -59,6 +59,75 @@ type noRPC struct {
 	err   error
 }
 
+// Native authoring commits the health check in the outer recipe, after a direct pool borrow.
+func nativeCapacityFixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
+	s, r, tree, _ := capacityFixture(t)
+	leaf := &tree.Leaves[0]
+	leaf.Target = common.HexToAddress("0x11")
+	leaf.Data = append(selector("borrow(address,uint256,uint256,uint16,address)"), pack(t, borrowArgs, common.HexToAddress("0x22"), new(big.Int), big.NewInt(2), uint16(0), s.Account)...)
+	leaf.DataMask = make([]byte, len(leaf.Data))
+	for i := 36; i < 68; i++ {
+		leaf.DataMask[i] = 255
+	}
+	leaf.Hash, _ = recipes.HashLeaf(*leaf)
+	tree.Root = leaf.Hash
+	binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), value(recipes.Result, 0))
+	r.Steps[1] = instruction(t, recipes.Manage, manageArgs, value(recipes.Result, 0), [][32]byte{leaf.Hash}, [][]*big.Int{{binding}})
+	health := append(selector("getUserAccountData(address)"), pack(t, argTypes("address"), s.Account)...)
+	r.Queries = [][]byte{pack(t, queryArgs, leaf.Target, health, []*big.Int{}, big.NewInt(160))}
+	r.Steps = append(r.Steps, instruction(t, recipes.Read, uintArgs, new(big.Int)), instruction(t, recipes.LessOrEqual, binaryArgs, big.NewInt(1_250_000_000_000_000_000), value(recipes.Result, 2)))
+	return s, r, tree
+}
+
+func TestNativeCapacityPreflight(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*recipes.Recipe, *recipes.Tree)
+		invalid bool
+	}{
+		{"valid", func(*recipes.Recipe, *recipes.Tree) {}, false},
+		{"mutable asset", func(_ *recipes.Recipe, tree *recipes.Tree) { tree.Leaves[0].DataMask[35] = 255 }, true},
+		{"other account", func(_ *recipes.Recipe, tree *recipes.Tree) { tree.Leaves[0].Data[163] ^= 1 }, true},
+		{"stable debt", func(_ *recipes.Recipe, tree *recipes.Tree) { tree.Leaves[0].Data[99] = 1 }, true},
+		{"missing health floor", func(r *recipes.Recipe, _ *recipes.Tree) { r.Steps = r.Steps[:2] }, true},
+		{"wrong health pool", func(r *recipes.Recipe, _ *recipes.Tree) { r.Queries[0][31] ^= 1 }, true},
+		{"wrong health account", func(r *recipes.Recipe, _ *recipes.Tree) { r.Queries[0][195] ^= 1 }, true},
+		{"wrong health position", func(r *recipes.Recipe, _ *recipes.Tree) {
+			r.Queries[0] = pack(t, queryArgs, common.HexToAddress("0x11"), append(selector("getUserAccountData(address)"), pack(t, argTypes("address"), common.HexToAddress("0xa1"))...), []*big.Int{}, big.NewInt(128))
+		}, true},
+		{"unsafe floor", func(r *recipes.Recipe, _ *recipes.Tree) {
+			r.Steps[3] = instruction(t, recipes.LessOrEqual, binaryArgs, big.NewInt(999_999_999_999_999_999), value(recipes.Result, 2))
+		}, true},
+		{"health after another effect", func(r *recipes.Recipe, _ *recipes.Tree) {
+			r.Steps = append(r.Steps[:2], append([][]byte{instruction(t, recipes.Call, callArgs, common.HexToAddress("0x99"), []byte{1}, []*big.Int{})}, r.Steps[2:]...)...)
+			r.Steps[4] = instruction(t, recipes.LessOrEqual, binaryArgs, big.NewInt(1_250_000_000_000_000_000), value(recipes.Result, 3))
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, r, tree := nativeCapacityFixture(t)
+			old := tree.Leaves[0].Hash
+			tc.mutate(&r, tree)
+			tree.Leaves[0].Hash, _ = recipes.HashLeaf(tree.Leaves[0])
+			tree.Root = tree.Leaves[0].Hash
+			for i := range r.Steps {
+				r.Steps[i] = bytes.ReplaceAll(r.Steps[i], old[:], tree.Root[:])
+			}
+			reader := &noRPC{}
+			req, err := (&Provider{reader: reader}).RecipeRequirements(s, r, tree)
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("unsafe native capacity recipe accepted")
+				}
+			} else if err != nil || len(req.Inputs) != 1 || req.Inputs[0] != 0 {
+				t.Fatalf("native capacity ownership missing: %v %v", req, err)
+			}
+			if reader.calls != 0 {
+				t.Fatal("preflight performed network I/O")
+			}
+		})
+	}
+}
+
 func (r *noRPC) CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 	r.calls++
 	return nil, errors.New("unexpected read")
