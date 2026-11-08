@@ -36,5 +36,4 @@ used by local integration tests live under `cmd/merkle-executor/testdata/issuers
 `NativeClaims.json` is the selected native issuer claim/discovery subset, generated
 as `bindings/nativeclaims` by the same abigen v2 script. Its pinned interface
 sources and deliberate limits are recorded in
-[native claim provenance](../schemas/NATIVE_CLAIMS.md). The isolated claim
-provider fills only authorized calldata and never changes recipe instructions.
+[native claim provenance](../schemas/NATIVE_CLAIMS.md).

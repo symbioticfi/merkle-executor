@@ -37,11 +37,8 @@ all tasks finish. Prepared plans are process-local and cannot be serialized into
 restart recovery.
 
 Hosts may register `providers/claims.NewAutomatic` for standalone native issuer
-claims. It fills authorized calldata for ready requests or native maximum amounts,
-returning one output per claim with no task. Its supported shape is one
-unconditional call with no recipe queries or bindings; richer native recipes
-continue to resolve their own reads and amounts. Generic admission, permissions
-and full original execution simulation apply to both forms.
+claims. [Provider behavior and supported shapes](PROVIDERS.md#native-issuer-claims)
+describe this stateless integration; generic admission and full simulation still apply.
 
 `keeper.Planner.PermissionSource` supplies permission artifact bytes, and the SDK
 validates every leaf/proof plus chain/account/root identity itself. The built-in

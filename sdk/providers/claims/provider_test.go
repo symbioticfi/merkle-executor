@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/nativeclaims"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
@@ -86,11 +87,7 @@ func (c *chain) CallContract(_ context.Context, msg ethereum.CallMsg, block *big
 			timestamp = 95
 		}
 		claimed := id == 2
-		return m.Outputs.Pack(struct {
-			Amount    *big.Int
-			Timestamp *big.Int
-			Claimed   bool
-		}{big.NewInt(amount), big.NewInt(timestamp), claimed})
+		return m.Outputs.Pack(nativeclaims.Struct0{Amount: big.NewInt(amount), Timestamp: big.NewInt(timestamp), Claimed: claimed})
 	case "strategy":
 		return m.Outputs.Pack(common.HexToAddress("0x51"))
 	case "epochNumber":
@@ -160,25 +157,6 @@ func fixture(t *testing.T, name string, args ...any) (provider.Snapshot, recipes
 	s := provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: common.HexToAddress("0xa1"), Timestamp: 100}
 	return s, r, &recipes.Tree{Root: leaf.Hash, Leaves: []recipes.Leaf{leaf}}
 }
-func TestSelectsEveryReadyNoonIDIncludingZero(t *testing.T) {
-	s, r, tree := fixture(t, "claimWithdrawal", big.NewInt(0))
-	p := &Provider{&chain{t: t, ready: true}}
-	out, err := p.PrepareRecipe(context.Background(), s, r, tree, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(out) != 2 {
-		t.Fatalf("want IDs zero and three, got %d", len(out))
-	}
-	for i, id := range []int64{0, 3} {
-		if new(big.Int).SetBytes(out[i].Actions["0:0"][4:36]).Int64() != id {
-			t.Fatal("wrong ready ID")
-		}
-		if !bytes.Equal(tree.Leaves[0].Data[4:], make([]byte, 32)) {
-			t.Fatal("mutated permission")
-		}
-	}
-}
 func TestSelectsReadyParetoEpoch(t *testing.T) {
 	for _, method := range []string{"claimDepositRequest", "claimWithdrawRequestForEpoch"} {
 		t.Run(method, func(t *testing.T) {
@@ -202,7 +180,7 @@ func TestEmptyIsIdleButFailedRPCIsAnError(t *testing.T) {
 		}
 	}
 }
-func TestPreparedClaimsKeepIndependentStatelessOutputs(t *testing.T) {
+func TestSelectsReadyNoonIDsAsIndependentStatelessOutputs(t *testing.T) {
 	s, r, tree := fixture(t, "claimWithdrawal", big.NewInt(0))
 	originalRecipe := bytes.Clone(r.Steps[0])
 	originalPermission := bytes.Clone(tree.Leaves[0].Data)
@@ -214,9 +192,13 @@ func TestPreparedClaimsKeepIndependentStatelessOutputs(t *testing.T) {
 	if len(out) != 2 {
 		t.Fatalf("want two standalone claims, got %d", len(out))
 	}
-	for _, execution := range out {
+	for i, id := range []int64{0, 3} {
+		execution := out[i]
 		if execution.Task != nil || len(execution.Data) != 0 || len(execution.Inputs)+len(execution.Results)+len(execution.SkipSteps) != 0 || len(execution.Actions) != 1 {
 			t.Fatalf("claim retained settlement or unauthorized state: %+v", execution)
+		}
+		if new(big.Int).SetBytes(execution.Actions["0:0"][4:36]).Int64() != id {
+			t.Fatal("wrong ready ID")
 		}
 	}
 	clear(out[0].Actions["0:0"])
@@ -225,8 +207,7 @@ func TestPreparedClaimsKeepIndependentStatelessOutputs(t *testing.T) {
 	}
 }
 func TestOnlySingleUnconditionalClaimMatches(t *testing.T) {
-	s, r, tree := fixture(t, "claimWithdrawal", big.NewInt(0))
-	_ = s
+	_, r, tree := fixture(t, "claimWithdrawal", big.NewInt(0))
 	r.Steps = append(r.Steps, r.Steps[0])
 	if _, ok, err := match(r, tree); err != nil || ok {
 		t.Fatalf("multi-claim recipe matched %v", err)
@@ -344,24 +325,6 @@ func TestClaimReadPreservesContextCancellationCause(t *testing.T) {
 				t.Fatalf("claim read lost cancellation cause: %v", err)
 			}
 		})
-	}
-}
-
-func TestAsyncClaimCannotChangeAccountOrFixedAmount(t *testing.T) {
-	account := common.HexToAddress("0xa1")
-	s, r, tree := fixture(t, "withdraw", big.NewInt(0), common.HexToAddress("0xbad"), account)
-	p := &Provider{&chain{t: t, ready: true}}
-	if _, err := p.PrepareRecipe(context.Background(), s, r, tree, nil); err == nil || err.Error() != "claim recipient or controller is not the account" {
-		t.Fatalf("foreign receiver allowed: %v", err)
-	}
-	s, r, tree = fixture(t, "withdraw", big.NewInt(0), account, account)
-	clear(tree.Leaves[0].DataMask)
-	old := tree.Leaves[0].Hash
-	tree.Leaves[0].Hash, _ = recipes.HashLeaf(tree.Leaves[0])
-	tree.Root = tree.Leaves[0].Hash
-	r.Steps[0] = bytes.ReplaceAll(r.Steps[0], old[:], tree.Leaves[0].Hash[:])
-	if _, err := p.PrepareRecipe(context.Background(), s, r, tree, nil); !errors.Is(err, provider.ErrNotReady) {
-		t.Fatalf("changed fixed amount: %v", err)
 	}
 }
 

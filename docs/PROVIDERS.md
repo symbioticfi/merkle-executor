@@ -257,19 +257,28 @@ external chain, hosted quote/order or live signing verification is implied.
 
 ## Native issuer claims
 
-The stateless `sdk/providers/claims` provider recognizes one unconditional issuer
-claim with no recipe queries or bindings. It enumerates Noon request IDs and
-Pareto queue epochs, checks owner entitlements, and supplies a separate output
-for each ready request. Fixed-ID permissions remain fixed. Direct
-Pareto and OpenEden refund claims use their owner ledgers. ERC-7540 claims use
-native entitlement reads and fill the amount from the matching `maxDeposit`, `maxMint`,
-`maxWithdraw` or `maxRedeem` result at the pinned snapshot. Owner and recipient remain fixed.
-Ordinary synchronous vault operations are excluded.
+Hosts register the stateless `sdk/providers/claims.NewAutomatic` provider for
+one unconditional managed claim with no recipe queries or bindings.
 
-The host explicitly registers the provider. Outputs contain authorized actions
-and no task, replay envelope or persisted state. The SDK admits and batches the
-prepared executions. The provider neither inserts gates
-nor edits recipes, targets, recipients, masks or proofs. Native claim reverts
-mean not ready during preflight; transport and malformed-response errors fail.
-The [ABI subset and source provenance](../sdk/schemas/NATIVE_CLAIMS.md) define the
-supported selectors; there is no native deployment catalogue.
+| Claim shape | Discovery and selection |
+| --- | --- |
+| Noon `claimWithdrawal(uint256)` | Ready owner request IDs, including zero; requests must be positive, mature and unclaimed. |
+| Pareto epoch deposit/withdrawal claim | Owner epochs with entitlement, fixed price and completed pending/prefund processing. |
+| Direct Pareto normal/instant withdrawal | Positive native owner entitlement. |
+| OpenEden escrow refund | Matching owner/asset escrow ledger. |
+| ERC-7540 deposit/mint/withdraw/redeem claim | Positive entitlement for request ID zero; amount from the matching `maxDeposit`, `maxMint`, `maxWithdraw` or `maxRedeem` getter. |
+| ERC-7540 cancellation claim | Positive entitlement for the fixed request ID and account controller. |
+
+Reads and account-context preflight use the pinned snapshot. The provider returns
+one authorized action output per ready claim, with no task or replay envelope;
+the SDK admits and batches those executions. Only permission-authorized calldata
+bits may change. Fixed IDs and amounts, targets, selectors, recipients/controllers,
+masks, proofs and recipe instructions stay fixed. Native contracts enforce claim
+validity, and final admission simulates the complete original execution.
+
+Unavailable claims are idle; required getter failures, malformed responses and
+transport errors fail preparation. Scans honor the host operation deadline without
+silently truncating. Ordinary synchronous vault operations are excluded; richer
+native recipes resolve their own reads and amounts through the generic planner.
+The [ABI subset](../sdk/schemas/NATIVE_CLAIMS.md) records exact source pins and
+deliberate limits. It contains no native deployment catalogue.

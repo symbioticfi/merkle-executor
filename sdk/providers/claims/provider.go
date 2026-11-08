@@ -256,23 +256,15 @@ func (p *Provider) ready(ctx context.Context, s provider.Snapshot, c candidate) 
 		}
 		n, err := p.number(ctx, s, c.Target, "redeemEscrowBalance", s.Account)
 		return nil, err == nil && n.Sign() > 0, err
-	default:
-		getter := "claimableDepositRequest"
-		if c.method == "redeem" || c.method == "withdraw" {
-			getter = "claimableRedeemRequest"
-		}
-		if c.method == "claimCancelDepositRequest" {
-			getter = "claimableCancelDepositRequest"
-		}
+	case "claimCancelDepositRequest", "claimCancelRedeemRequest":
+		getter := "claimableCancelDepositRequest"
 		if c.method == "claimCancelRedeemRequest" {
 			getter = "claimableCancelRedeemRequest"
 		}
-		id := new(big.Int)
-		if c.method == "claimCancelDepositRequest" || c.method == "claimCancelRedeemRequest" {
-			id = c.args[0].(*big.Int)
-		}
-		n, err := p.number(ctx, s, c.Target, getter, id, s.Account)
+		n, err := p.number(ctx, s, c.Target, getter, c.args[0].(*big.Int), s.Account)
 		return nil, err == nil && n.Sign() > 0, err
+	default:
+		return nil, false, errors.Errorf("unsupported native claim %q", c.method)
 	}
 }
 func (p *Provider) noon(ctx context.Context, s provider.Snapshot, c candidate) ([]*big.Int, bool, error) {
@@ -293,15 +285,7 @@ func (p *Provider) noon(ctx context.Context, s provider.Snapshot, c candidate) (
 		if err != nil {
 			return nil, false, err
 		}
-		request := *abi.ConvertType(v[0], new(struct {
-			Amount    *big.Int
-			Timestamp *big.Int
-			Claimed   bool
-		})).(*struct {
-			Amount    *big.Int
-			Timestamp *big.Int
-			Claimed   bool
-		})
+		request := *abi.ConvertType(v[0], new(nativeclaims.Struct0)).(*nativeclaims.Struct0)
 		deadline := new(big.Int).Add(request.Timestamp, period)
 		if request.Amount.Sign() > 0 && !request.Claimed && deadline.Cmp(new(big.Int).SetUint64(s.Timestamp)) <= 0 {
 			ids = append(ids, new(big.Int).Set(id))

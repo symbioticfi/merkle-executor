@@ -2,8 +2,8 @@
 
 A Go daemon and independently versioned SDK for executing curator-committed
 RecipeExecutor programs. Recipes own protocol calls, financial policy,
-permissions, gates and postconditions. Isolated claim providers discover ready
-claims and fill authorized arguments. The runtime supplies authorized inputs,
+permissions, gates and postconditions. Isolated claim providers fill authorized
+arguments. The runtime supplies authorized inputs,
 simulates the exact transaction, submits it and tracks external settlement.
 
 All runtime state is held in RAM. There are no journals, databases, state

@@ -12,11 +12,9 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
   protocol providers serve CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs.
   The isolated `sdk/providers/claims` provider may discover ready native issuer
   requests and select native claim amounts for one unconditional authorized call
-  with no recipe queries or bindings. It fills permitted calldata only. Native
-  issuer, Merkl and 3F standalone claim providers return one stateless output per ready claim;
-  the SDK admits and batches those executions without changing the recipe.
-  Native claim validity remains enforced by the distributor/request contracts;
-  the planner handles exact recipe constraints.
+  with no recipe queries or bindings. Native issuer, Merkl and 3F standalone
+  claims are stateless; the SDK batches their authorized executions unchanged.
+  Native contracts enforce claim validity; the planner enforces recipe constraints.
   Liquid Lane connector acquisition and calldata construction belong to vault-solver's
   Merkle extension. External signed terms come from RFQ/backend integrations and
   are validated by contracts; the daemon does not size connector swaps or verify

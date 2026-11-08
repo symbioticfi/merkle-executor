@@ -50,15 +50,9 @@ select amounts. The isolated Aave provider may supply an authenticated borrow
 capacity input after replaying the original supply prefix. The recipe still caps
 the actual amount and enforces health.
 
-The isolated native claim provider recognizes one unconditional authorized claim
-with no recipe queries or bindings. It discovers ready Noon request IDs and
-Pareto queue epochs, checks native owner entitlements, and selects ERC-7540 claim
-amounts through the matching native maximum getter. It returns one plain action
-output per ready claim, with no settlement task. Fixed permission bytes and
-recipients remain fixed; native preflight uses the account at the pinned block.
-The native contract enforces claim validity and final admission still simulates
-the complete original execution. Other native policy remains in the recipe.
-Generic code contains no protocol switches.
+The isolated [native claim provider](PROVIDERS.md#native-issuer-claims) may discover
+ready claims and fill authorized calldata, returning stateless outputs. Other
+native policy remains in the recipe. Generic code contains no protocol switches.
 
 An output can change permitted inputs and masked calldata; it cannot change
 recipe instructions, targets, masks, proofs, native value or caller identity.

@@ -256,7 +256,11 @@ func testAnvilIssuerRecipeRequestThenClaim(t *testing.T, discover bool) {
 		if len(queries) != 0 || len(steps) != 1 || len(inputs) != 0 || !bytes.Equal(steps[0], claimRecipe.Steps[0]) {
 			t.Fatal("claim discovery changed the committed no-read recipe")
 		}
-		if len(plan.Outputs) != 6 || len(plan.Outputs[0]) != 1 || plan.Outputs[0][0].Task != nil || len(plan.Outputs[0][0].Inputs) != 0 || len(plan.Outputs[0][0].SkipSteps) != 0 || !bytes.Equal(plan.Outputs[0][0].Actions["0:0"], servicePack(t, issuerArtifact, "redeem", big.NewInt(100), account, account)) {
+		if len(plan.Outputs) != 6 || len(plan.Outputs[3]) != 1 {
+			t.Fatal("native claim did not produce one execution")
+		}
+		claim := plan.Outputs[3][0]
+		if claim.Task != nil || len(claim.Inputs)+len(claim.SkipSteps) != 0 || !bytes.Equal(claim.Actions["0:0"], servicePack(t, issuerArtifact, "redeem", big.NewInt(100), account, account)) {
 			t.Fatal("native provider did not fill the exact authorized maximum")
 		}
 	}
