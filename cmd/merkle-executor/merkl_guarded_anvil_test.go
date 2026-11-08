@@ -294,7 +294,7 @@ func runFrontendGuardedMerkl(t *testing.T, native, current, single bool) {
 	if native {
 		wantDeltaB = "0"
 	}
-	if !current && (len(plan.Outputs) != 5 || len(plan.Outputs[1][0].Actions) != 2 || plan.Outputs[1][0].Inputs[0] != "100" || plan.Outputs[1][0].Inputs[1] != "0" || plan.Outputs[1][0].Inputs[2] != "200" || plan.Outputs[1][0].Inputs[3] != wantDeltaB || fetches.Load()-before != 1) {
+	if !current && (len(plan.Outputs) != 6 || len(plan.Outputs[1][0].Actions) != 2 || plan.Outputs[1][0].Inputs[0] != "100" || plan.Outputs[1][0].Inputs[1] != "0" || plan.Outputs[1][0].Inputs[2] != "200" || plan.Outputs[1][0].Inputs[3] != wantDeltaB || fetches.Load()-before != 1) {
 		t.Fatalf("partial guarded reward plan: %+v HTTP=%d", plan.Outputs, fetches.Load()-before)
 	}
 	if current && !single && (len(plan.Outputs[1][0].Actions) != 1 || plan.Outputs[1][0].Inputs[0] != fixture.Rewards[1].Token.Big().String() || plan.Outputs[1][0].Inputs[1] != "200" || fetches.Load()-before != 1) {

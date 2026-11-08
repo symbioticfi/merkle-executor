@@ -211,7 +211,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 		}
 		plan := response.Plan.Members[0].Plan
 		exists := response.Plan.Members[0].Name == cfg.Strategies[0]
-		if !exists || len(response.Plan.Members) != 1 || plan.Snapshot.Account != account || plan.Snapshot.Caller != caller || len(plan.Outputs) != 5 || plan.Results[0] != amount.String() || plan.Results[2] != amount.String() || lenses.Load()-before != 1 {
+		if !exists || len(response.Plan.Members) != 1 || plan.Snapshot.Account != account || plan.Snapshot.Caller != caller || len(plan.Outputs) != 6 || plan.Results[0] != amount.String() || plan.Results[2] != amount.String() || lenses.Load()-before != 1 {
 			t.Fatalf("recipe host lost address identity/input derivation/lens budget: %+v", plan.Results)
 		}
 		for _, group := range plan.Outputs {

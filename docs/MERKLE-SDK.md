@@ -36,6 +36,10 @@ exact order identity across in-process retries. Account reservations last until
 all tasks finish. Prepared plans are process-local and cannot be serialized into
 restart recovery.
 
+Hosts may register `providers/claims.NewAutomatic` for standalone native issuer
+claims. [Provider behavior and supported shapes](PROVIDERS.md#native-issuer-claims)
+describe this stateless integration; generic admission and full simulation still apply.
+
 `keeper.Planner.PermissionSource` supplies permission artifact bytes, and the SDK
 validates every leaf/proof plus chain/account/root identity itself. The built-in
 source resolves the pinned account adapter and retrieves the backend certificate.

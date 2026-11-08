@@ -481,7 +481,7 @@ func TestAnvilServicePlanAndSend(t *testing.T) {
 		plan := response.Plan.Members[0].Plan
 		expectedCalldata = bytes.Clone(plan.Calldata)
 		exists := response.Plan.Members[0].Name == cfg.Strategies[0]
-		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 5 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
+		if !exists || plan.Snapshot.Account != accountAddress || plan.Snapshot.Caller != caller || plan.Snapshot.Root != leaf.Hash || len(plan.Calldata) < 4 || len(plan.Outputs) != 6 || plan.Results[0] != "1000" || plan.Results[1] != "17" {
 			t.Fatal("plan lost configuration, provider output or transaction")
 		}
 	}

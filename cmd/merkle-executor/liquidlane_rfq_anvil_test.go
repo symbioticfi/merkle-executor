@@ -241,7 +241,7 @@ func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
 		t.Fatal(err)
 	}
 	plan := response.Plan.Members[0].Plan
-	if len(plan.Outputs) != 5 || !bytes.Equal(plan.Outputs[2][0].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
+	if len(plan.Outputs) != 6 || !bytes.Equal(plan.Outputs[2][0].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
 		t.Fatal("plan did not preserve exact sign or published early")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {

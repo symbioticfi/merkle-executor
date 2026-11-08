@@ -4,9 +4,9 @@ Normal daemon `strategies` entries are full nonzero executor addresses, directly
 used as lowercase state, log and metric identifiers. Duplicate normalized addresses
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
-The daemon installs automatic CoW, Merkl, Liquid Lane RFQ, Aave capacity and 3F
-claim providers. Typed settings derive from authenticated recipes and remain
-process-local.
+The daemon installs automatic CoW, Merkl, Liquid Lane RFQ, native issuer claim,
+Aave capacity and 3F claim providers. Typed settings derive from authenticated
+recipes and remain process-local.
 Token pairs, amounts, minimum proceeds, action/input mappings, deployment targets
 and authorization shapes come from the
 authenticated recipe and its permission tree; they are not operator parameters.
@@ -55,8 +55,8 @@ native Inputs retain the exact-source rules below.
 
 ## Native on-chain recipes
 
-Other native protocol execution has no Go provider, selector catalogue or
-deployment admission list. The committed recipe owns protocol calls and reads, eligibility
+Outside the isolated native claim and Aave capacity providers, the committed
+recipe owns native protocol calls and reads, eligibility
 and pause checks, account/recipient identity, approvals, amount selection, request
 IDs, claims and proceeds guards. The permission tree authorizes each managed call;
 the generic planner preserves its targets, masks, proofs and bindings. The shared
@@ -67,14 +67,15 @@ Use Result bindings directly for values computed by the recipe. When a runtime
 Input is needed, give it an exact deterministic recipe constraint that
 the planner can resolve. Financial Inputs must equal a deterministic
 expression; an upper/lower bound does not select a value. A request ID must be a
-committed value or be derived exactly from recipe reads/results. The keeper does
-not enumerate an issuer ledger or choose a request from an allowed range.
+committed value or be derived exactly from recipe reads/results, except for
+authorized calldata filled by the standalone [native claim provider](#native-issuer-claims).
+The generic keeper does not enumerate issuer ledgers or branch on claim selectors.
 
-Recipes that relied on issuer-provider-created Inputs, request discovery or
-readiness checks must commit those sources and checks before execution. Express an
+Outside that supported standalone claim shape, recipes must commit their native
+input sources, request selection and readiness checks before execution. Express an
 Input through a generic exact constraint or replace it with a Result binding.
 Unknown, unresolved, future or circular dependencies fail closed. There is no
-issuer-specific fallback or automatic recipe rewrite.
+implicit issuer fallback or automatic recipe rewrite.
 
 Canonical confirmation settles generic execution only. The keeper does not label a
 native action `requested`, `claimed` or `redeemed`, infer payout from issuer events,
@@ -253,3 +254,31 @@ lens fixtures verify caller/origin, constrained preview Inputs, stateful effects
 allowance reset/zero short-circuit, overflow/division errors and original-code
 introspection divergence. These are local/API-fixture results; no deployment,
 external chain, hosted quote/order or live signing verification is implied.
+
+## Native issuer claims
+
+Hosts register the stateless `sdk/providers/claims.NewAutomatic` provider for
+one unconditional managed claim with no recipe queries or bindings.
+
+| Claim shape | Discovery and selection |
+| --- | --- |
+| Noon `claimWithdrawal(uint256)` | Ready owner request IDs, including zero; requests must be positive, mature and unclaimed. |
+| Pareto epoch deposit/withdrawal claim | Owner epochs with entitlement, fixed price and completed pending/prefund processing. |
+| Direct Pareto normal/instant withdrawal | Positive native owner entitlement. |
+| OpenEden escrow refund | Matching owner/asset escrow ledger. |
+| ERC-7540 deposit/mint/withdraw/redeem claim | Positive entitlement for request ID zero; amount from the matching `maxDeposit`, `maxMint`, `maxWithdraw` or `maxRedeem` getter. |
+| ERC-7540 cancellation claim | Positive entitlement for the fixed request ID and account controller. |
+
+Reads and account-context preflight use the pinned snapshot. The provider returns
+one authorized action output per ready claim, with no task or replay envelope;
+the SDK admits and batches those executions. Only permission-authorized calldata
+bits may change. Fixed IDs and amounts, targets, selectors, recipients/controllers,
+masks, proofs and recipe instructions stay fixed. Native contracts enforce claim
+validity, and final admission simulates the complete original execution.
+
+Unavailable claims are idle; required getter failures, malformed responses and
+transport errors fail preparation. Scans honor the host operation deadline without
+silently truncating. Ordinary synchronous vault operations are excluded; richer
+native recipes resolve their own reads and amounts through the generic planner.
+The [ABI subset](../sdk/schemas/NATIVE_CLAIMS.md) records exact source pins and
+deliberate limits. It contains no native deployment catalogue.

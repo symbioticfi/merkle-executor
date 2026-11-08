@@ -10,8 +10,9 @@ state on disk.
 - `keeper`: shared planner and RAM scheduler with one active envelope, due times,
   per-process revert halts and external account reservations.
 - `provider`: authorized outputs and optional typed RAM settlement tasks.
-- `providers`: isolated CoW, Liquid Lane consumer RFQ, Merkl, 3F claim discovery
-  and Aave capacity integrations. Native protocol policy remains in recipes.
+- `providers`: isolated CoW, Liquid Lane consumer RFQ, Merkl, native issuer and
+  3F claim discovery, and Aave capacity integrations. Other native policy remains
+  in recipes.
 - `permissions`: bounded active-root curator artifact acquisition.
 - `protocolio`, `chain`: bounded HTTP/RPC, strict read batches, safe Multicall3
   getters and code-override simulations using host-owned transports.
@@ -65,9 +66,10 @@ work rather than weakening validation.
 
 `provider.Output.Task`, when present, reconciles the exact prepared external work
 after canonical authorization. CoW and RFQ keep order identities and lookup
-progress in private Go state. Stateless Aave, Merkl and 3F preparation needs no
-replay envelope or settlement method. Native claim validity stays in the native
-contracts, with recipe constraints and full simulation checked by the SDK.
+progress in private Go state. Stateless Aave, native issuer, Merkl and 3F
+preparation needs no replay envelope or settlement method. See the
+[native claim provider](../docs/PROVIDERS.md#native-issuer-claims) for its supported
+shape and discovery behavior.
 
 The host calls `Keeper.Tick` on its polling cadence; `Keeper.Pending()` reports
 process-owned work. Each tick drains immediately confirmed work while

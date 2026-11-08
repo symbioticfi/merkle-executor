@@ -22,6 +22,7 @@ import (
 
 	erc20 "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
+	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
@@ -63,6 +64,15 @@ func issuerStep(t *testing.T, operation uint8, names []string, values ...any) []
 }
 
 func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
+	testAnvilIssuerRecipeRequestThenClaim(t, false)
+}
+
+func TestAnvilNativeClaimFillsMaximumWithoutRecipeReads(t *testing.T) {
+	testAnvilIssuerRecipeRequestThenClaim(t, true)
+}
+
+func testAnvilIssuerRecipeRequestThenClaim(t *testing.T, discover bool) {
+	t.Helper()
 	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
 		t.Skip("set MERKLE_ANVIL_TEST=1 for full local issuer lifecycle integration")
 	}
@@ -148,6 +158,11 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 		issuerStep(t, recipes.Read, []string{"uint256"}, big.NewInt(0)),
 		issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, result, [][32]byte{leaves[2].Hash}, [][]*big.Int{{bind(4)}}),
 	}}
+	if discover {
+		claimRecipe = recipes.Recipe{Steps: [][]byte{
+			issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), [][32]byte{leaves[2].Hash}, [][]*big.Int{{}}),
+		}}
+	}
 	serviceSeedTransaction(t, ctx, client, owner, &requestExecutor, executors.PackSetRecipe(requestRecipe.Queries, requestRecipe.Steps))
 	serviceSeedTransaction(t, ctx, client, owner, &claimExecutor, executors.PackSetRecipe(claimRecipe.Queries, claimRecipe.Steps))
 
@@ -218,6 +233,37 @@ func TestAnvilIssuerRecipeRequestThenClaim(t *testing.T) {
 		t.Fatal("restart duplicated redemption request")
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &issuer, servicePack(t, issuerArtifact, "finalize", account))
+	if discover {
+		var output bytes.Buffer
+		if err := planBot(ctx, path, &output); err != nil {
+			t.Fatal("native maximum claim did not reach host planning", err)
+		}
+		var response struct {
+			Plan keeper.ExecutionPlan `json:"plan"`
+		}
+		if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Plan.Members) != 1 || response.Plan.Members[0].Name != cfg.Strategies[1] {
+			t.Fatal("claim planner selected another executor")
+		}
+		plan := response.Plan.Members[0].Plan
+		args, err := executors.GetABI().Methods["execute"].Inputs.Unpack(plan.Calldata[4:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		queries, steps, inputs := args[0].([][]byte), args[1].([][]byte), args[2].([]*big.Int)
+		if len(queries) != 0 || len(steps) != 1 || len(inputs) != 0 || !bytes.Equal(steps[0], claimRecipe.Steps[0]) {
+			t.Fatal("claim discovery changed the committed no-read recipe")
+		}
+		if len(plan.Outputs) != 6 || len(plan.Outputs[3]) != 1 {
+			t.Fatal("native claim did not produce one execution")
+		}
+		claim := plan.Outputs[3][0]
+		if claim.Task != nil || len(claim.Inputs)+len(claim.SkipSteps) != 0 || !bytes.Equal(claim.Actions["0:0"], servicePack(t, issuerArtifact, "redeem", big.NewInt(100), account, account)) {
+			t.Fatal("native provider did not fill the exact authorized maximum")
+		}
+	}
 	run("ok", 1) // Separate claim strategy may now own the same account and nonce lane.
 	claimed := serviceTransaction(t, ctx, client, caller, 1)
 	if claimed.Hash() == requested.Hash() {

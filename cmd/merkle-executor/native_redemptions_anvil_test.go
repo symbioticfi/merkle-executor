@@ -309,7 +309,7 @@ func TestAnvilNativeRedemptionsAtomicityAndInProcessReorg(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := response.Plan.Members[0].Plan
-	if len(plan.Outputs) != 5 || len(plan.Calldata) == 0 {
+	if len(plan.Outputs) != 6 || len(plan.Calldata) == 0 {
 		t.Fatal("mixed native plan missing automatic providers or execution")
 	}
 	for _, group := range plan.Outputs {

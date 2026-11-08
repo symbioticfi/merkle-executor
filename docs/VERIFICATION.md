@@ -31,7 +31,8 @@ The numerical lens tests cover caller/origin context, prior authenticated effect
 exact constrained Inputs, zero short-circuits, arithmetic errors and original-code
 introspection divergence. The original full simulation must reproduce every
 prepared numerical dependency before signing. Unknown and unresolved Inputs fail
-closed; no protocol selector or deployment catalogue supplies missing native data.
+closed. Explicit owning providers may fill only their declared authorized runtime
+fields; generic input resolution has no protocol selector or deployment fallback.
 
 Native issuer fixtures exercise committed claim/read/request recipes, atomic
 balance guards, independent request/claim lifecycles and process-local confirmation.
@@ -56,12 +57,16 @@ calldata and strategy order. Runtime state disappears when the process exits;
 there is no journal, restart test contract, replacement ladder or acknowledgement
 handshake.
 
-## Off-chain providers
+## Isolated providers
 
-CoW, Liquid Lane RFQ, Merkl, 3F claims and Aave capacity have isolated providers.
+CoW, Liquid Lane RFQ, native issuer claims, Merkl, 3F claims and Aave capacity have isolated providers.
 Their local HTTP/RPC fixtures validate request framing, numerical policy, identity,
 bounds, redaction, cancellation and in-process retries. Independent typed-data/proof vectors
 establish local encoding, not live API acceptance.
+
+Native claim unit tests cover discovery, permission preservation and idle/error
+classification. [Native issuer fixtures](NATIVE-ISSUER-TESTING.md) exercise host
+planning and execution; they do not establish deployment or live settlement.
 
 CoW tests require confirmed account authorization before order publication,
 preserve deterministic order identity through ambiguous in-process submission, and
@@ -83,8 +88,8 @@ The core ABI source is adapters `codex/bailsec-normalized` at
 `addCapability(address,bytes32)` and recipe operations remain 0–11. The source pin
 in `sdk/abi/source.json` requires the exact clean checkout and validates compiled
 source/dependency hashes before copying core ABIs and the local executor fixture.
-Protocol ABI generation covers only the three off-chain providers and Multicall3.
-Native issuer artifacts are local test fixtures.
+Protocol ABI generation covers the used provider subsets. Their source pins and
+limitations are indexed in [schema provenance](../sdk/schemas/PROVENANCE.md).
 
 The host builds the local SDK in this checkout; SDK-only checks run independently.
 No deployment or hosted CI result is implied by generated-source parity or local

@@ -1,11 +1,8 @@
 # Native issuer execution validation
 
-Native issuer semantics belong in the committed recipe: calls and reads, exact
-amounts and request IDs, eligibility gates, approval cleanup and output guards.
-The daemon has no native issuer provider, selector catalogue or deployment list.
-Generic permissions, numerical dependencies, full simulation, atomic execution and
-canonical transaction confirmation apply to these recipes as they do to other native
-protocol actions. [Input requirements and execution boundary](PROVIDERS.md#native-on-chain-recipes).
+Native issuer tests cover committed recipe execution and the isolated
+[native claim provider](PROVIDERS.md#native-issuer-claims). Generic permissions,
+full simulation, atomic execution and canonical confirmation apply to both.
 
 ## Portable regression tests
 
@@ -22,8 +19,9 @@ canonical receipt re-inclusion. Process exit discards that tracking; there is no
 crash recovery or replay guarantee.
 
 Request and claim are independent recipes. A confirmed native transaction settles
-generic execution; the daemon does not infer issuer payout or discover the next
-request ID. Current-state reads and exact bindings must establish each later claim.
+generic execution; the daemon does not infer an outstanding issuer payout.
+A local ERC-7540 fixture exercises idle discovery, amount filling, real host
+planning and execution, then idle state after the entitlement is claimed.
 Local asynchronous issuer fixtures live under
 `cmd/merkle-executor/testdata/issuers`; they are not production dependencies.
 
@@ -45,5 +43,6 @@ make integration
 
 The source-pinned handler is test evidence. Local token/oracle fixtures do not
 establish production token restrictions, account enrollment, treasury liquidity,
-future proxy behavior or issuer availability. No native issuer ABI or deployment
-catalogue is imported by production Go code.
+future proxy behavior or issuer availability. The handler fixture tests synchronous
+`redeemOnchain`; it does not validate the provider's `claimWithdrawal` discovery
+against a deployed Noon handler.

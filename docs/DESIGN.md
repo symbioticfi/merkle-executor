@@ -12,7 +12,7 @@ no environment variables.
 | `recipes` | Exact ABI/hash codec, event discovery, permissions, numerical dependencies, lenses, authorized assembly and execution validation |
 | `keeper` | Shared preparation, ordered batch selection and process-local transaction/settlement scheduling |
 | `provider` | Snapshot, authorized output and optional RAM settlement task contracts |
-| `providers` | Isolated authenticated CoW, Liquid Lane RFQ, Merkl, 3F claim and Aave capacity integrations |
+| `providers` | Isolated authenticated CoW, Liquid Lane RFQ, native issuer/Merkl/3F claim and Aave capacity integrations |
 | `permissions` | Bounded acquisition of the exact active curator permission artifact |
 | `protocolio` | Bounded HTTP, strict RPC batches, pinned reads and canonical execution evidence |
 | `chain` | Host-supplied read/write RPC transports and safe Multicall3 grouping |
@@ -48,7 +48,11 @@ Every provider declares owned inputs/actions and numerical dependencies through
 native values resolve through the numerical prefix lens; bounds alone never
 select amounts. The isolated Aave provider may supply an authenticated borrow
 capacity input after replaying the original supply prefix. The recipe still caps
-the actual amount and enforces health. Generic code contains no protocol switches.
+the actual amount and enforces health.
+
+The isolated [native claim provider](PROVIDERS.md#native-issuer-claims) may discover
+ready claims and fill authorized calldata, returning stateless outputs. Other
+native policy remains in the recipe. Generic code contains no protocol switches.
 
 An output can change permitted inputs and masked calldata; it cannot change
 recipe instructions, targets, masks, proofs, native value or caller identity.

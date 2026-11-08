@@ -1,8 +1,9 @@
 # Merkle executor
 
 A Go daemon and independently versioned SDK for executing curator-committed
-RecipeExecutor programs. Recipes own protocol calls, reads, amount selection,
-permissions, gates and postconditions. The runtime supplies authorized inputs,
+RecipeExecutor programs. Recipes own protocol calls, financial policy,
+permissions, gates and postconditions. Isolated claim providers fill authorized
+arguments. The runtime supplies authorized inputs,
 simulates the exact transaction, submits it and tracks external settlement.
 
 All runtime state is held in RAM. There are no journals, databases, state
@@ -69,8 +70,8 @@ continue with their original order identity. External tasks reserve their accoun
 A confirmed reverted batch halts every selected executor until process restart.
 
 Built-in integrations cover CoW orders, Liquid Lane consumer RFQ, Merkl proofs
-and standalone claims, 3F standalone claims, and isolated Aave capacity probing.
-Other native protocols execute entirely through their committed recipes. Liquid
+and standalone claims, native issuer and 3F standalone claims, and isolated Aave
+capacity probing. Other native operations execute through committed recipes. Liquid
 Lane connector acquisition and calldata construction belong to vault-solver.
 See [provider contracts and supported shapes](docs/PROVIDERS.md).
 
