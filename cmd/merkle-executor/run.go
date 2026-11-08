@@ -167,7 +167,7 @@ func runBotWithHTTP(ctx context.Context, path string, httpClient *http.Client) (
 	defer env.close()
 	cfg, strategies, log := env.cfg, env.strategies, env.log
 	metrics := observability.NewMetrics()
-	k, err := newKeeper(env)
+	k, manager, err := newKeeper(env)
 	if err != nil {
 		return err
 	}
@@ -176,6 +176,11 @@ func runBotWithHTTP(ctx context.Context, path string, httpClient *http.Client) (
 			err = errors.Errorf("runtime stopped with pending work; process-local tracking is lost: %w", err)
 		}
 	}()
+	stopSender, err := startTransactionManager(ctx, manager)
+	if err != nil {
+		return err
+	}
+	defer stopSender()
 	k.Observe = metrics.Observe
 	metrics.Ready(true)
 	defer metrics.Ready(false)
@@ -224,22 +229,47 @@ func runBotWithHTTP(ctx context.Context, path string, httpClient *http.Client) (
 	}
 }
 
-func newKeeper(env *environment) (*keeper.Keeper, error) {
+func newKeeper(env *environment) (*keeper.Keeper, *transaction.Manager, error) {
 	k := &keeper.Keeper{Planner: env.planner, Strategies: env.strategies, Mode: env.cfg.Mode, OperationTimeout: config.DefaultOperationTimeout, Log: env.log}
+	var manager *transaction.Manager
 	if env.cfg.Mode == "send" {
 		txSigner, err := signerFromEnv(env.cfg.Signer.KeyEnv)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if txSigner.Address() != env.planner.Caller {
-			return nil, errors.New("signer key does not match executor caller")
+			return nil, nil, errors.New("signer key does not match executor caller")
 		}
-		k.Sender, err = transaction.New(env.client, txSigner, env.planner.ChainID, env.cfg.TxManager.SenderConfig(), env.log)
+		manager, err = transaction.New(env.client, txSigner, env.planner.ChainID, env.cfg.TxManager.SenderConfig(), env.log)
 		if err != nil {
-			return nil, err
+			return nil, nil, errors.Errorf("configure transaction manager: %w", err)
 		}
+		k.Sender = manager.Sender("merkle-executor")
 	}
-	return k, nil
+	return k, manager, nil
+}
+
+// The host starts and drains accepted work explicitly, before closing the RPC client.
+func startTransactionManager(ctx context.Context, manager *transaction.Manager) (func(), error) {
+	if manager == nil {
+		return func() {}, nil
+	}
+	startup, cancel := context.WithTimeout(ctx, config.DefaultOperationTimeout)
+	err := manager.Initialize(startup)
+	cancel()
+	if err != nil {
+		return nil, errors.Errorf("initialize transaction manager: %w", err)
+	}
+	run, stop := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		manager.Start(run)
+	}()
+	return func() {
+		stop()
+		<-done
+	}, nil
 }
 
 func stopped(ctx context.Context, k *keeper.Keeper) error {

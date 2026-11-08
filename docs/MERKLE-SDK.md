@@ -6,12 +6,14 @@ daemon against `./sdk` so local, CI and container checks use the same source.
 `make check` and `make integration` check both modules; the SDK also works alone.
 
 The host supplies RPC/HTTP transports, signing credentials, provider registration,
-logging/metrics and process scheduling. SDK imports never read environment values
-or start workers. Hosts may supply their existing common sender through
-`keeper.Sender`; constructing another signer owner is unnecessary.
+logging/metrics and process scheduling. SDK imports and constructors never read environment values or start workers.
+Each solver process configures its own signer and `transaction.Manager`, initializes
+it and explicitly runs `Start`. Both services reuse the same SDK lifecycle through
+`Send`/`SendAsync` or the `manager.Sender(name)` keeper view. The host and its
+providers select existing orders or claims; the transaction engine handles their
+chosen calls without domain-specific discovery or prioritization.
 
-The host calls `Keeper.Tick(context)` repeatedly and can inspect `Pending()` before
-ending a one-shot session. `keeper.Planner` groups discovery and final validation
+The host calls `Keeper.Tick(context)` repeatedly and can inspect `Pending()` during shutdown. `keeper.Planner` groups discovery and final validation
 across executors. `Prepare` prepares one strategy; `PrepareExecution` selects one
 atomic direct, same-executor or delegated envelope. Prepared bytes go unchanged
 to sender admission. Supply one shared budget to `Planner.MaxGas` and
@@ -51,7 +53,7 @@ Liquid Lane connector acquisition and calldata construction, and host-specific
 signed terms remains authoritative. This repository does not change or migrate
 other repositories automatically.
 
-This rewrite removes `state`, `submission`, `txmanager` and `txengine`, including
-Store, Persist, Hold/Release and recovery APIs. Integrators must migrate to the RAM
-contracts. There is no compatibility shim or restart guarantee. See
-[transaction ownership](TRANSACTIONS.md) before deploying the new runtime.
+Transaction ownership, fee replacement, deadlines, funding and canonical receipts
+are implemented once in `sdk/transaction`. Host shutdown stops intake and drains
+the shared manager within its configured bound. There is no disk state or restart
+recovery. See [transaction ownership](TRANSACTIONS.md).

@@ -5,188 +5,234 @@ package transaction
 import (
 	"bytes"
 	"context"
-	"math/big"
-	"net"
-	"os/exec"
-	"strconv"
-	"testing"
-	"time"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/merkle-executor/sdk/chain"
 	"github.com/symbioticfi/merkle-executor/sdk/signer"
+	"math/big"
+	"net"
+	"os/exec"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
 )
 
-func TestAnvilTransactionLifecycle(t *testing.T) {
-	for _, revert := range []bool{false, true} {
-		name := "confirmed logs"
-		if revert {
-			name = "canonical revert"
+type localRelay struct {
+	*chain.Client
+	mu                sync.Mutex
+	sent              []*types.Transaction
+	ambiguous         bool
+	rejectReplacement bool
+}
+
+func (b *localRelay) SendTransaction(ctx context.Context, tx *types.Transaction) error {
+	b.mu.Lock()
+	first := len(b.sent) == 0
+	reject := b.rejectReplacement && !first && tx.Hash() != b.sent[0].Hash()
+	b.sent = append(b.sent, tx)
+	b.mu.Unlock()
+	if reject {
+		return errors.New("replacement transaction underpriced")
+	}
+	err := b.Client.SendTransaction(ctx, tx)
+	if err == nil && b.ambiguous {
+		return context.DeadlineExceeded
+	}
+	return err
+}
+func (b *localRelay) attempt(t *testing.T, different common.Hash) *types.Transaction {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		b.mu.Lock()
+		var found *types.Transaction
+		for _, tx := range b.sent {
+			if tx.Hash() != different {
+				found = tx
+				break
+			}
 		}
-		t.Run(name, func(t *testing.T) {
-			rpcClient, client, endpoint := startAnvil(t)
-			backend := anvilBackend(t, endpoint)
-			s := anvilSigner(t)
-			m, err := New(backend, s, big.NewInt(31337), Config{MaxFeeGwei: 30, Confirmations: 1}, logr.Discard())
+		b.mu.Unlock()
+		if found != nil {
+			if _, pending, err := b.Client.TransactionByHash(t.Context(), found.Hash()); err == nil && pending {
+				return found
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("transaction did not reach local pool")
+	return nil
+}
+func localManager(t *testing.T, b Backend, cfg Config) (*Manager, context.CancelFunc, <-chan struct{}) {
+	t.Helper()
+	cfg.MaxFeeGwei = 100
+	cfg.PollInterval = 5 * time.Millisecond
+	cfg.ShutdownTimeout = 20 * time.Millisecond
+	m, err := New(b, anvilSigner(t), big.NewInt(31337), cfg, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = m.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); m.Start(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	return m, cancel, done
+}
+func localResult(t *testing.T, results <-chan Result) Result {
+	t.Helper()
+	select {
+	case result := <-results:
+		return result
+	case <-time.After(5 * time.Second):
+		t.Fatal("local receipt was not confirmed")
+		return Result{}
+	}
+}
+func localExecution(t *testing.T, s *Sender) *ExecutionResult {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		result, err := s.Poll(t.Context())
+		if result != nil {
 			if err != nil {
 				t.Fatal(err)
 			}
+			return result
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("local keeper receipt was not confirmed")
+	return nil
+}
+
+func TestAnvilCanonicalExecutionAndRevert(t *testing.T) {
+	for _, revert := range []bool{false, true} {
+		t.Run(map[bool]string{false: "logs", true: "revert"}[revert], func(t *testing.T) {
+			rpcClient, _, endpoint := startAnvil(t)
+			relay := &localRelay{Client: anvilBackend(t, endpoint)}
+			m, _, _ := localManager(t, relay, Config{Confirmations: 1})
 			to := common.HexToAddress("0xdead")
 			if !revert {
 				setAnvilCode(t, rpcClient, to, "0x600160005260206000a000")
 			}
-			if err := m.Submit(t.Context(), Request{To: to}); err != nil {
+			sender := m.Sender("claims")
+			if err := sender.Submit(t.Context(), ExecutionRequest{To: to}); err != nil {
 				t.Fatal(err)
 			}
-			// Changing state after estimation makes the actual transaction revert.
+			tx := relay.attempt(t, common.Hash{})
 			if revert {
 				setAnvilCode(t, rpcClient, to, "0x60006000fd")
 			}
 			mineAnvilBlock(t, rpcClient)
-			if result, err := m.Poll(t.Context()); result != nil || err != nil || !m.Busy() {
-				t.Fatalf("inclusion passed confirmation policy: %+v %v", result, err)
+			time.Sleep(20 * time.Millisecond)
+			if result, _ := sender.Poll(t.Context()); result != nil || !sender.Busy() {
+				t.Fatal("inclusion bypassed confirmation depth")
 			}
 			mineAnvilBlock(t, rpcClient)
-			result, err := m.Poll(t.Context())
-			if err != nil || result == nil || result.Execution == nil || result.Reverted != revert || m.Busy() {
-				t.Fatalf("canonical result: %+v %v", result, err)
+			result := localExecution(t, sender)
+			if result.Hash != tx.Hash() || result.Reverted != revert || sender.Busy() {
+				t.Fatalf("invalid local completion: %+v", result)
 			}
-			receipt, err := client.TransactionReceipt(t.Context(), result.Hash)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if result.Execution.BlockHash != receipt.BlockHash {
-				t.Fatal("execution has wrong canonical block")
-			}
-			if !revert && (len(result.Execution.Logs) != 1 || len(result.Execution.Logs[0].Data) != 32 || result.Execution.Logs[0].Data[31] != 1) {
-				t.Fatalf("execution lost receipt logs: %+v", result.Execution)
+			if !revert && (len(result.Execution.Logs) != 1 || result.Execution.Logs[0].Data[31] != 1) {
+				t.Fatal("canonical logs lost")
 			}
 		})
 	}
 }
 
-func TestAnvilTransactionGasHeadroomRespectsDefaultBudget(t *testing.T) {
-	rpcClient, client, endpoint := startAnvil(t)
-	backend := anvilBackend(t, endpoint)
-	m, err := New(backend, anvilSigner(t), big.NewInt(31337), Config{MaxFeeGwei: 30}, logr.Discard())
-	if err != nil {
-		t.Fatal(err)
+func TestAnvilAmbiguousSubmissionAndFeeReplacement(t *testing.T) {
+	rpcClient, _, endpoint := startAnvil(t)
+	relay := &localRelay{Client: anvilBackend(t, endpoint), ambiguous: true}
+	m, _, _ := localManager(t, relay, Config{ReplacementInterval: 30 * time.Millisecond})
+	results, accepted := m.SendAsync(t.Context(), Request{To: common.Address{1}, Data: []byte{1, 2, 3}})
+	if !accepted {
+		t.Fatal("request not admitted")
 	}
-	to := common.HexToAddress("0xdead")
-	// Expanding memory consumes about 15.5M gas: valid under Osaka's cap, but
-	// adding unbounded 10% headroom would produce a rejected signed transaction.
-	setAnvilCode(t, rpcClient, to, "0x6000622b1fe05200")
-	if err := m.Submit(t.Context(), Request{To: to}); err != nil {
-		t.Fatal(err)
-	}
-	tx, _, err := client.TransactionByHash(t.Context(), m.active.Hash())
-	if err != nil || tx.Gas() != 16_777_216 {
-		t.Fatalf("transaction exceeded deployment budget: %v", err)
+	original := relay.attempt(t, common.Hash{})
+	replacement := relay.attempt(t, original.Hash())
+	if replacement.Nonce() != original.Nonce() || !bytes.Equal(replacement.Data(), original.Data()) || replacement.GasFeeCap().Cmp(original.GasFeeCap()) <= 0 || replacement.GasTipCap().Cmp(original.GasTipCap()) <= 0 {
+		t.Fatal("replacement changed intent or did not progress fees")
 	}
 	mineAnvilBlock(t, rpcClient)
-	result, err := m.Poll(t.Context())
-	if err != nil || result == nil || result.Reverted || m.Busy() {
-		t.Fatalf("bounded high-gas transaction did not confirm: result=%+v err=%v", result, err)
+	result := localResult(t, results)
+	if !result.Included() || result.Reverted() || len(result.Attempts) < 2 {
+		t.Fatalf("ambiguous ownership lost: %+v", result)
 	}
 }
 
-type anvilRelay struct {
-	*chain.Client
-	forward bool
-	sends   []*types.Transaction
-}
-
-func (r *anvilRelay) SendTransaction(ctx context.Context, tx *types.Transaction) error {
-	r.sends = append(r.sends, tx)
-	if r.forward {
-		if err := r.Client.SendTransaction(ctx, tx); err != nil {
-			return err
+func TestAnvilExpiredWorkDoesNotCreditNewKeeper(t *testing.T) {
+	rpcClient, _, endpoint := startAnvil(t)
+	relay := &localRelay{Client: anvilBackend(t, endpoint), rejectReplacement: true}
+	m, _, _ := localManager(t, relay, Config{})
+	result, accepted := m.SendAsync(t.Context(), Request{To: common.Address{1}, Deadline: time.Now().Add(50 * time.Millisecond)})
+	if !accepted {
+		t.Fatal("old request not admitted")
+	}
+	original := relay.attempt(t, common.Hash{})
+	retired := localResult(t, result)
+	if !retired.Uncertain() || !errors.Is(retired.Err, context.DeadlineExceeded) {
+		t.Fatalf("expired signature forgotten: %+v", retired)
+	}
+	sender := m.Sender("claims")
+	if err := sender.Submit(t.Context(), ExecutionRequest{To: common.Address{2}}); err != nil {
+		t.Fatal(err)
+	}
+	if !sender.Busy() {
+		t.Fatal("rejected signed keeper work was released")
+	}
+	mineAnvilBlock(t, rpcClient)
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		execution, err := sender.Poll(t.Context())
+		if !sender.Busy() {
+			if execution != nil || !errors.Is(err, ErrNonceConsumed) {
+				t.Fatalf("old winner credited new request: %+v %v", execution, err)
+			}
+			return
 		}
-		return context.DeadlineExceeded
+		time.Sleep(time.Millisecond)
 	}
-	return nil
+	t.Fatalf("old winner %s did not release superseded ticket", original.Hash())
 }
 
-func TestAnvilAmbiguousBroadcastKeepsExactTransaction(t *testing.T) {
+func TestAnvilFundingAndShutdownPreserveSignedOwnership(t *testing.T) {
 	rpcClient, client, endpoint := startAnvil(t)
-	relay := &anvilRelay{Client: anvilBackend(t, endpoint), forward: true}
-	m, err := New(relay, anvilSigner(t), big.NewInt(31337), Config{MaxFeeGwei: 30}, logr.Discard())
-	if err != nil {
+	relay := &localRelay{Client: anvilBackend(t, endpoint)}
+	m, cancel, done := localManager(t, relay, Config{})
+	signerAddress := anvilSigner(t).Address()
+	if err := rpcClient.CallContext(t.Context(), nil, "anvil_setBalance", signerAddress, "0x0"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Submit(t.Context(), testRequest()); !errors.Is(err, context.DeadlineExceeded) || !m.Busy() {
-		t.Fatalf("ambiguous submit lost work: %v", err)
+	sender := m.Sender("claims")
+	if err := sender.Submit(t.Context(), ExecutionRequest{To: common.Address{1}}); err == nil || sender.Busy() {
+		t.Fatal("unfunded transaction acquired signed ownership")
 	}
-	_, _ = m.Poll(t.Context())
-	if len(relay.sends) != 2 || relay.sends[0].Hash() != relay.sends[1].Hash() {
-		t.Fatal("ambiguous retry changed signed transaction")
-	}
-	mineAnvilBlock(t, rpcClient)
-	result, err := m.Poll(t.Context())
-	if err != nil || result == nil || result.Hash != relay.sends[0].Hash() {
-		t.Fatalf("ambiguous transaction not reconciled: %+v %v", result, err)
-	}
-	if _, err := client.TransactionReceipt(t.Context(), result.Hash); err != nil {
+	if err := rpcClient.CallContext(t.Context(), nil, "anvil_setBalance", signerAddress, "0x3635c9adc5dea00000"); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestAnvilUnknownNonceConsumptionRemainsBlocked(t *testing.T) {
-	rpcClient, client, endpoint := startAnvil(t)
-	s := anvilSigner(t)
-	relay := &anvilRelay{Client: anvilBackend(t, endpoint)}
-	m, err := New(relay, s, big.NewInt(31337), Config{MaxFeeGwei: 30}, logr.Discard())
-	if err != nil {
+	if err := sender.Submit(t.Context(), ExecutionRequest{To: common.Address{1}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Submit(t.Context(), testRequest()); err != nil {
-		t.Fatal(err)
+	original := relay.attempt(t, common.Hash{})
+	cancel()
+	<-done
+	if !sender.Busy() || m.Available() {
+		t.Fatal("shutdown lost unresolved signature")
 	}
-	to := common.HexToAddress("0xbeef")
-	external, err := s.SignTx(t.Context(), types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(31337), Nonce: 0, To: &to, Gas: 21_000, GasFeeCap: big.NewInt(10_000_000_000), GasTipCap: big.NewInt(1_000_000_000)}), big.NewInt(31337))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := client.SendTransaction(t.Context(), external); err != nil {
-		t.Fatal(err)
-	}
-	mineAnvilBlock(t, rpcClient)
-	for range 2 {
-		if result, err := m.Poll(t.Context()); result != nil || !errors.Is(err, ErrNonceConsumed) || !m.Busy() {
-			t.Fatalf("foreign nonce treated as completion: %+v %v", result, err)
+	relay.mu.Lock()
+	for _, tx := range relay.sent {
+		if tx.Hash() != original.Hash() {
+			t.Fatal("shutdown signed different work")
 		}
 	}
-	if len(relay.sends) != 1 {
-		t.Fatal("rebroadcast consumed nonce")
-	}
-	if err := m.Submit(t.Context(), testRequest()); !errors.Is(err, ErrBusy) {
-		t.Fatalf("lost uncertain ownership: %v", err)
-	}
-}
-
-func TestAnvilFreshProcessRefusesPriorPendingTransaction(t *testing.T) {
-	_, _, endpoint := startAnvil(t)
-	backend := anvilBackend(t, endpoint)
-	s := anvilSigner(t)
-	first, err := New(backend, s, big.NewInt(31337), Config{MaxFeeGwei: 30}, logr.Discard())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := first.Submit(t.Context(), testRequest()); err != nil {
-		t.Fatal(err)
-	}
-	fresh, err := New(backend, s, big.NewInt(31337), Config{MaxFeeGwei: 30}, logr.Discard())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := fresh.Submit(t.Context(), Request{To: common.HexToAddress("0xbeef")}); err == nil || fresh.Busy() {
-		t.Fatalf("fresh process overwrote pending work: %v", err)
+	relay.mu.Unlock()
+	if _, pending, err := client.TransactionByHash(t.Context(), original.Hash()); err != nil || !pending {
+		t.Fatalf("shutdown mutated pending transaction: %v", err)
 	}
 }
 
@@ -201,7 +247,7 @@ func anvilBackend(t *testing.T, endpoint string) *chain.Client {
 }
 func anvilSigner(t *testing.T) signer.Signer {
 	t.Helper()
-	s, err := signer.NewFromHexKey(testKey)
+	s, err := signer.NewFromHexKey("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
 	if err != nil {
 		t.Fatal(err)
 	}

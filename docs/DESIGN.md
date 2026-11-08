@@ -16,7 +16,7 @@ no environment variables.
 | `permissions` | Bounded acquisition of the exact active curator permission artifact |
 | `protocolio` | Bounded HTTP, strict RPC batches, pinned reads and canonical execution evidence |
 | `chain` | Host-supplied read/write RPC transports and safe Multicall3 grouping |
-| `transaction` | One RAM-owned signed transaction and canonical receipt confirmation |
+| `transaction` | Transaction admission, gas and fee policy, replacements, RAM nonce ownership and canonical receipts |
 | `signer` | Signing primitive receiving credentials from its host |
 | `abi`, `bindings`, `schemas`, `protocoltypes` | Vendored source provenance and generated contract/wire interfaces |
 | `cmd`, `internal/config`, `internal/observability` | Daemon startup, strict YAML, keys, endpoints, metrics and process lifecycle |
@@ -107,8 +107,15 @@ insufficient funding fails before any signed ownership or broadcast. This
 preflight reduces avoidable rejections; it does not prove later execution or
 change ownership after a broadcast attempt.
 
-`Keeper.Tick` is the sole lifecycle driver. One immutable active envelope owns
-its sender until a canonical terminal result. Submission ambiguity retains that
+`transaction.Manager` is the shared transaction engine used by the daemon and
+vault-solver. Each solver process configures its own signer and manager, then
+explicitly initializes and starts it. Distinct signers across processes are a
+trusted deployment assumption. Send APIs and keeper sender views use the same
+nonce, fee and receipt implementation. Constructors start no workers. Existing
+order or claim discovery and priority stay with solver orchestration and providers.
+
+`Keeper.Tick` drives recipe and settlement progress. Its manager-owned sender
+view retains one immutable active envelope until a canonical terminal result. Submission ambiguity retains that
 envelope. A successful receipt fans out directly into per-member RAM settlement.
 Stateless providers have no settlement method. Optional `Output.Task` values
 retain exact order identity and progress in typed Go state. Their account remains
@@ -121,9 +128,9 @@ after one poll. Polling, each settlement, and preparation/submission have separa
 operation deadlines, so a slow account cannot consume another account's budget.
 Preparation and submission share one deadline for the selected transaction.
 Parent cancellation stops subsequent work; the per-executor and per-settlement
-visitation limits bound each tick. Hosts may select the
-keeper's optional sender wakeup channel alongside their normal cadence. Canonical
-host completion wakes promptly; ambiguous errors retain normal retry cadence.
+visitation limits bound each tick. Hosts observe results through their existing
+polling loops. Shutdown explicitly stops and drains the shared manager; process
+exit still loses RAM ownership.
 
 External publication happens only after canonical account authorization. Tasks
 receive confirmed execution logs and a fresh pinned snapshot, with a closing

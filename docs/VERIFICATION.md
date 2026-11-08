@@ -50,12 +50,11 @@ changes prevent signing. Pending signed attempts and external-order tasks retain
 their exact identity in RAM without a new curator fetch.
 
 Transaction and keeper tests cover capture before broadcast, ambiguous sends,
-identical-byte rebroadcast, foreign nonce consumption, cancellation, canonical
-confirmation, receipt reorgs, account reservations, terminal revert and private
-settlement state. CLI tests check partial-failure diagnostics preserve healthy
+identical-byte rebroadcast, bounded fee replacements, funding failures, deadlines,
+foreign nonce consumption, cancellation, canonical confirmation, receipt reorgs,
+account reservations, terminal revert and private settlement state. CLI tests check partial-failure diagnostics preserve healthy
 calldata and strategy order. Runtime state disappears when the process exits;
-there is no journal, restart test contract, replacement ladder or acknowledgement
-handshake.
+there is no journal, restart recovery or acknowledgement handshake.
 
 ## Isolated providers
 
