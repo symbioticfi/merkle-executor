@@ -6,10 +6,10 @@ curator:
 chain:
   chainId: 1
   rpcUrl: http://127.0.0.1:8545
-stateDir: ../state
 # Required for send mode: choose an absolute fee ceiling for this deployment.
 # txManager:
 #   maxFeeGwei: 30
+#   maxGas: 16777216 # Default; override only for the deployment's chain rules.
 observability:
   addr: 127.0.0.1:9090
 strategies:

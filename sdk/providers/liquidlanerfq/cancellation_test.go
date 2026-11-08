@@ -5,10 +5,9 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-func TestCancellationUsesOrdersAcrossExpiryAndRestart(t *testing.T) {
+func TestCancellationUsesOrdersAcrossExpiry(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		used, expired bool
@@ -19,8 +18,6 @@ func TestCancellationUsesOrdersAcrossExpiryAndRestart(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHarness(t)
 			out, snapshot := h.authorized(t)
-			var saved prepared
-			_ = json.Unmarshal(out.Data, &saved)
 			h.order(common.Hash{})
 			h.pages[0].Orders[0].OrderStatus = "cancelled"
 			h.c.used = test.used
@@ -31,12 +28,7 @@ func TestCancellationUsesOrdersAcrossExpiryAndRestart(t *testing.T) {
 				header, _ := h.c.HeaderByNumber(t.Context(), snapshot.BlockNumber)
 				snapshot.BlockHash = header.Hash()
 			}
-			p, err := New(h.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
-			if err != nil {
-				t.Fatal(err)
-			}
-			state, _ := json.Marshal(progressState{Version: 1, Digest: saved.Digest, OrderID: orderID})
-			progress, err := p.Advance(t.Context(), snapshot, out, state)
+			progress, err := out.Task.Advance(t.Context(), snapshot)
 			want := "awaiting-receipt"
 			if test.used {
 				want = "cancelled"
@@ -59,15 +51,11 @@ func TestCancellationSurvivesPaginatedLookup(t *testing.T) {
 	h.pages[1].Orders = h.pages[1].Orders[:0]
 	h.pages[1].Cursor = json.RawMessage(`null`)
 	h.p.cfg.MaxLookupPages = 1
-	first, err := h.p.Advance(t.Context(), snapshot, out, nil)
+	first, err := out.Task.Advance(t.Context(), snapshot)
 	if err != nil || first.Done || first.Outcome != "lookup-scanning" {
 		t.Fatal(first, err)
 	}
-	p, err := New(h.p.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	final, err := p.Advance(t.Context(), snapshot, out, first.State)
+	final, err := out.Task.Advance(t.Context(), snapshot)
 	if err != nil || !final.Done || final.Outcome != "cancelled" || h.posts != 0 {
 		t.Fatal(final, err)
 	}

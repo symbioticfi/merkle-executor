@@ -171,8 +171,8 @@ func TestCurrentFrontendVariableProof(t *testing.T) {
 			if out.Inputs[0] != token.Big().String() || out.Inputs[1] != "100" {
 				t.Fatalf("recipe inputs not filled: %v", out.Inputs)
 			}
-			if _, err = p.Advance(t.Context(), snapshot, out, nil); err != nil {
-				t.Fatal(err)
+			if out.Task != nil {
+				t.Fatal("synchronous claim retained settlement work")
 			}
 		})
 	}

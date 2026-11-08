@@ -27,7 +27,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
@@ -212,7 +211,7 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 		}
 		plan := response.Plan.Members[0].Plan
 		exists := response.Plan.Members[0].Name == cfg.Strategies[0]
-		if !exists || len(response.Plan.Members) != 1 || plan.Snapshot.Account != account || plan.Snapshot.Caller != caller || len(plan.Outputs) != 5 || plan.Results[0] != amount.String() || plan.Results[2] != amount.String() || lenses.Load()-before != 1 {
+		if !exists || len(response.Plan.Members) != 1 || plan.Snapshot.Account != account || plan.Snapshot.Caller != caller || len(plan.Outputs) != 6 || plan.Results[0] != amount.String() || plan.Results[2] != amount.String() || lenses.Load()-before != 1 {
 			t.Fatalf("recipe host lost address identity/input derivation/lens budget: %+v", plan.Results)
 		}
 		for _, group := range plan.Outputs {
@@ -334,24 +333,20 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 				t.Fatal("failed native execution changed treasury USDC")
 			}
 			_, prepareErr := prepare()
-			if prepareErr == nil || !strings.Contains(prepareErr.Error(), "full recipe simulation failed") {
+			if !recipes.BatchRejected(prepareErr) {
 				t.Fatalf("issuer failure did not reach full recipe simulation: %v", prepareErr)
 			}
 			beforeNonce, err := client.NonceAt(ctx, caller, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := runBot(ctx, path, true); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
+			if err := serviceKeeper(t, ctx, path, nil).Tick(ctx); !recipes.BatchRejected(err) {
 				t.Fatalf("send admission accepted failing issuer recipe: %v", err)
 			}
 			if afterNonce, err := client.NonceAt(ctx, caller, nil); err != nil || afterNonce != beforeNonce {
 				t.Fatalf("failed preparation consumed a nonce: before=%d after=%d error=%v", beforeNonce, afterNonce, err)
 			}
-			for _, name := range []string{"strategy." + cfg.Strategies[0] + ".v1", "txmanager.active.v1"} {
-				if found, err := state.Read(cfg.StateDir, name, new(any)); err != nil || found {
-					t.Fatalf("failed preparation became durable work: %s / %v", name, err)
-				}
-			}
+
 			switch failure {
 			case "whitelist":
 				call(owner, handler, handlerArtifact, "addWhitelistedUser", account)
@@ -383,16 +378,8 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	path = writeCLIConfig(t, t.TempDir(), cfg)
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
-	if err = runBot(ctx, path, true); err != nil {
-		t.Fatal(err)
-	}
-	var job keeper.Job
-	if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); e != nil || !found || job.Phase != "settled" || !job.Result.Confirmed || job.Result.Reverted || len(job.Progress) != 5 || !job.Progress[4][0].Done {
-		t.Fatalf("native canonical address job did not settle: %+v %v", job.Result, e)
-	}
-	if found, e := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); e != nil || found {
-		t.Fatalf("native completed sender journal retained: %v", e)
-	}
+	runService(t, ctx, path, "ok", 1)
+
 	if read(usn, tokenArtifact, "balanceOf", account).Sign() != 0 || read(usn, tokenArtifact, "totalSupply").Sign() != 0 || read(usn, tokenArtifact, "allowance", account, handler).Sign() != 0 {
 		t.Fatal("USN burn or exact-allowance cleanup failed")
 	}
@@ -403,10 +390,12 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if err = runBot(ctx, path, true); err != nil {
-		t.Fatal(err)
+	// A fresh process re-prepares: the committed positive output floor rejects
+	// another execution after the first transaction exhausted its input balance.
+	if err = serviceKeeper(t, ctx, path, nil).Tick(ctx); !recipes.BatchRejected(err) {
+		t.Fatal("exhausted redemption bypassed its output floor", err)
 	}
 	if after, e := client.NonceAt(ctx, caller, nil); e != nil || after != nonce {
-		t.Fatal("native restart repeated completed redemption", e)
+		t.Fatal("fresh runtime repeated completed redemption", e)
 	}
 }

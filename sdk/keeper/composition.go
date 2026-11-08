@@ -42,7 +42,7 @@ func ValidatePlanComposition(calldata []byte, providers []Provider, outputs [][]
 func exclusiveTargets(p Provider, outputs [][]provider.Output, i int) (map[string]common.Address, error) {
 	if exclusive, ok := p.(provider.ExclusiveOutputTargetProvider); ok {
 		if i >= len(outputs) || len(outputs[i]) == 0 {
-			return nil, errors.New("derived exclusive targets require persisted provider outputs")
+			return nil, errors.New("derived exclusive targets require prepared provider outputs")
 		}
 		all := map[string]common.Address{}
 		for j, output := range outputs[i] {
@@ -119,5 +119,66 @@ func addTargetClaims(targets map[string]common.Address, owner int, owners map[co
 		owners[target] = owner
 		claims[key] = target
 	}
+	return nil
+}
+
+// executionComposition inspects each candidate once. Rejected additions leave
+// the accepted prefix intact, including when receipt attribution conflicts.
+type executionComposition struct {
+	targets map[common.Address]bool
+	owners  map[common.Address]bool
+	opaque  bool
+}
+
+func newExecutionComposition() *executionComposition {
+	return &executionComposition{targets: map[common.Address]bool{}, owners: map[common.Address]bool{}}
+}
+
+func (c *executionComposition) add(plan Plan, strategy Strategy) error {
+	if err := validatePlanMember(plan, strategy); err != nil {
+		return err
+	}
+	if len(strategy.Providers) != len(plan.Outputs) {
+		return errors.New("provider output count differs from prepared plan")
+	}
+	owners, claims := map[common.Address]int{}, map[string]common.Address{}
+	for i, runtime := range strategy.Providers {
+		if len(plan.Outputs[i]) == 0 {
+			return errors.New("provider returned no execution outputs")
+		}
+		exclusive, err := exclusiveTargets(runtime, plan.Outputs, i)
+		if err != nil {
+			return err
+		}
+		if err = addTargetClaims(exclusive, i, owners, claims); err != nil {
+			return err
+		}
+	}
+	targets, targetErr := recipes.ManagedTargets(plan.Calldata)
+	if len(owners) != 0 || len(c.owners) != 0 {
+		if targetErr != nil {
+			return targetErr
+		}
+		if err := validateTargetClaims(targets, owners, claims); err != nil {
+			return err
+		}
+		for _, target := range targets {
+			if c.owners[target] {
+				return errors.New("managed call conflicts with an earlier exclusive receipt target")
+			}
+		}
+		for target := range owners {
+			if c.opaque || c.targets[target] {
+				return errors.New("exclusive receipt target conflicts with an earlier call")
+			}
+		}
+	}
+	for target := range owners {
+		c.owners[target] = true
+	}
+	for _, target := range targets {
+		c.targets[target] = true
+	}
+	c.opaque = c.opaque || targetErr != nil
 	return nil
 }

@@ -110,6 +110,28 @@ func TestAnvilDelegatedExecutors(t *testing.T) {
 	if readBalance(accountA) != 25 || readBalance(accountB) != 0 {
 		t.Fatal("simulation changed chain state")
 	}
+	prepared, err := DiscoverBatch(ctx, reader, []common.Address{a.Executor, b.Executor}, []common.Address{accountA, accountB}, caller, PreparationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaves := make([][]common.Hash, len(prepared))
+	for i, member := range prepared {
+		inspection, err := Inspect(member.Recipe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, slot := range inspection.Slots {
+			leaves[i] = append(leaves[i], slot.Leaves...)
+		}
+	}
+	if err = ValidatePreparedBatch(ctx, reader, prepared, []ExecutorCall{a, b}, leaves, []map[uint]string{nil, nil}, caller); err != nil {
+		t.Fatal(err)
+	}
+	err = ValidatePreparedBatch(ctx, reader, prepared, []ExecutorCall{a, b}, leaves, []map[uint]string{nil, {0: "0"}}, caller)
+	var stale *MemberError
+	if !errors.As(err, &stale) || stale.Index != 1 {
+		t.Fatalf("stale state-bound second member did not retain its identity: %v", err)
+	}
 	data, err := DelegatedMulticall([]ExecutorCall{a, b})
 	if err != nil {
 		t.Fatal(err)

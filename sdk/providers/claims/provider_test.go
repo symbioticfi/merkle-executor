@@ -4,15 +4,14 @@ import (
 	"bytes"
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"github.com/symbioticfi/merkle-executor/sdk/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
@@ -24,6 +23,9 @@ type chain struct {
 	synchronous bool
 	rejectClaim bool
 	failMaximum bool
+	malformed   string
+	failClaim   bool
+	readError   error
 }
 
 func (c *chain) CallContract(_ context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
@@ -31,12 +33,18 @@ func (c *chain) CallContract(_ context.Context, msg ethereum.CallMsg, block *big
 	if block == nil || block.Int64() != 12 {
 		c.t.Fatal("read is not pinned")
 	}
+	if c.readError != nil {
+		return nil, c.readError
+	}
 	if c.fail {
 		return nil, errors.New("RPC unavailable")
 	}
 	m, err := contractABI.MethodById(msg.Data[:4])
 	if err != nil {
 		return nil, err
+	}
+	if c.malformed == m.Name {
+		return []byte{1}, nil
 	}
 	args, err := m.Inputs.Unpack(msg.Data[4:])
 	if err != nil {
@@ -47,6 +55,9 @@ func (c *chain) CallContract(_ context.Context, msg ethereum.CallMsg, block *big
 	case "deposit", "mint", "withdraw", "redeem", "claimWithdrawal", "claimDepositRequest", "claimWithdrawRequest0", "claimWithdrawRequest", "claimInstantWithdrawRequest", "claimDepositEscrow", "claimRedeemEscrow", "claimCancelDepositRequest", "claimCancelRedeemRequest":
 		if msg.From != common.HexToAddress("0xa1") {
 			c.t.Fatal("native preflight sender differs from account")
+		}
+		if c.failClaim {
+			return nil, errors.New("RPC unavailable during claim preflight")
 		}
 		if c.rejectClaim {
 			return nil, errors.New("execution reverted: unavailable")
@@ -160,12 +171,7 @@ func TestSelectsEveryReadyNoonIDIncludingZero(t *testing.T) {
 		t.Fatalf("want IDs zero and three, got %d", len(out))
 	}
 	for i, id := range []int64{0, 3} {
-		var cfg config
-		inner, _, err := derived.Decode(policy, out[i], &cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if new(big.Int).SetBytes(inner.Actions["0:0"][4:36]).Int64() != id {
+		if new(big.Int).SetBytes(out[i].Actions["0:0"][4:36]).Int64() != id {
 			t.Fatal("wrong ready ID")
 		}
 		if !bytes.Equal(tree.Leaves[0].Data[4:], make([]byte, 32)) {
@@ -196,20 +202,26 @@ func TestEmptyIsIdleButFailedRPCIsAnError(t *testing.T) {
 		}
 	}
 }
-func TestPreparedClaimReconcilesWithoutReplacingRuntime(t *testing.T) {
+func TestPreparedClaimsKeepIndependentStatelessOutputs(t *testing.T) {
 	s, r, tree := fixture(t, "claimWithdrawal", big.NewInt(0))
+	originalRecipe := bytes.Clone(r.Steps[0])
+	originalPermission := bytes.Clone(tree.Leaves[0].Data)
 	p := &Provider{&chain{t: t, ready: true}}
 	out, err := p.PrepareRecipe(context.Background(), s, r, tree, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Execution = &provider.Execution{TxHash: common.HexToHash("0x1"), BlockNumber: big.NewInt(13), BlockHash: common.HexToHash("0x2"), Logs: []types.Log{}}
-	if progress, err := p.Advance(context.Background(), s, out[0], nil); err != nil || !progress.Done {
-		t.Fatalf("%+v %v", progress, err)
+	if len(out) != 2 {
+		t.Fatalf("want two standalone claims, got %d", len(out))
 	}
-	out[0].Actions["0:0"][0] ^= 1
-	if _, err := p.Advance(context.Background(), s, out[0], nil); err == nil {
-		t.Fatal("changed action accepted")
+	for _, execution := range out {
+		if execution.Task != nil || len(execution.Data) != 0 || len(execution.Inputs)+len(execution.Results)+len(execution.SkipSteps) != 0 || len(execution.Actions) != 1 {
+			t.Fatalf("claim retained settlement or unauthorized state: %+v", execution)
+		}
+	}
+	clear(out[0].Actions["0:0"])
+	if new(big.Int).SetBytes(out[1].Actions["0:0"][4:36]).Int64() != 3 || !bytes.Equal(tree.Leaves[0].Data, originalPermission) || !bytes.Equal(r.Steps[0], originalRecipe) {
+		t.Fatal("prepared claim aliases a sibling, permission or recipe")
 	}
 }
 func TestOnlySingleUnconditionalClaimMatches(t *testing.T) {
@@ -279,14 +291,59 @@ func TestBrokenNativeMaximumFailsPreparation(t *testing.T) {
 
 func TestOrdinarySynchronousOperationIsNotPreparedAsAClaim(t *testing.T) {
 	account := common.HexToAddress("0xa1")
-	s, r, tree := fixture(t, "withdraw", big.NewInt(0), account, account)
-	out, err := (&Provider{&chain{t: t, ready: true, synchronous: true}}).PrepareRecipe(context.Background(), s, r, tree, nil)
-	if err != nil || len(out) != 1 {
-		t.Fatalf("unmatched synchronous call: %v", err)
+	other := common.HexToAddress("0xbad")
+	for _, tc := range []struct {
+		method   string
+		receiver common.Address
+		owner    common.Address
+	}{
+		{"deposit", other, common.Address{}},
+		{"mint", other, common.Address{}},
+		{"withdraw", account, account},
+		{"withdraw", other, account},
+		{"withdraw", account, other},
+		{"redeem", other, account},
+		{"redeem", account, other},
+	} {
+		t.Run(tc.method+"/"+tc.receiver.Hex()+"/"+tc.owner.Hex(), func(t *testing.T) {
+			args := []any{new(big.Int), tc.receiver}
+			if tc.method == "withdraw" || tc.method == "redeem" {
+				args = append(args, tc.owner)
+			}
+			s, r, tree := fixture(t, tc.method, args...)
+			for _, synchronous := range []bool{true, false} {
+				out, err := (&Provider{&chain{t: t, ready: true, synchronous: synchronous}}).PrepareRecipe(t.Context(), s, r, tree, nil)
+				if !synchronous && (tc.receiver != account || tc.owner != (common.Address{}) && tc.owner != account) {
+					if err == nil || err.Error() != "claim recipient or controller is not the account" {
+						t.Fatalf("async claim accepted a foreign receiver/controller: %+v %v", out, err)
+					}
+					continue
+				}
+				if synchronous {
+					if err != nil || len(out) != 1 {
+						t.Fatalf("unmatched synchronous call: %v", err)
+					}
+					if len(out[0].Actions)+len(out[0].Inputs)+len(out[0].Results)+len(out[0].SkipSteps)+len(out[0].Data) != 0 || out[0].Task != nil {
+						t.Fatalf("synchronous call became a claim: %+v", out[0])
+					}
+				} else if err != nil || len(out) != 1 || len(out[0].Actions) != 1 {
+					t.Fatalf("authorized async claim was lost: %+v %v", out, err)
+				}
+			}
+		})
 	}
-	_, matched, err := derived.Decode(policy, out[0], &config{})
-	if err != nil || matched || len(out[0].Actions) != 0 {
-		t.Fatalf("synchronous call became a claim: %v", err)
+}
+
+func TestClaimReadPreservesContextCancellationCause(t *testing.T) {
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			s, r, tree := fixture(t, "claimWithdrawal", new(big.Int))
+			p := &Provider{&chain{t: t, readError: errors.Errorf("transport interrupted: %w", cause)}}
+			_, err := p.PrepareRecipe(t.Context(), s, r, tree, nil)
+			if !errors.Is(err, cause) {
+				t.Fatalf("claim read lost cancellation cause: %v", err)
+			}
+		})
 	}
 }
 
@@ -322,5 +379,46 @@ func TestPinnedIDDoesNotPreventOtherReadyIDsFromBeingScanned(t *testing.T) {
 	}
 	if new(big.Int).SetBytes(out[0].Actions["0:0"][4:36]).Int64() != 3 {
 		t.Fatal("changed fixed ID")
+	}
+}
+
+func TestFixedNativeAmountMustMatchMaximum(t *testing.T) {
+	account := common.HexToAddress("0xa1")
+	for _, amount := range []int64{0, 74, 75, 100} {
+		t.Run(big.NewInt(amount).String(), func(t *testing.T) {
+			s, r, tree := fixture(t, "redeem", big.NewInt(amount), account, account)
+			clear(tree.Leaves[0].DataMask)
+			old := tree.Leaves[0].Hash
+			tree.Leaves[0].Hash, _ = recipes.HashLeaf(tree.Leaves[0])
+			tree.Root = tree.Leaves[0].Hash
+			r.Steps[0] = bytes.ReplaceAll(r.Steps[0], old[:], tree.Root[:])
+			out, err := (&Provider{&chain{t: t, ready: true, maximum: big.NewInt(75)}}).PrepareRecipe(t.Context(), s, r, tree, nil)
+			if amount != 75 {
+				if !errors.Is(err, provider.ErrNotReady) || len(out) != 0 {
+					t.Fatalf("fixed amount changed to native maximum: %+v %v", out, err)
+				}
+				return
+			}
+			if err != nil || len(out) != 1 || !bytes.Equal(out[0].Actions["0:0"], tree.Leaves[0].Data) || out[0].Task != nil {
+				t.Fatalf("matching fixed amount was not preserved: %+v %v", out, err)
+			}
+		})
+	}
+}
+
+func TestMalformedReadsAndPreflightTransportFailuresAreErrors(t *testing.T) {
+	account := common.HexToAddress("0xa1")
+	for _, method := range []string{"getUserNextRequestId", "getWithdrawalRequest", "claimableRedeemRequest", "maxRedeem", "preflight"} {
+		t.Run(method, func(t *testing.T) {
+			s, r, tree := fixture(t, "claimWithdrawal", new(big.Int))
+			if strings.Contains(method, "Redeem") {
+				s, r, tree = fixture(t, "redeem", new(big.Int), account, account)
+			}
+			state := &chain{t: t, ready: true, malformed: method, failClaim: method == "preflight"}
+			out, err := (&Provider{state}).PrepareRecipe(t.Context(), s, r, tree, nil)
+			if err == nil || errors.Is(err, provider.ErrNotReady) || len(out) != 0 {
+				t.Fatalf("invalid claim evidence became idle or usable: %+v %v", out, err)
+			}
+		})
 	}
 }

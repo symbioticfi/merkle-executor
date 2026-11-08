@@ -1,7 +1,6 @@
 package keeper
 
 import (
-	"context"
 	"math/big"
 	"testing"
 
@@ -14,7 +13,7 @@ import (
 )
 
 type exclusiveProvider struct {
-	recoveryProvider
+	testProvider
 	claims map[string]common.Address
 }
 
@@ -42,38 +41,6 @@ func compositionCalldataWithGate(t *testing.T, gate int64, targets ...common.Add
 		runtime[i] = account.NewMerkleAccount().PackManage([]account.IMerkleAccountAction{{Target: target, Value: new(big.Int), Data: []byte{1, 2, 3, 4}}})[4:]
 	}
 	return executor.NewRecipeExecutor().PackExecute(nil, steps, nil, runtime)
-}
-
-func TestRecoveryRejectsAmbiguousCompositionBeforeRelease(t *testing.T) {
-	for _, phase := range []string{"prepared", "authorized"} {
-		t.Run(phase, func(t *testing.T) {
-			k, store, _, sender, _ := recoveryHarness(t)
-			target := common.HexToAddress("0x123")
-			first := &exclusiveProvider{claims: map[string]common.Address{"0:0": target}}
-			second := &exclusiveProvider{claims: map[string]common.Address{"1:0": target}}
-			k.Strategies[0].Providers = []Provider{first, second}
-			job := Job{ID: "owned", ConfigHash: k.Strategies[0].Config.Fingerprint(), Phase: phase,
-				Plan:     Plan{Calldata: compositionCalldata(t, target, target), Outputs: [][]provider.Output{{{}}, {{}}}},
-				Progress: [][]provider.Progress{{{Done: true}}, {{}}}}
-			if err := store.Save(key("cow"), job); err != nil {
-				t.Fatal(err)
-			}
-			sender.pending = job.ID
-			for range 2 { // completed claims must remain reserved after restart.
-				restarted := *k
-				if err := restarted.Tick(context.Background()); err == nil {
-					t.Fatal("ambiguous durable composition accepted")
-				}
-			}
-			if sender.pending != job.ID || len(sender.requests) != 0 || second.calls != 0 {
-				t.Fatal("ambiguous work submitted, released or advanced")
-			}
-			got := loadRecoveryJob(t, store, "cow")
-			if got.Phase != phase || !got.Progress[0][0].Done {
-				t.Fatal("durable job mutated")
-			}
-		})
-	}
 }
 
 func TestCompositionIncludesStaticAndOtherProviders(t *testing.T) {
@@ -131,34 +98,6 @@ func TestCompositionRejectsDirectAccountManageCall(t *testing.T) {
 	pr := &exclusiveProvider{claims: map[string]common.Address{"0:0": target}}
 	if err := ValidatePlanComposition(calldata, []Provider{pr}, emptyOutputs(1)); err == nil {
 		t.Fatal("direct account.manage can supply zero-gated provider evidence")
-	}
-}
-
-type compositionPlanner struct {
-	recoveryPlanner
-	plan Plan
-}
-
-func (p *compositionPlanner) PrepareExecution(ctx context.Context, strategies []Strategy) (ExecutionPlan, error) {
-	return prepareFixture(ctx, strategies, p.Prepare)
-}
-
-func (p *compositionPlanner) Prepare(context.Context, Strategy) (Plan, error) { return p.plan, nil }
-func TestFreshCompositionFailsBeforeSigning(t *testing.T) {
-	k, store, _, sender, _ := recoveryHarness(t)
-	target := common.HexToAddress("0x123")
-	pr := &exclusiveProvider{claims: map[string]common.Address{"0:0": target}}
-	k.Strategies[0].Providers = []Provider{pr}
-	k.Planner = &compositionPlanner{plan: Plan{Calldata: compositionCalldata(t, target, target), Outputs: [][]provider.Output{{{}}}}}
-	if err := k.Tick(context.Background()); err == nil {
-		t.Fatal("fresh ambiguous composition accepted")
-	}
-	if len(sender.requests) != 0 || sender.pending != "" || pr.calls != 0 {
-		t.Fatal("ambiguous composition signed or advanced")
-	}
-	var job Job
-	if found, err := store.Load(key("cow"), &job); err != nil || found {
-		t.Fatal("invalid composition persisted as executable work")
 	}
 }
 

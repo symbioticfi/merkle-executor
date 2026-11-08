@@ -1,28 +1,24 @@
-// Package keeper coordinates generic recipe execution and durable settlement.
+// Package keeper prepares recipes and owns their process-local execution lifecycle.
 package keeper
 
 import (
 	"context"
-	"slices"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"github.com/symbioticfi/merkle-executor/sdk/submission"
+	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 )
 
-type Store interface {
-	Load(string, any) (bool, error)
-	Save(string, any) error
-	Delete(string) error
-}
+// Sender owns at most one transaction and returns canonical execution evidence.
+// Submit errors may leave Busy true: ambiguous submission retains ownership.
 type Sender interface {
-	Send(context.Context, submission.Request) (submission.Result, error)
-	Acknowledge(context.Context, string) error
-	PendingID() string
+	Submit(context.Context, transaction.Request) error
+	Poll(context.Context) (*transaction.Result, error)
+	Busy() bool
 }
 type Planning interface {
 	PrepareExecution(context.Context, []Strategy) (ExecutionPlan, error)
@@ -30,18 +26,15 @@ type Planning interface {
 	VerifyConfirmedSnapshot(context.Context, provider.Snapshot) error
 }
 
-type Job struct {
-	ID         string                `json:"id"`
-	ConfigHash string                `json:"configHash"`
-	Phase      string                `json:"phase"`
-	Plan       Plan                  `json:"plan"`
-	Progress   [][]provider.Progress `json:"progress"`
-	Result     submission.Result     `json:"result"`
-	FinishedAt time.Time             `json:"finishedAt"`
+type settlement struct {
+	plan      Plan
+	execution *provider.Execution
+	done      [][]bool
 }
 
+// Keeper is driven explicitly by the host. It never writes state or starts workers.
+// Configuration is fixed for its lifetime; use one Keeper per sender.
 type Keeper struct {
-	Store            Store
 	Sender           Sender
 	Planner          Planning
 	Strategies       []Strategy
@@ -49,219 +42,279 @@ type Keeper struct {
 	OperationTimeout time.Duration
 	Log              logr.Logger
 	Observe          func(strategy, outcome string)
+
+	mu          sync.Mutex
+	active      *ExecutionPlan
+	settlements map[string]*settlement
+	next        map[string]time.Time
+	halted      map[string]bool
 }
 
-func key(name string) string { return "strategy." + name + ".v1" }
-
-// CheckRecovery rejects an orphan transaction or changed workflow configuration.
-// A deployment must retain configured strategies until their durable work ends.
-func (k *Keeper) CheckRecovery() error {
-	_, err := k.checkRecovery()
-	return err
-}
-
-// checkRecovery also collects active account owners while each journal is read.
-func (k *Keeper) checkRecovery() (map[string]common.Address, error) {
-	owners := make(map[string]common.Address)
-	names, err := k.inventory()
-	if err != nil {
-		return nil, err
-	}
-	configured := make(map[string]Strategy)
-	for _, s := range k.Strategies {
-		configured[s.Config.Name] = s
-	}
-	pending := ""
-	if k.Sender != nil {
-		pending = k.Sender.PendingID()
-	}
-	matched := pending == ""
-	batchOwners, batchID, err := k.checkExecutionRecovery(configured)
-	if err != nil {
-		return nil, err
-	}
-	for name, account := range batchOwners {
-		owners[name] = account
-	}
-	if pending != "" && batchID == pending {
-		matched = true
-	}
-	for _, name := range names {
-		var job Job
-		found, err := k.Store.Load(key(name), &job)
-		if err != nil {
-			return nil, err
-		}
-		if !found {
-			continue
-		}
-		if job.Phase == "authorized" {
-			owners[name] = job.Plan.Snapshot.Account
-		}
-		s, exists := configured[name]
-		if !exists {
-			if job.Phase != "settled" && job.Phase != "failed" {
-				return nil, errors.Errorf("active strategy %s removed from configuration", name)
-			}
-		} else if err := validateJob(job, s); err != nil {
-			return nil, err
-		}
-		if pending != "" && job.ID == pending {
-			if !exists {
-				return nil, errors.Errorf("transaction owner strategy %s removed from configuration", name)
-			}
-			matched = true
-		}
-	}
-	if !matched {
-		return nil, errors.New("unresolved transaction has no configured workflow; restore its strategy configuration")
-	}
-	return owners, nil
-}
-
-// Inventory precedes job creation so removing a configured strategy cannot hide
-// an external order after its authorization transaction has been acknowledged.
-func (k *Keeper) inventory() ([]string, error) {
-	var names []string
-	_, err := k.Store.Load("strategies.v1", &names)
-	if err != nil {
-		return nil, err
-	}
-	changed := false
-	for _, s := range k.Strategies {
-		if !slices.Contains(names, s.Config.Name) {
-			names = append(names, s.Config.Name)
-			changed = true
-		}
-	}
-	if changed {
-		slices.Sort(names)
-		if err := k.Store.Save("strategies.v1", names); err != nil {
-			return nil, err
-		}
-	}
-	return names, nil
-}
-
-func validateJob(job Job, s Strategy) error {
-	switch job.Phase {
-	case "authorized", "settled", "failed":
-	default:
-		return errors.New("invalid durable job phase")
-	}
-	if job.ID == "" {
-		return errors.New("durable job has no identity")
-	}
-	if job.Phase != "settled" && job.Phase != "failed" {
-		if job.ConfigHash != s.Config.Fingerprint() {
-			return errors.Errorf("strategy %s configuration changed while work is active", s.Config.Name)
-		}
-		if err := ValidatePlanComposition(job.Plan.Calldata, s.Providers, job.Plan.Outputs); err != nil {
-			return err
-		}
-		if len(job.Plan.Outputs) != len(s.Providers) || len(job.Progress) != len(s.Providers) {
-			return errors.New("durable provider state count mismatch")
-		}
-		for i, outputs := range job.Plan.Outputs {
-			if len(outputs) == 0 || len(outputs) != len(job.Progress[i]) {
-				return errors.New("durable provider execution count mismatch")
-			}
-		}
-	}
-	return nil
+// Pending reports process-owned transaction or external settlement work.
+func (k *Keeper) Pending() bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.active != nil || len(k.settlements) != 0
 }
 
 func (k *Keeper) Tick(ctx context.Context) error {
-	owners, err := k.checkRecovery()
-	if err != nil {
-		return k.globalFailure(err)
+	if !k.mu.TryLock() {
+		return errors.New("keeper iteration already running")
 	}
-	var execution ExecutionJob
-	found, err := k.Store.Load(ExecutionKey, &execution)
-	if err != nil {
-		return k.globalFailure(err)
+	defer k.mu.Unlock()
+	if k.Planner == nil || k.OperationTimeout <= 0 {
+		return errors.New("planner and positive operation timeout required")
 	}
-	return k.tickExecution(ctx, owners, execution, found)
+	names := make(map[string]bool, len(k.Strategies))
+	for _, strategy := range k.Strategies {
+		name := strategy.Config.Name
+		if name == "" || names[name] {
+			return errors.New("keeper strategy names must be nonempty and unique")
+		}
+		names[name] = true
+	}
+	if k.Mode == "simulate" {
+		operation, cancel := context.WithTimeout(ctx, k.OperationTimeout)
+		defer cancel()
+		plan, err := k.Planner.PrepareExecution(operation, k.Strategies)
+		var failures []error
+		for _, s := range k.Strategies {
+			memberErr := err
+			if memberErr == nil {
+				memberErr = plan.Failures[s.Config.Name]
+				if memberErr != nil {
+					failures = append(failures, memberErr)
+				}
+			}
+			k.observe(s.Config.Name, memberErr)
+		}
+		if errors.Is(err, provider.ErrNotReady) {
+			return nil
+		}
+		if err == nil {
+			k.Log.Info("execution simulation succeeded", "executors", len(plan.Members))
+		}
+		return errors.Join(append(failures, err)...)
+	}
+	if k.Mode != "send" || k.Sender == nil {
+		return errors.New("send mode requires a sender")
+	}
+	if k.next == nil {
+		k.next = map[string]time.Time{}
+		k.halted = map[string]bool{}
+		k.settlements = map[string]*settlement{}
+	}
+	return k.drain(ctx)
 }
 
-// advanceStrategy only reconciles durable work; new transactions use ExecutionJob.
-func (k *Keeper) advanceStrategy(ctx context.Context, s Strategy) error {
-	var job Job
-	found, err := k.Store.Load(key(s.Config.Name), &job)
-	if err != nil || !found {
-		return err
-	}
-	if job.Phase == "settled" || job.Phase == "failed" {
-		if k.Sender.PendingID() == job.ID {
-			if err := k.Sender.Acknowledge(ctx, job.ID); err != nil {
-				return err
-			}
-		}
-		if job.Phase == "failed" {
-			return errors.New("strategy halted on a confirmed reverted transaction; inspect durable job")
-		}
-		return nil
-	}
-
-	if job.Phase == "authorized" {
-		if k.Sender.PendingID() == job.ID {
-			if err := k.Sender.Acknowledge(ctx, job.ID); err != nil {
-				return err
-			}
-		}
-		original := job.Plan.Snapshot
-		original.Execution = job.Result.Execution.Clone()
-		if original.Execution != nil && original.Execution.TxHash != job.Result.Hash {
-			return errors.New("durable execution does not match the recipe transaction")
-		}
-		snapshot, err := k.Planner.ConfirmedSnapshot(ctx, original)
-		if err != nil {
-			return err
-		}
-		done := true
-		for i, p := range s.Providers {
-			for j, output := range job.Plan.Outputs[i] {
-				if job.Progress[i][j].Done {
-					continue
-				}
-				progress, err := p.Advance(ctx, snapshot, output, job.Progress[i][j].State)
-				if err != nil {
-					return errors.Errorf("reconcile provider %d: %w", i, err)
-				}
-				if err := k.Planner.VerifyConfirmedSnapshot(ctx, snapshot); err != nil {
-					return err
-				}
-				job.Progress[i][j] = progress
-				if err := k.Store.Save(key(s.Config.Name), job); err != nil {
-					return err
-				}
-				done = done && progress.Done
-			}
-		}
-		if done {
-			job.Phase = "settled"
-			job.FinishedAt = time.Now().UTC()
-			if err := k.Store.Save(key(s.Config.Name), job); err != nil {
-				return err
-			}
-			var outcomes []string
-			for _, group := range job.Progress {
-				for _, p := range group {
-					outcomes = append(outcomes, p.Outcome)
-				}
-			}
-			k.Log.Info("strategy cycle finished", "strategy", s.Config.Name, "transaction", job.Result.Hash.Hex(), "outcomes", outcomes)
-		}
+// Wakeup exposes an optional sender progress hint. Hosts still schedule Tick;
+// senders without background work return nil and rely on the host's polling.
+func (k *Keeper) Wakeup() <-chan struct{} {
+	if sender, ok := k.Sender.(interface{ Wakeup() <-chan struct{} }); ok {
+		return sender.Wakeup()
 	}
 	return nil
 }
 
-// Store and recovery errors may carry raw persisted payloads or filesystem data.
-// Keep one bounded global observation; strategy failures are observed separately.
-func (k *Keeper) globalFailure(err error) error {
-	k.Log.Error(errors.New("global recovery or state validation failed"), "keeper iteration failed")
-	if k.Observe != nil {
-		k.Observe("_global", "error")
+// drain submits each executor at most once and advances each settlement once.
+// Confirmed effects may make idle executors ready; a missing receipt yields.
+func (k *Keeper) drain(ctx context.Context) error {
+	var failures []error
+	visited := map[string]bool{}
+	advanced := map[*settlement]bool{}
+	for {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(failures, err)...)
+		}
+		if k.active != nil {
+			for _, member := range k.active.Members {
+				visited[member.Name] = true
+			}
+			operation, cancel := context.WithTimeout(ctx, k.OperationTimeout)
+			result, err := k.Sender.Poll(operation)
+			cancel()
+			if err != nil {
+				failures = append(failures, err)
+			} else if result != nil {
+				if err = k.complete(result); err != nil {
+					failures = append(failures, err)
+				}
+			}
+		} else if k.Sender.Busy() {
+			return errors.Join(append(failures, errors.New("sender has work without a keeper owner"))...)
+		}
+		reserved := map[common.Address]bool{}
+		for _, strategy := range k.Strategies {
+			if err := ctx.Err(); err != nil {
+				return errors.Join(append(failures, err)...)
+			}
+			work := k.settlements[strategy.Config.Name]
+			if work == nil {
+				continue
+			}
+			visited[strategy.Config.Name] = true
+			if !advanced[work] {
+				advanced[work] = true
+				err := k.advance(ctx, work)
+				if err == nil {
+					delete(k.settlements, strategy.Config.Name)
+					k.next[strategy.Config.Name] = time.Now().Add(strategy.Config.Interval)
+					k.observe(strategy.Config.Name, nil)
+				} else if !errors.Is(err, provider.ErrNotReady) {
+					failures = append(failures, err)
+					k.observe(strategy.Config.Name, err)
+				}
+			}
+			if k.settlements[strategy.Config.Name] != nil {
+				reserved[work.plan.Snapshot.Account] = true
+			}
+		}
+		// Earlier external tasks progress even while another account owns the signer.
+		if k.active != nil {
+			return errors.Join(failures...)
+		}
+		var candidates []Strategy
+		for _, strategy := range k.Strategies {
+			if !visited[strategy.Config.Name] && !k.halted[strategy.Config.Name] && !reserved[common.HexToAddress(strategy.Config.Account)] && !time.Now().Before(k.next[strategy.Config.Name]) {
+				candidates = append(candidates, strategy)
+			}
+		}
+		if len(candidates) == 0 {
+			return errors.Join(failures...)
+		}
+		plan, err := k.prepareAndSubmit(ctx, candidates)
+		if plan == nil {
+			for _, strategy := range candidates {
+				k.observe(strategy.Config.Name, err)
+			}
+			if !errors.Is(err, provider.ErrNotReady) {
+				failures = append(failures, err)
+			}
+			return errors.Join(failures...)
+		}
+		for _, strategy := range candidates {
+			if failure := plan.Failures[strategy.Config.Name]; failure != nil {
+				visited[strategy.Config.Name] = true
+				k.observe(strategy.Config.Name, failure)
+				failures = append(failures, failure)
+			}
+		}
+		for _, member := range plan.Members {
+			visited[member.Name] = true
+		}
+		if err != nil {
+			return errors.Join(append(failures, err)...)
+		}
 	}
-	return err
+}
+
+// Keep preparation and submission under one deadline for the selected bytes.
+func (k *Keeper) prepareAndSubmit(ctx context.Context, candidates []Strategy) (*ExecutionPlan, error) {
+	operation, cancel := context.WithTimeout(ctx, k.OperationTimeout)
+	defer cancel()
+	if err := operation.Err(); err != nil {
+		return nil, err
+	}
+	plan, err := k.Planner.PrepareExecution(operation, candidates)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateExecutionComposition(plan, candidates); err != nil {
+		return &plan, err
+	}
+	to, data, err := plan.Transaction()
+	if err != nil {
+		return &plan, err
+	}
+	// Capture ownership before submission: a timeout can follow a successful send.
+	frozen := freezeExecution(plan)
+	k.active = &frozen
+	err = k.Sender.Submit(operation, transaction.Request{To: to, Data: data})
+	if err != nil && !k.Sender.Busy() {
+		k.active = nil
+	}
+	return &plan, err
+}
+
+func (k *Keeper) complete(result *transaction.Result) error {
+	if result.Hash == (common.Hash{}) || result.Execution == nil || result.Execution.TxHash != result.Hash {
+		return errors.New("sender returned invalid execution identity")
+	}
+	if err := result.Execution.Validate(); err != nil {
+		return err
+	}
+	for _, member := range k.active.Members {
+		if result.Reverted {
+			k.halted[member.Name] = true
+			k.observe(member.Name, errors.New("execution reverted"))
+			continue
+		}
+		work := &settlement{plan: member.Plan, execution: result.Execution.Clone(), done: make([][]bool, len(member.Plan.Outputs))}
+		for i, group := range member.Plan.Outputs {
+			work.done[i] = make([]bool, len(group))
+		}
+		k.settlements[member.Name] = work
+	}
+	k.active = nil
+	if result.Reverted {
+		return errors.New("executor transaction reverted; selected executors halted for this process")
+	}
+	return nil
+}
+
+func (k *Keeper) advance(ctx context.Context, work *settlement) error {
+	hasTask := false
+	for _, group := range work.plan.Outputs {
+		for _, out := range group {
+			hasTask = hasTask || out.Task != nil
+		}
+	}
+	if !hasTask {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, k.OperationTimeout)
+	defer cancel()
+	original := work.plan.Snapshot
+	original.Execution = work.execution.Clone()
+	snapshot, err := k.Planner.ConfirmedSnapshot(ctx, original)
+	if err != nil {
+		return err
+	}
+	done := true
+	for i, group := range work.plan.Outputs {
+		for j, out := range group {
+			if out.Task == nil || work.done[i][j] {
+				continue
+			}
+			progress, err := out.Task.Advance(ctx, cloneSnapshot(snapshot))
+			if err != nil {
+				return err
+			}
+			if err = k.Planner.VerifyConfirmedSnapshot(ctx, snapshot); err != nil {
+				return err
+			}
+			work.done[i][j] = progress.Done
+			if progress.Done {
+				k.Log.Info("external task finished", "executor", snapshot.Executor.Hex(), "outcome", progress.Outcome, "reference", progress.Reference)
+			}
+			done = done && progress.Done
+		}
+	}
+	if !done {
+		return provider.ErrNotReady
+	}
+	return nil
+}
+
+func (k *Keeper) observe(name string, err error) {
+	outcome := "ok"
+	if errors.Is(err, provider.ErrNotReady) {
+		outcome = "idle"
+	} else if err != nil {
+		outcome = "error"
+		k.Log.Error(err, "strategy iteration failed", "strategy", name)
+	}
+	if k.Observe != nil {
+		k.Observe(name, outcome)
+	}
 }

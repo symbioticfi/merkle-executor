@@ -4,42 +4,29 @@ package claims
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	ethereum "github.com/ethereum/go-ethereum"
 	"math/big"
 	"strings"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
-	interfaces "github.com/symbioticfi/merkle-executor/sdk/abi"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/nativeclaims"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"github.com/symbioticfi/merkle-executor/sdk/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-const policy = "native-claim/v1"
-
-var contractABI = func() abi.ABI {
-	a, err := abi.JSON(bytes.NewReader(interfaces.NativeClaims))
-	if err != nil {
-		panic(err)
-	}
-	return a
-}()
+var contractABI = nativeclaims.NewNativeClaims().GetABI()
 
 type Provider struct{ chain provider.Reader }
-type config struct {
+type candidate struct {
 	Key    string
 	Target common.Address
 	Data   hexutil.Bytes
 	Mask   hexutil.Bytes
-}
-type candidate struct {
-	config
 	method string
 	args   []any
 }
@@ -88,7 +75,7 @@ func match(r recipes.Recipe, t *recipes.Tree) (candidate, bool, error) {
 	if err != nil {
 		return candidate{}, false, err
 	}
-	return candidate{config{a.Key, a.Leaf.Target, a.Leaf.Data, a.Leaf.DataMask}, name, args}, true, nil
+	return candidate{a.Key, a.Leaf.Target, a.Leaf.Data, a.Leaf.DataMask, name, args}, true, nil
 }
 func (*Provider) RecipeRequirements(_ provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (keeper.RecipeRequirements, error) {
 	c, ok, err := match(r, t)
@@ -103,7 +90,7 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 		return nil, err
 	}
 	if !ok {
-		return derived.Empty(policy)
+		return []provider.Output{{}}, nil
 	}
 	if err = protocolio.Snapshot(s); err != nil {
 		return nil, err
@@ -111,7 +98,7 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 	ids, ready, err := p.ready(ctx, s, c)
 	if err != nil {
 		if (c.method == "deposit" || c.method == "mint" || c.method == "withdraw" || c.method == "redeem") && isRevert(err) {
-			return derived.Empty(policy)
+			return []provider.Output{{}}, nil
 		}
 		return nil, err
 	}
@@ -149,11 +136,7 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 			continue
 		}
 
-		out, err := derived.Encode(policy, c.config, provider.Output{Actions: map[string]hexutil.Bytes{c.Key: data}}, true)
-		if err != nil {
-			return nil, err
-		}
-		outputs = append(outputs, out...)
+		outputs = append(outputs, provider.Output{Actions: map[string]hexutil.Bytes{c.Key: data}})
 	}
 	if len(outputs) == 0 {
 		return nil, errors.Errorf("%w: native claims are not callable", provider.ErrNotReady)
@@ -182,6 +165,11 @@ func (p *Provider) read(ctx context.Context, s provider.Snapshot, target common.
 	}
 	raw, err := p.chain.CallContract(ctx, ethereum.CallMsg{To: &target, Data: data}, s.BlockNumber)
 	if err != nil {
+		for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+			if errors.Is(err, cause) {
+				return nil, errors.Errorf("protocol chain read failed: %w", cause)
+			}
+		}
 		if isRevert(err) {
 			return nil, errors.New("execution reverted")
 		}
@@ -206,18 +194,21 @@ func (p *Provider) number(ctx context.Context, s provider.Snapshot, target commo
 func (p *Provider) ready(ctx context.Context, s provider.Snapshot, c candidate) ([]*big.Int, bool, error) {
 	switch c.method {
 	case "deposit", "mint", "withdraw", "redeem":
-		for _, arg := range c.args[1:] {
-			if arg.(common.Address) != s.Account {
-				return nil, false, errors.New("claim recipient or controller is not the account")
-			}
-		}
 		entitlement := "claimableDepositRequest"
 		if c.method == "withdraw" || c.method == "redeem" {
 			entitlement = "claimableRedeemRequest"
 		}
 		amount, err := p.number(ctx, s, c.Target, entitlement, new(big.Int), s.Account)
-		if err != nil || amount.Sign() == 0 {
+		if err != nil {
 			return nil, false, err
+		}
+		for _, arg := range c.args[1:] {
+			if arg.(common.Address) != s.Account {
+				return nil, false, errors.New("claim recipient or controller is not the account")
+			}
+		}
+		if amount.Sign() == 0 {
+			return nil, false, nil
 		}
 		getter := map[string]string{"deposit": "maxDeposit", "mint": "maxMint", "withdraw": "maxWithdraw", "redeem": "maxRedeem"}[c.method]
 		amount, err = p.number(ctx, s, c.Target, getter, s.Account)
@@ -371,27 +362,4 @@ func (p *Provider) paretoQueue(ctx context.Context, s provider.Snapshot, c candi
 		ids = append(ids, new(big.Int).Set(id))
 	}
 	return ids, len(ids) > 0, nil
-}
-func (*Provider) Advance(_ context.Context, s provider.Snapshot, out provider.Output, _ json.RawMessage) (provider.Progress, error) {
-	var c config
-	inner, matched, err := derived.Decode(policy, out, &c)
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	if !matched {
-		return provider.Progress{Done: true}, nil
-	}
-	if err = s.Execution.Validate(); err != nil {
-		return provider.Progress{}, err
-	}
-	data, ok := inner.Actions[c.Key]
-	if !ok || len(inner.Actions) != 1 || len(data) != len(c.Data) || len(c.Mask) != len(data) || len(inner.Inputs)+len(inner.Results)+len(inner.SkipSteps) != 0 {
-		return provider.Progress{}, errors.New("invalid persisted native claim")
-	}
-	for i := range data {
-		if (data[i]^c.Data[i]) & ^c.Mask[i] != 0 {
-			return provider.Progress{}, errors.New("persisted claim changed pinned data")
-		}
-	}
-	return provider.Progress{Done: true}, nil
 }

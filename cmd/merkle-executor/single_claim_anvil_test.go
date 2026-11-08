@@ -134,6 +134,57 @@ func TestAnvilSingleThreeFClaimBatchesReadyRequests(t *testing.T) {
 		t.Fatal("failed batch changed account balance")
 	}
 	call(requests[2], ra, "configure", fixture.Account, token, big.NewInt(3), true)
+	t.Run("gas limited inventory progresses in prefixes", func(t *testing.T) {
+		var checkpoint string
+		if err := client.Client().CallContext(ctx, &checkpoint, "evm_snapshot"); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			var restored bool
+			if err := client.Client().CallContext(ctx, &restored, "evm_revert", checkpoint); err != nil || !restored {
+				t.Fatal("restore gas fixture", err)
+			}
+		}()
+		calls, err := recipes.Executions(plan.Calldata)
+		if err != nil || len(calls) != 2 {
+			t.Fatal("fixture must contain two independently eligible claims", err)
+		}
+		one, err := client.EstimateGas(ctx, ethereum.CallMsg{From: owner, To: &target, Data: calls[0]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		two, err := client.EstimateGas(ctx, ethereum.CallMsg{From: owner, To: &target, Data: plan.Calldata})
+		if err != nil || two <= one {
+			t.Fatal("fixture claims have no distinct gas boundary", err)
+		}
+		budget := one + (two-one)/2
+		if err = client.Client().CallContext(ctx, nil, "evm_setBlockGasLimit", hexutil.Uint64(budget)); err != nil {
+			t.Fatal(err)
+		}
+		if err = client.Client().CallContext(ctx, nil, "evm_mine"); err != nil {
+			t.Fatal(err)
+		}
+		limited, err := planner.Prepare(ctx, strategy)
+		if err != nil {
+			t.Fatal("oversized inventory blocked its executable prefix", err)
+		}
+		if len(limited.Outputs[0]) != 1 {
+			t.Fatalf("selected %d claims under a one-claim budget", len(limited.Outputs[0]))
+		}
+		serviceSeedTransaction(t, ctx, client, owner, &target, limited.Calldata, budget)
+		remaining, err := planner.Prepare(ctx, strategy)
+		if err != nil || len(remaining.Outputs[0]) != 1 {
+			t.Fatal("unselected request did not remain eligible", err)
+		}
+		if bytes.Equal(remaining.Calldata, limited.Calldata) {
+			t.Fatal("claimed request was selected again")
+		}
+		serviceSeedTransaction(t, ctx, client, owner, &target, remaining.Calldata, budget)
+		raw, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: tokenbinding.NewERC20().PackBalanceOf(fixture.Account)}, nil)
+		if err != nil || new(big.Int).SetBytes(raw).Cmp(big.NewInt(4)) != 0 {
+			t.Fatal("split claims lost or repeated payout", err)
+		}
+	})
 	receipt := serviceSeedTransaction(t, ctx, client, owner, &target, plan.Calldata)
 	tb := tokenbinding.NewERC20()
 	balanceData := tb.PackBalanceOf(fixture.Account)
@@ -160,14 +211,12 @@ func TestAnvilSingleThreeFClaimBatchesReadyRequests(t *testing.T) {
 		t.Fatal("failed batch changed cash")
 	}
 	header, err := client.HeaderByNumber(ctx, receipt.BlockNumber)
-	if err != nil {
+	if err != nil || header.Hash() != receipt.BlockHash {
 		t.Fatal(err)
 	}
-	snapshot := plan.Snapshot
-	snapshot.Execution = &provider.Execution{TxHash: receipt.TxHash, BlockNumber: receipt.BlockNumber, BlockHash: header.Hash(), Logs: nil}
 	for _, output := range plan.Outputs[0] {
-		if _, err = claimProvider.Advance(ctx, snapshot, output, nil); err != nil {
-			t.Fatal(err)
+		if output.Task != nil {
+			t.Fatal("native claim created external settlement work")
 		}
 	}
 	if _, err = planner.Prepare(ctx, strategy); err == nil {

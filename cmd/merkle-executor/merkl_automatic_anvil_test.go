@@ -161,7 +161,7 @@ func TestAnvilAutomaticMerklClaimFeedsRecipeBalance(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := response.Plan.Members[0].Plan
-	if len(plan.Outputs) != 5 || plan.Results[1] != "100" || plan.Results[2] != "17" || plan.Outputs[1][0].Inputs[0] != "100" || len(plan.Outputs[1][0].Actions) != 1 || lenses.Load() != 1 || rewardsHTTP.Load() != 1 {
+	if len(plan.Outputs) != 6 || plan.Results[1] != "100" || plan.Results[2] != "17" || plan.Outputs[2][0].Inputs[0] != "100" || len(plan.Outputs[2][0].Actions) != 1 || lenses.Load() != 1 || rewardsHTTP.Load() != 1 {
 		t.Fatalf("incorrect staged preparation: results=%v lens=%d rewardHTTP=%d", plan.Results, lenses.Load(), rewardsHTTP.Load())
 	}
 	balance, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: tokenABI.PackBalanceOf(account)}, nil)

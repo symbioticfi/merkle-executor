@@ -197,7 +197,7 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 				Skipped bool `json:"skipped"`
 			}
 			if json.Unmarshal(out.Data, &data) != nil || !data.Skipped {
-				t.Fatal("skip state not persisted")
+				t.Fatal("skip output missing")
 			}
 			if (test == "no-chain" || test == "no-token") && rpcCalls != 0 {
 				t.Fatal("empty rewards performed unnecessary claim reads")

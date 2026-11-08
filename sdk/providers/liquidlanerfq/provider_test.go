@@ -347,12 +347,10 @@ func TestPrepareRejectsUntrustedQuoteAuthority(t *testing.T) {
 	}
 }
 func TestAdvanceRequiresExactAuthorizationAndImmutableOutput(t *testing.T) {
-	for _, mode := range []string{"missing sign", "sign digest", "sign data", "action", "digest", "request", "chain", "signature", "inputs", "minimum", "reorg", "unapproved", "balance", "allowance"} {
+	for _, mode := range []string{"missing sign", "sign digest", "sign data", "reorg", "unapproved", "balance", "allowance"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
-			var d prepared
-			_ = json.Unmarshal(out.Data, &d)
 			switch mode {
 			case "missing sign":
 				s.Execution.Logs = nil
@@ -360,20 +358,6 @@ func TestAdvanceRequiresExactAuthorizationAndImmutableOutput(t *testing.T) {
 				s.Execution.Logs[0].Topics[1] = common.Hash{}
 			case "sign data":
 				s.Execution.Logs[0].Data = []byte{1}
-			case "action":
-				out.Actions["0:0"][10] ^= 1
-			case "digest":
-				d.Digest = common.Hash{}
-			case "request":
-				d.Request.AmountIn = big.NewInt(9)
-			case "chain":
-				d.ChainID = "2"
-			case "signature":
-				d.Signature = "0x"
-			case "inputs":
-				out.Inputs = map[uint]string{1: "9"}
-			case "minimum":
-				h.p.minimum = big.NewInt(901)
 			case "reorg":
 				h.c.reorg[11] = true
 			case "unapproved":
@@ -383,8 +367,7 @@ func TestAdvanceRequiresExactAuthorizationAndImmutableOutput(t *testing.T) {
 			case "allowance":
 				h.c.allowance = 999
 			}
-			out.Data, _ = json.Marshal(d)
-			_, err := h.p.Advance(t.Context(), s, out, nil)
+			_, err := out.Task.Advance(t.Context(), s)
 			if err == nil || h.posts != 0 || h.gets != 0 {
 				t.Fatalf("invalid authorization reached HTTP: %v gets%d posts%d", err, h.gets, h.posts)
 			}
@@ -395,16 +378,16 @@ func TestUncertainPublicationReconcilesExactIdentity(t *testing.T) {
 	h := newHarness(t)
 	out, s := h.authorized(t)
 	h.httpMode = "lost"
-	p, err := h.p.Advance(t.Context(), s, out, nil)
+	p, err := out.Task.Advance(t.Context(), s)
 	if err != nil || p.Done || p.Outcome != "publication-uncertain" || h.posts != 1 {
 		t.Fatal(p, err)
 	}
-	p, err = h.p.Advance(t.Context(), s, out, p.State)
+	p, err = out.Task.Advance(t.Context(), s)
 	if err != nil || h.posts != 2 || h.quotes != 1 || !bytes.Equal(h.requests[0], h.requests[1]) {
 		t.Fatal("uncertain retry changed body/quote", err)
 	}
 	h.pages = []wire.RfqOrdersResponse{{Orders: []wire.RfqOrder{{Type: "Priority", OrderID: orderID, OrderStatus: "filled", QuoteID: quoteID, Swapper: s.Account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: addr(0x33).Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: addr(0x44).Hex(), Amount: "950", Recipient: s.Account.Hex()}}}}, Cursor: json.RawMessage("null")}}
-	p, err = h.p.Advance(t.Context(), s, out, p.State)
+	p, err = out.Task.Advance(t.Context(), s)
 	if err != nil || p.Done || p.Reference != orderID || h.posts != 2 {
 		t.Fatal("API status became settlement", p, err)
 	}
@@ -420,10 +403,7 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
 			page := wire.RfqOrdersResponse{Orders: []wire.RfqOrder{}, Cursor: json.RawMessage("null")}
-			st := progressState{Version: 1, Digest: common.Hash{}}
-			var d prepared
-			_ = json.Unmarshal(out.Data, &d)
-			st.Digest = d.Digest
+			task := out.Task.(*settlementTask)
 			switch mode {
 			case "missing orders":
 				page.Orders = nil
@@ -434,7 +414,7 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 			case "repeated cursor":
 				page.Cursor = json.RawMessage(`"oc_a"`)
 			case "known missing":
-				st.OrderID = orderID
+				task.state.OrderID = orderID
 			default:
 				o := wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: "open", QuoteID: quoteID, Swapper: s.Account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: addr(0x33).Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: addr(0x44).Hex(), Amount: "900", Recipient: s.Account.Hex()}}}
 				if mode == "wrong owner" {
@@ -449,8 +429,7 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 				}
 			}
 			h.pages = []wire.RfqOrdersResponse{page}
-			raw, _ := json.Marshal(st)
-			p, err := h.p.Advance(t.Context(), s, out, raw)
+			p, err := out.Task.Advance(t.Context(), s)
 			if err == nil || p.Done || h.posts != 0 {
 				t.Fatalf("incomplete lookup published %s: %v", mode, err)
 			}
@@ -510,7 +489,7 @@ func TestCanonicalEventsControlSettlement(t *testing.T) {
 				head, _ := h.c.HeaderByNumber(t.Context(), s.BlockNumber)
 				s.BlockHash = head.Hash()
 			}
-			p, err := h.p.Advance(t.Context(), s, out, nil)
+			p, err := out.Task.Advance(t.Context(), s)
 			done := mode == "fill" || mode == "cancel" || mode == "fill then cancel" || mode == "revoked after fill" || mode == "expired" || mode == "signature error after fill" || mode == "balance error after fill" || mode == "allowance error after fill"
 			if done {
 				want := "settled"
@@ -544,7 +523,7 @@ func TestOrderReceiptDoesNotScanHistory(t *testing.T) {
 		h.addEvent(t, other, 10, false)
 	}
 	h.addEvent(t, d, 12, false)
-	progress, err := h.p.Advance(t.Context(), s, out, nil)
+	progress, err := out.Task.Advance(t.Context(), s)
 	if err != nil || !progress.Done || progress.Outcome != "settled" || h.c.logReads != 0 || h.c.receiptReads != 1 || h.gets != 1 || h.posts != 0 {
 		t.Fatal("order receipt depends on unrelated chain history", progress, err)
 	}
@@ -599,7 +578,7 @@ func TestPublicationAcceptanceAndCompletePagination(t *testing.T) {
 					h.pages[1].Orders = []wire.RfqOrder{{Type: "Priority", OrderID: orderID, OrderStatus: "expired", QuoteID: quoteID, Swapper: s.Account.Hex(), Nonce: "007", Input: wire.RfqAmount{Token: addr(0x33).Hex(), Amount: "01000"}, Outputs: []wire.RfqOutput{{Token: addr(0x44).Hex(), Amount: "950", Recipient: s.Account.Hex()}}}}
 				}
 			}
-			p, err := h.p.Advance(t.Context(), s, out, nil)
+			p, err := out.Task.Advance(t.Context(), s)
 			if err != nil || p.Done {
 				t.Fatal(p, err)
 			}
@@ -620,8 +599,8 @@ func TestPublicationAcceptanceAndCompletePagination(t *testing.T) {
 		})
 	}
 }
-func TestEventReceiptAndCursorCorruptionFailClosed(t *testing.T) {
-	for _, mode := range []string{"receipt member", "receipt block", "receipt tx index", "receipt duplicate", "receipt topic", "event orphan", "cursor version", "cursor digest"} {
+func TestEventReceiptCorruptionFailsClosed(t *testing.T) {
+	for _, mode := range []string{"receipt member", "receipt block", "receipt tx index", "receipt duplicate", "receipt topic", "event orphan"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
@@ -629,8 +608,6 @@ func TestEventReceiptAndCursorCorruptionFailClosed(t *testing.T) {
 			_ = json.Unmarshal(out.Data, &d)
 			h.addEvent(t, d, 12, false)
 			r := h.c.receipts[h.c.logs[0].TxHash]
-			var saved json.RawMessage
-			st := progressState{Version: 1, Digest: d.Digest}
 			switch mode {
 			case "receipt member":
 				r.Logs = nil
@@ -646,15 +623,8 @@ func TestEventReceiptAndCursorCorruptionFailClosed(t *testing.T) {
 				r.Logs[0] = &l
 			case "event orphan":
 				r.Logs[0].BlockHash = common.HexToHash("0xbad")
-			case "cursor version":
-				st.Version = 2
-			case "cursor digest":
-				st.Digest = common.Hash{}
 			}
-			if mode[:6] == "cursor" {
-				saved, _ = json.Marshal(st)
-			}
-			p, err := h.p.Advance(t.Context(), s, out, saved)
+			p, err := out.Task.Advance(t.Context(), s)
 			if err == nil || p.Done || h.posts != 0 {
 				t.Fatal("corrupt evidence accepted", p, err)
 			}

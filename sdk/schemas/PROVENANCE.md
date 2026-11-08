@@ -72,12 +72,15 @@ wire subset. [LIQUID_LANE_RFQ.md](LIQUID_LANE_RFQ.md) records exact contract/bac
 revisions, ABI source hash, account interface, EIP712 layout, cursor semantics and
 unsupported boundaries.
 
-Native issuer contracts are test fixtures only. Source-pinned Noon artifacts and
-compiler settings live under `cmd/merkle-executor/testdata/issuers/noon`, outside
-production ABI generation. [Native validation](../../docs/NATIVE-ISSUER-TESTING.md)
-explains the evidence boundary. Native issuer actions retain their committed accounting recipes. The 3F
-standalone claim provider only discovers ready request addresses; it does not
-calculate or enforce payouts.
+The native issuer claim subset, source revisions and deliberate limitations are
+recorded in [NATIVE_CLAIMS.md](NATIVE_CLAIMS.md). Its generated binding supports
+the isolated stateless claim provider; ordinary native actions retain their
+committed accounting recipes. The 3F standalone claim provider only discovers
+ready request addresses; it does not calculate or enforce payouts.
+Source-pinned Noon artifacts and compiler settings live under
+`cmd/merkle-executor/testdata/issuers/noon`, outside production ABI generation.
+[Native validation](../../docs/NATIVE-ISSUER-TESTING.md) explains the local fixture
+and deployment evidence boundary.
 
 
 - `abi/RecipeCapability.json`, `abi/ThreeFRequestsFactory.json` and

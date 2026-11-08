@@ -10,8 +10,11 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
   authenticated borrow-capacity Input through its eth_call-only prefix probe;
   the recipe still caps the actual amount and enforces its health floor. Other
   protocol providers serve CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs.
-  Native issuer, Merkl and 3F standalone claim providers discover eligible rewards/requests and
-  select amounts and fill one authorized claim per execution; the SDK batches those executions.
+  The isolated `sdk/providers/claims` provider may discover ready native issuer
+  requests and select native claim amounts for one unconditional authorized call
+  with no recipe queries or bindings. It fills permitted calldata only. Native
+  issuer, Merkl and 3F standalone claim providers return one stateless output per ready claim;
+  the SDK admits and batches those executions without changing the recipe.
   Native claim validity remains enforced by the distributor/request contracts;
   the planner handles exact recipe constraints.
   Liquid Lane connector acquisition and calldata construction belong to vault-solver's
@@ -27,8 +30,9 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
   provenance and deliberate subset limitations belong in `sdk/schemas`.
 - Runtime providers may fill authorized data only. Do not mutate recipe instructions,
   permission masks, targets or proofs to make a transaction succeed.
-- A failed/ambiguous submission retains nonce ownership. Persist before network
-  mutations; preserve external order identity through retries and restarts.
+- A failed/ambiguous submission retains nonce ownership in RAM. Capture signed
+  identity before network mutations; preserve external order identity through
+  in-process retries. Runtime state is RAM only, with no restart recovery.
 - Verify with `make check` and `make integration`; the latter uses an ephemeral
   local Anvil and no external chain. Report local, API-fixture and deployment
   evidence separately. Never use live signing credentials for tests.

@@ -65,13 +65,14 @@ func TestExactFrontendClaimPermission(t *testing.T) {
 }
 
 type chainFixture struct {
-	t                *testing.T
-	account, factory common.Address
-	count            uint64
-	groups           []int
-	owned            map[common.Address]bool
-	ready            map[common.Address]bool
-	calls            int
+	t                                      *testing.T
+	account, factory                       common.Address
+	count                                  uint64
+	groups                                 []int
+	owned                                  map[common.Address]bool
+	ready                                  map[common.Address]bool
+	calls                                  int
+	factoryReads, balanceReads, readyReads int
 }
 
 func (c *chainFixture) CallContract(_ context.Context, m ethereum.CallMsg, b *big.Int) ([]byte, error) {
@@ -81,6 +82,7 @@ func (c *chainFixture) CallContract(_ context.Context, m ethereum.CallMsg, b *bi
 		c.t.Fatal("unpinned read")
 	}
 	if *m.To == c.factory {
+		c.factoryReads++
 		a := factory.NewThreeFRequestsFactory().GetABI()
 		method := a.Methods["isRequest"]
 		v, err := method.Inputs.Unpack(m.Data[4:])
@@ -100,6 +102,7 @@ func (c *chainFixture) CallContract(_ context.Context, m ethereum.CallMsg, b *bi
 	}
 	switch method.Name {
 	case "balancesOf":
+		c.balanceReads++
 		v, _ := method.Inputs.Unpack(m.Data[4:])
 		if v[0].(common.Address) != c.account {
 			c.t.Fatal("wrong owner")
@@ -110,6 +113,7 @@ func (c *chainFixture) CallContract(_ context.Context, m ethereum.CallMsg, b *bi
 		}
 		return method.Outputs.Pack(n, new(big.Int))
 	case "canWithdraw":
+		c.readyReads++
 		if !c.owned[*m.To] {
 			c.t.Fatal("read readiness for unowned request")
 		}
@@ -167,5 +171,40 @@ func TestClaimsAllOwnedReadyRequestsAndSkipsPending(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFactoryHintRechecksBoundaryAndAllMutableRequests(t *testing.T) {
+	s, recipe, tree := fixture(t)
+	cfg, _, _ := derive(s, recipe, tree)
+	chain := &chainFixture{t: t, account: s.Account, factory: cfg.Factory, count: 257, owned: map[common.Address]bool{}, ready: map[common.Address]bool{}}
+	first, transferred := requestAt(cfg.Factory, 0), requestAt(cfg.Factory, 1)
+	chain.owned[first], chain.ready[first] = true, true
+	p := &Provider{chain: chain}
+	if out, err := p.PrepareRecipe(t.Context(), s, recipe, tree, nil); err != nil || len(out) != 1 {
+		t.Fatal(out, err)
+	}
+	coldReads, balanceReads, readyReads := chain.factoryReads, chain.balanceReads, chain.readyReads
+	chain.owned[transferred], chain.ready[transferred] = true, true
+	chain.ready[first] = false
+	out, err := p.PrepareRecipe(t.Context(), s, recipe, tree, nil)
+	if err != nil || len(out) != 1 || common.BytesToAddress(out[0].Actions[cfg.Key][cfg.Offset:cfg.Offset+32]) != transferred {
+		t.Fatal("transferred rights or readiness were cached", out, err)
+	}
+	if chain.factoryReads-coldReads != 2 || coldReads <= 2 || chain.balanceReads-balanceReads != 257 || chain.readyReads-readyReads != 2 {
+		t.Fatalf("cold=%d warm=%d balances=%d readiness=%d", coldReads, chain.factoryReads-coldReads, chain.balanceReads-balanceReads, chain.readyReads-readyReads)
+	}
+	factoryReads := chain.factoryReads
+	chain.count = 258
+	newRequest := requestAt(cfg.Factory, 257)
+	chain.owned[newRequest], chain.ready[newRequest] = true, true
+	if out, err = p.PrepareRecipe(t.Context(), s, recipe, tree, nil); err != nil || len(out) != 2 || chain.factoryReads-factoryReads != 3 {
+		t.Fatal("new request not discovered at cached boundary", out, err, chain.factoryReads-factoryReads)
+	}
+	chain.count = 1
+	chain.ready[first] = true
+	balanceReads = chain.balanceReads
+	if out, err = p.PrepareRecipe(t.Context(), s, recipe, tree, nil); err != nil || len(out) != 1 || chain.balanceReads-balanceReads != 1 {
+		t.Fatal("replaced factory inventory retained stale lower bound", out, err)
 	}
 }

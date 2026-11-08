@@ -4,6 +4,8 @@ go 1.27.0
 
 toolchain go1.27.3
 
+replace github.com/symbioticfi/merkle-executor/sdk => ./sdk
+
 require (
 	github.com/ethereum/go-ethereum v1.17.10
 	github.com/go-errors/errors v1.5.1
@@ -11,7 +13,7 @@ require (
 	github.com/go-logr/zapr v1.3.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/spf13/cobra v1.10.2
-	github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261105115443-8c82eca4aa08
+	github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261105091212-8738b5a82ea4
 	go.uber.org/zap v1.28.0
 	gopkg.in/yaml.v3 v3.0.1
 )

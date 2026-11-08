@@ -46,10 +46,10 @@ parent preparation still stops the operation. No decimals, prices or gas feeds
 are consulted.
 
 The authenticated recipe supplies the token pair, exact gross budget and minimum
-proceeds floor. AUTO never weakens that floor. Version 1 output persists the
+proceeds floor. AUTO never weakens that floor. The RAM task retains the
 chosen slippage, final full document, signed hash, order, quote identity, digest
-and UID before any external POST. Recovery validates that document and exact
-authorization and never obtains another quote or slippage suggestion.
+and UID before any external POST. The task validates the exact authorization and never obtains another quote or
+slippage suggestion during reconciliation. Restart loses that task identity.
 
 Fixture tests cover upstream rounding vectors, verification refusal, BFF failure
 and cancellation, gross fee accounting, recipe floor rejection, appData identity
