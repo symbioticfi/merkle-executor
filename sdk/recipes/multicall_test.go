@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 )
 
 func TestMulticallRejectsOtherMethodsAndRecipes(t *testing.T) {
@@ -37,6 +39,100 @@ func TestMulticallRejectsOtherMethodsAndRecipes(t *testing.T) {
 	}
 	if _, err := HasWork(batch, pack(t, batchArguments, [][]byte{returned})); err == nil {
 		t.Fatal("short result accepted")
+	}
+}
+
+type repeatedProbeError struct{}
+
+func (repeatedProbeError) Error() string  { return "execution reverted" }
+func (repeatedProbeError) ErrorCode() int { return 3 }
+
+type repeatedProbeReader struct {
+	*fakeReader
+	limit, idleAt, duplicateAt int
+	probes, exact, codeReads   int
+	transportFailure           bool
+}
+
+func (r *repeatedProbeReader) CodeAt(context.Context, common.Address, *big.Int) ([]byte, error) {
+	r.codeReads++
+	return []byte{0}, nil
+}
+func (r *repeatedProbeReader) CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+	r.exact++
+	return nil, nil
+}
+func (r *repeatedProbeReader) CallContractWithCode(_ context.Context, call ethereum.CallMsg, _ *big.Int, _ []byte) ([]byte, error) {
+	r.probes++
+	if r.transportFailure {
+		return nil, errors.New("transport unavailable")
+	}
+	args, err := abiArguments("bytes", "bytes[]").Unpack(call.Data[4:])
+	if err != nil {
+		return nil, err
+	}
+	calls := args[1].([][]byte)
+	if len(calls) > r.limit {
+		return nil, repeatedProbeError{}
+	}
+	results := make([][]byte, len(calls))
+	for i := range calls {
+		value := int64(i + 1)
+		if r.idleAt > 0 && i >= r.idleAt {
+			value = 0
+		}
+		if r.duplicateAt > 0 && i >= r.duplicateAt {
+			value = int64(r.duplicateAt)
+		}
+		results[i], err = executorABI.GetABI().Methods["execute"].Outputs.Pack([]*big.Int{big.NewInt(value), new(big.Int)})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return batchArguments.Pack(results)
+}
+
+func TestRepeatedBatchUsesBoundedProbesAndKeepsFirstBoundary(t *testing.T) {
+	r := Recipe{Queries: [][]byte{pack(t, queryArgs, common.Address{9}, []byte{1, 2, 3, 4}, []*big.Int{}, new(big.Int))}, Steps: [][]byte{step(Read, pack(t, readArgs, literal(0))), manageStep(t, common.Hash{1}, result(0), nil)}}
+	call, err := executorABI.TryPackExecute(r.Queries, r.Steps, nil, [][]byte{{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash, _ := HashRecipe(r)
+	for _, tc := range []struct {
+		name                  string
+		idle, duplicate, want int
+		transport             bool
+	}{
+		{"gas boundary", 0, 0, 64, false}, {"idle", 5, 0, 5, false}, {"duplicate", 0, 5, 5, false}, {"transport", 0, 0, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &repeatedProbeReader{fakeReader: fakeChain(t, r), limit: 64, idleAt: tc.idle, duplicateAt: tc.duplicate, transportFailure: tc.transport}
+			snapshot := Snapshot{Executor: reader.executor, Account: reader.account, Caller: reader.caller, BlockNumber: 10, RecipeHash: hash}
+			batch, err := BatchExecution(t.Context(), reader, snapshot, call, 1_000_000)
+			if tc.transport {
+				if err == nil {
+					t.Fatal("transport failure became a batch boundary")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, err := Executions(batch)
+			if err != nil || len(entries) != tc.want {
+				t.Fatalf("entries=%d error=%v", len(entries), err)
+			}
+			if reader.probes > 15 {
+				t.Fatalf("quadratic prefix search: %d probes", reader.probes)
+			}
+			if reader.codeReads != 1 {
+				t.Fatalf("read immutable runtime %d times", reader.codeReads)
+			}
+			if reader.exact == 0 {
+				t.Fatal("no exact unchanged-code simulation")
+			}
+		})
 	}
 }
 
@@ -96,10 +192,11 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 		manageStep(t, leaf.Hash, result(1), []*big.Int{binding(36, result(1))}),
 	}}
 	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(r.Queries, r.Steps))
-	snapshot, _, err := Discover(ctx, reader, executor, nil)
+	prepared, err := DiscoverBatch(ctx, reader, []common.Address{executor}, []common.Address{account}, sender, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshot := prepared[0].Snapshot
 	call, _, err := Assemble(r, tree, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -115,10 +212,14 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 	if balance := fixtureRead(t, ctx, client, token, target, "balanceOf", account)[0].(*big.Int); balance.Int64() != 25 {
 		t.Fatal("simulation persisted state")
 	}
-	if err := ValidateExecution(ctx, reader, snapshot, sender, batch); err != nil {
+	if err = ValidatePreparedBatch(ctx, reader, prepared, []ExecutorCall{{Executor: executor, Data: batch}}, [][]common.Hash{{leaf.Hash}}, []map[uint]string{nil}, sender); err != nil {
 		t.Fatal(err)
 	}
-	if work, err := ExecutionHasWork(ctx, reader, snapshot, sender, batch, nil); err != nil || !work {
+	returned, err := SimulateBatch(ctx, reader, snapshot, calls, 5_000_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work, err := HasWork(batch, pack(t, batchArguments, returned)); err != nil || !work {
 		t.Fatalf("batch readiness: %v %v", work, err)
 	}
 	if _, err := BatchExecution(ctx, reader, snapshot, call, 21_000); err == nil {
@@ -133,10 +234,11 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 	if balance := fixtureRead(t, ctx, client, token, target, "balanceOf", recipient)[0].(*big.Int); balance.Int64() != 25 {
 		t.Fatalf("recipient balance %s", balance)
 	}
-	latest, _, err := Discover(ctx, reader, executor, nil)
+	prepared, err = DiscoverBatch(ctx, reader, []common.Address{executor}, []common.Address{account}, sender, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	latest := prepared[0].Snapshot
 	if _, err := BatchExecution(ctx, reader, latest, call, 5_000_000); err == nil || !strings.Contains(err.Error(), "not ready") {
 		t.Fatalf("idle error %v", err)
 	}
@@ -144,10 +246,11 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 	localTransaction(t, ctx, client, sender, &target, fixtureCalldata(t, token, "mint", account, big.NewInt(25)))
 	r.Steps[2] = manageStep(t, leaf.Hash, result(0), []*big.Int{binding(36, literal(10))})
 	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(r.Queries, r.Steps))
-	latest, _, err = Discover(ctx, reader, executor, nil)
+	prepared, err = DiscoverBatch(ctx, reader, []common.Address{executor}, []common.Address{account}, sender, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	latest = prepared[0].Snapshot
 	call, _, err = Assemble(r, tree, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +263,7 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 	if err != nil || len(prefixCalls) != 2 {
 		t.Fatalf("executable prefix: %d, %v", len(prefixCalls), err)
 	}
-	if err := ValidateExecution(ctx, reader, latest, sender, prefix); err != nil {
+	if err := ValidatePreparedBatch(ctx, reader, prepared, []ExecutorCall{{Executor: executor, Data: prefix}}, [][]common.Hash{{leaf.Hash}}, []map[uint]string{nil}, sender); err != nil {
 		t.Fatal(err)
 	}
 	if balance := fixtureRead(t, ctx, client, token, target, "balanceOf", account)[0].(*big.Int); balance.Int64() != 25 {
@@ -168,10 +271,11 @@ func TestAnvilRepeatedRecipeBatch(t *testing.T) {
 	}
 	r.Steps = [][]byte{manageStep(t, leaf.Hash, literal(1), []*big.Int{binding(36, literal(0))})}
 	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(r.Queries, r.Steps))
-	latest, _, err = Discover(ctx, reader, executor, nil)
+	prepared, err = DiscoverBatch(ctx, reader, []common.Address{executor}, []common.Address{account}, sender, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	latest = prepared[0].Snapshot
 	call, _, err = Assemble(r, tree, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -81,7 +81,7 @@ func TestAdvanceBatchesPinnedReads(t *testing.T) {
 	h.p.chain = b
 	out, s := h.authorized(t)
 	b.groups = nil
-	progress, err := h.p.Advance(t.Context(), s, out, nil)
+	progress, err := out.Task.Advance(t.Context(), s)
 	if err != nil || progress.Done {
 		t.Fatal(progress, err)
 	}
@@ -153,7 +153,7 @@ func TestUnrelatedHistoryDoesNotBlockPublication(t *testing.T) {
 	}
 	h.c.used = false
 	h.pages = nil
-	progress, err := h.p.Advance(t.Context(), s, out, nil)
+	progress, err := out.Task.Advance(t.Context(), s)
 	if err != nil || progress.Done || h.posts != 1 || h.c.logReads != 0 || h.c.receiptReads != 0 {
 		t.Fatal("unrelated history blocked publication", progress, err)
 	}

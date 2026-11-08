@@ -2,176 +2,342 @@ package keeper
 
 import (
 	"context"
-	"strconv"
-
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"math/big"
+	"slices"
 )
 
-// PrepareExecution preserves configuration order. Idle on-chain gates are evaluated
-// again after the selected prefix, so earlier proceeds can activate later work.
+// PrepareExecution authenticates candidates together and validates one selected
+// envelope. Independent reads batch across executors; EVM effects retain order.
 func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (ExecutionPlan, error) {
-	batch := ExecutionPlan{To: p.Caller}
-	reader, supportsBatch := p.Chain.(recipes.BatchReader)
-	delegated := false
-	if supportsBatch {
-		var err error
-		delegated, err = recipes.SupportsDelegatedBatch(ctx, reader, p.Caller, nil)
-		if err != nil {
-			return batch, err
-		}
+	var batch ExecutionPlan
+	if p.ChainID == nil || p.ChainID.Sign() <= 0 || p.ChainID.BitLen() > 256 {
+		return batch, errors.New("positive uint256 chain ID required")
 	}
-	reserved := map[common.Address]bool{}
-	for _, strategy := range strategies {
-		if err := ctx.Err(); err != nil {
-			return batch, err
-		}
-		if reserved[common.HexToAddress(strategy.Config.Account)] {
-			continue
-		}
-		plan, err := p.Prepare(ctx, strategy)
-		if err != nil && !errors.Is(err, provider.ErrNotReady) {
-			return batch, err
-		}
-		if len(plan.Calldata) == 0 {
-			continue
-		}
-		if !delegated {
-			if errors.Is(err, provider.ErrNotReady) {
-				continue
-			}
-			return ExecutionPlan{To: plan.Snapshot.Executor, Members: []PlanMember{{Name: strategy.Config.Name, Plan: plan}}}, nil
-		}
-		candidate := ExecutionPlan{To: p.Caller, Members: append(append([]PlanMember(nil), batch.Members...), PlanMember{Name: strategy.Config.Name, Plan: plan})}
-		if err := validateExecutionComposition(candidate, strategies); err != nil {
-			// Keep exclusive receipt evidence in separate transactions.
-			if len(batch.Members) != 0 {
-				continue
-			}
-			return batch, err
-		}
-		header, err := p.Chain.HeaderByNumber(ctx, nil)
-		if err != nil {
-			return batch, err
-		}
-		if err = validHeader(header, nil); err != nil {
-			return batch, err
-		}
-		calls, _, _ := candidate.calls()
-		results, err := recipes.SimulateExecutors(ctx, reader, p.Caller, calls, header.Number, header.GasLimit)
-		if err != nil {
-			if recipes.BatchRejected(err) && len(batch.Members) != 0 {
-				continue
-			}
-			return batch, err
-		}
-		last := len(results) - 1
-		if len(plan.Results) != 0 {
-			if err := recipes.VerifyResults(plan.Calldata, results[last], plan.Results); err != nil {
-				// State-bound runtime data must be prepared in the next transaction,
-				// never reused against a prefix that changes its witnessed inputs.
-				if len(batch.Members) != 0 {
-					continue
-				}
-				return batch, err
-			}
-		}
-		work, err := recipes.HasWork(plan.Calldata, results[last])
-		if err != nil {
-			return batch, err
-		}
-		if !work {
-			continue
-		}
-		batch = candidate
-		for i, runtime := range strategy.Providers {
-			targets, err := exclusiveTargets(runtime, plan.Outputs, i)
-			if err != nil {
-				return batch, err
-			}
-			if len(targets) > 0 {
-				reserved[plan.Snapshot.Account] = true
-			}
-		}
-	}
-	if len(batch.Members) == 0 {
+	if len(strategies) == 0 {
 		return batch, provider.ErrNotReady
 	}
-	calls, snapshots, witnesses := batch.calls()
-	if err := recipes.ValidateExecutorBatch(ctx, reader, p.Caller, snapshots, calls, witnesses); err != nil {
+	strategies = slices.Clone(strategies)
+	names := make(map[string]int, len(strategies))
+	for i := range strategies {
+		if strategies[i].Config.Name == "" {
+			strategies[i].Config.Name = strategies[i].Config.Executor
+		}
+		name := strategies[i].Config.Name
+		if _, exists := names[name]; name == "" || exists {
+			return batch, errors.New("planner strategy names must be nonempty and unique")
+		}
+		names[name] = i
+	}
+	failures := map[string]error{}
+	executors, accounts := make([]common.Address, len(strategies)), make([]common.Address, len(strategies))
+	for i, s := range strategies {
+		executors[i] = common.HexToAddress(s.Config.Executor)
+		accounts[i] = common.HexToAddress(s.Config.Account)
+	}
+	discovered, err := recipes.DiscoverCandidates(ctx, p.Chain, executors, accounts, p.Caller, recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache})
+	if err != nil {
+		return batch, err
+	}
+	reader, supportsBatch := p.Chain.(recipes.BatchReader)
+	delegated := false
+	var block *big.Int
+	for i, result := range discovered {
+		if result.Err != nil {
+			failures[strategies[i].Config.Name] = result.Err
+			continue
+		}
+		if block == nil {
+			block = new(big.Int).SetUint64(result.Prepared.Snapshot.BlockNumber)
+		}
+	}
+	if block == nil {
+		return ExecutionPlan{}, candidateFailures(failures)
+	}
+	batch.Failures = failures
+	if supportsBatch && len(strategies) > 1 {
+		delegated, err = recipes.SupportsDelegatedBatch(ctx, reader, p.Caller, block)
+		if err != nil {
+			return batch, err
+		}
+	}
+	header, err := p.Chain.HeaderByNumber(ctx, block)
+	if err != nil {
+		return batch, err
+	}
+	if err = validHeader(header, block); err != nil {
+		return batch, err
+	}
+	gasLimit := p.MaxGas
+	if gasLimit == 0 {
+		gasLimit = params.MaxTxGas
+	}
+	gasLimit = min(gasLimit, header.GasLimit)
+	type treeKey struct {
+		account common.Address
+		root    common.Hash
+		path    string
+	}
+	trees := map[treeKey]*recipes.Tree{}
+	var selected []recipes.PreparedRecipe
+	reserved := map[common.Address]bool{}
+	composition := newExecutionComposition()
+	for i, strategy := range strategies {
+		if err := ctx.Err(); err != nil {
+			return ExecutionPlan{}, err
+		}
+		if discovered[i].Err != nil {
+			continue
+		}
+		if admitted, blocked := reserved[accounts[i]]; blocked {
+			if admitted {
+				continue
+			}
+			// Admit provisional reservations before they exclude sibling executors.
+			fitted, fitErr := p.fit(ctx, batch, selected, strategies, nil)
+			if fitErr != nil && !errors.Is(fitErr, provider.ErrNotReady) && len(fitted.Failures) == 0 {
+				return ExecutionPlan{}, fitErr
+			}
+			batch = fitted
+			batch.Failures = failures
+			selected = selected[:len(batch.Members)]
+			composition = newExecutionComposition()
+			clear(reserved)
+			for _, member := range batch.Members {
+				if err = composition.add(member.Plan, strategies[names[member.Name]]); err != nil {
+					return ExecutionPlan{}, err
+				}
+				for _, group := range member.Plan.Outputs {
+					for _, out := range group {
+						if out.Task != nil {
+							reserved[member.Plan.Snapshot.Account] = true
+						}
+					}
+				}
+			}
+			if reserved[accounts[i]] {
+				continue
+			}
+		}
+		snap := discovered[i].Prepared.Snapshot
+		key := treeKey{snap.Account, snap.Root, strategy.Config.Tree}
+		tree := trees[key]
+		if tree == nil {
+			tree, err = p.permissionTree(ctx, strategy.Config.Tree, snap)
+			if err != nil {
+				failures[strategy.Config.Name] = err
+				continue
+			}
+			trees[key] = tree
+		}
+		plan, repeat, buildErr := p.buildPlan(ctx, strategy, snap, recipes.CloneRecipe(discovered[i].Prepared.Recipe), recipes.CloneTree(tree))
+		if errors.Is(buildErr, provider.ErrNotReady) {
+			continue
+		}
+		if buildErr != nil {
+			failures[strategy.Config.Name] = buildErr
+			continue
+		}
+		if repeat && supportsBatch {
+			repeated, batchErr := recipes.BatchExecution(ctx, reader, snap, plan.Calldata, gasLimit)
+			err = batchErr
+			if errors.Is(err, provider.ErrNotReady) {
+				if !delegated {
+					continue
+				}
+				// Earlier members may fund an otherwise idle recipe.
+				err = nil
+			} else if err == nil {
+				plan.Calldata = repeated
+			}
+			if err != nil {
+				failures[strategy.Config.Name] = err
+				continue
+			}
+		}
+		name := strategy.Config.Name
+		if err = composition.add(plan, strategy); err != nil {
+			if len(batch.Members) > 0 {
+				continue
+			}
+			failures[strategy.Config.Name] = err
+			continue
+		}
+		batch.To = p.Caller
+		batch.Members = append(batch.Members, PlanMember{Name: name, Plan: plan})
+		selected = append(selected, discovered[i].Prepared)
+		for _, group := range plan.Outputs {
+			for _, out := range group {
+				if out.Task != nil {
+					reserved[snap.Account] = false
+				}
+			}
+		}
+		if !delegated {
+			batch.To = snap.Executor
+			calls, leaves, witnesses := batch.validation()
+			err = recipes.ValidatePreparedBatch(ctx, p.Chain, selected, calls, leaves, witnesses, p.Caller, p.MaxGas)
+			if errors.Is(err, provider.ErrNotReady) {
+				batch = ExecutionPlan{Failures: failures}
+				selected = nil
+				composition = newExecutionComposition()
+				clear(reserved)
+				continue
+			}
+			if err == nil {
+				return batch, nil
+			}
+			fitted, fitErr := p.fit(ctx, batch, selected, strategies, err)
+			var member *recipes.MemberError
+			if fitErr == nil {
+				return fitted, nil
+			}
+			if !recipes.BatchRejected(fitErr) && !errors.As(fitErr, &member) {
+				return ExecutionPlan{}, fitErr
+			}
+			failures[strategy.Config.Name] = fitErr
+			batch = ExecutionPlan{Failures: failures}
+			selected = nil
+			composition = newExecutionComposition()
+			clear(reserved)
+		}
+	}
+	if err := ctx.Err(); err != nil {
 		return ExecutionPlan{}, err
 	}
-	return batch, nil
-}
-
-func (b ExecutionPlan) calls() ([]recipes.ExecutorCall, []recipes.Snapshot, []map[uint]string) {
-	calls := make([]recipes.ExecutorCall, len(b.Members))
-	snapshots := make([]recipes.Snapshot, len(b.Members))
-	witnesses := make([]map[uint]string, len(b.Members))
-	for i, member := range b.Members {
-		calls[i] = recipes.ExecutorCall{Executor: member.Plan.Snapshot.Executor, Data: member.Plan.Calldata}
-		snapshots[i], witnesses[i] = member.Plan.Recipe, member.Plan.Results
+	if len(batch.Members) == 0 {
+		if len(failures) > 0 {
+			return batch, candidateFailures(failures)
+		}
+		return batch, provider.ErrNotReady
 	}
-	return calls, snapshots, witnesses
+	return p.fit(ctx, batch, selected, strategies, nil)
 }
 
-// Exclusive providers consume the transaction's full receipt. A shared target
-// must not also be called by another batch member, even on a different account.
-func validateExecutionComposition(batch ExecutionPlan, strategies []Strategy) error {
-	owners, claims, targets := map[common.Address]int{}, map[string]common.Address{}, map[string]common.Address{}
-	owner := 0
-	for i, member := range batch.Members {
-		var strategy *Strategy
-		for j := range strategies {
-			if strategies[j].Config.Name == member.Name {
-				strategy = &strategies[j]
-				break
+func candidateFailures(failures map[string]error) error {
+	var joined []error
+	for name, err := range failures {
+		joined = append(joined, errors.Errorf("executor %s: %w", name, err))
+	}
+	return errors.Join(joined...)
+}
+
+func (p *Planner) fit(ctx context.Context, batch ExecutionPlan, selected []recipes.PreparedRecipe, strategies []Strategy, prior error) (ExecutionPlan, error) {
+	for len(batch.Members) > 0 {
+		if len(batch.Members) == 1 {
+			batch.To = batch.Members[0].Plan.Snapshot.Executor
+		}
+		calls, leaves, witnesses := batch.validation()
+		err := prior
+		prior = nil
+		if err == nil {
+			err = recipes.ValidatePreparedBatch(ctx, p.Chain, selected, calls, leaves, witnesses, p.Caller, p.MaxGas)
+		}
+		if err == nil {
+			return batch, nil
+		}
+		var member *recipes.MemberError
+		if errors.As(err, &member) && member.Index >= 0 && member.Index < len(batch.Members) {
+			indices := member.Indices
+			if len(indices) == 0 {
+				indices = []int{member.Index}
+			}
+			drop := make(map[int]bool, len(indices))
+			for _, index := range indices {
+				drop[index] = true
+			}
+			members, prepared := batch.Members[:0], selected[:0]
+			for i, entry := range batch.Members {
+				if drop[i] && !errors.Is(err, provider.ErrNotReady) {
+					if batch.Failures == nil {
+						batch.Failures = map[string]error{}
+					}
+					batch.Failures[entry.Name] = err
+				}
+				if !drop[i] {
+					members = append(members, entry)
+					prepared = append(prepared, selected[i])
+				}
+			}
+			batch.Members, selected = members, prepared
+			continue
+		}
+		if !recipes.BatchRejected(err) {
+			return ExecutionPlan{}, err
+		}
+		if len(batch.Members) > 1 {
+			// EVM prefixes need not be monotone; test descending prefixes to retain
+			// the largest passing configured-order prefix within the operation budget.
+			count := len(batch.Members) - 1
+			batch.Members = batch.Members[:count]
+			selected = selected[:count]
+			continue
+		}
+		plan := &batch.Members[0].Plan
+		entries, e := recipes.Executions(plan.Calldata)
+		if e != nil || len(entries) < 2 {
+			if batch.Failures == nil {
+				batch.Failures = map[string]error{}
+			}
+			batch.Failures[batch.Members[0].Name] = err
+			batch.Members = nil
+			break
+		}
+		count := len(entries) - 1
+		if count == 1 {
+			plan.Calldata = entries[0]
+		} else {
+			plan.Calldata, e = recipes.Multicall(entries[:count])
+			if e != nil {
+				return ExecutionPlan{}, e
 			}
 		}
-		if strategy == nil {
+		for i, group := range plan.Outputs {
+			if len(group) > 1 {
+				plan.Outputs[i] = group[:count]
+			}
+		}
+		if e = validateExecutionComposition(batch, strategies); e != nil {
+			return ExecutionPlan{}, e
+		}
+	}
+	if len(batch.Failures) != 0 {
+		return ExecutionPlan{Failures: batch.Failures}, candidateFailures(batch.Failures)
+	}
+	return ExecutionPlan{}, provider.ErrNotReady
+}
+
+func (b ExecutionPlan) validation() ([]recipes.ExecutorCall, [][]common.Hash, []map[uint]string) {
+	calls := make([]recipes.ExecutorCall, len(b.Members))
+	leaves := make([][]common.Hash, len(b.Members))
+	witnesses := make([]map[uint]string, len(b.Members))
+	for i, m := range b.Members {
+		calls[i] = recipes.ExecutorCall{Executor: m.Plan.Snapshot.Executor, Data: m.Plan.Calldata}
+		leaves[i] = m.Plan.Leaves
+		witnesses[i] = m.Plan.Results
+	}
+	return calls, leaves, witnesses
+}
+
+// Validate selected plans in linear time, including transaction-wide receipt ownership.
+func validateExecutionComposition(batch ExecutionPlan, strategies []Strategy) error {
+	configured := make(map[string]Strategy, len(strategies))
+	for _, strategy := range strategies {
+		configured[strategy.Config.Name] = strategy
+	}
+	composition := newExecutionComposition()
+	for _, member := range batch.Members {
+		strategy, ok := configured[member.Name]
+		if !ok {
 			return errors.New("batch contains an unconfigured strategy")
 		}
-		if err := validatePlanMember(member.Plan, *strategy); err != nil {
+		if err := composition.add(member.Plan, strategy); err != nil {
 			return err
 		}
-		if len(strategy.Providers) != len(member.Plan.Outputs) {
-			return errors.New("provider output count differs from prepared plan")
-		}
-		for _, group := range member.Plan.Outputs {
-			if len(group) == 0 {
-				return errors.New("provider returned no execution outputs")
-			}
-		}
-		prefix := strconv.Itoa(i) + "/"
-		for j, p := range strategy.Providers {
-			exclusive, err := exclusiveTargets(p, member.Plan.Outputs, j)
-			if err != nil {
-				return err
-			}
-			qualified := map[string]common.Address{}
-			for key, target := range exclusive {
-				qualified[prefix+key] = target
-			}
-			if err := addTargetClaims(qualified, owner, owners, claims); err != nil {
-				return err
-			}
-			owner++
-		}
 	}
-	if len(claims) == 0 {
-		return nil
-	}
-	for i, member := range batch.Members {
-		managed, err := recipes.ManagedTargets(member.Plan.Calldata)
-		if err != nil {
-			return err
-		}
-		prefix := strconv.Itoa(i) + "/"
-		for key, target := range managed {
-			targets[prefix+key] = target
-		}
-	}
-	return validateTargetClaims(targets, owners, claims)
+	return nil
 }

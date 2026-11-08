@@ -14,8 +14,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	delegated "github.com/symbioticfi/merkle-executor/sdk/bindings/delegatedaccount"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
 // ExecutorCall keeps the committed execution attached to its own executor.
@@ -178,58 +176,4 @@ func SimulateExecutors(ctx context.Context, reader BatchReader, caller common.Ad
 func BatchRejected(err error) bool {
 	var boundary *batchBoundary
 	return errors.As(err, &boundary)
-}
-
-// ValidateExecutorBatch authenticates every member against the same current
-// block, then verifies the complete execution and closes all canonical pins.
-func ValidateExecutorBatch(ctx context.Context, reader BatchReader, caller common.Address, snapshots []Snapshot, calls []ExecutorCall, witnesses []map[uint]string) error {
-	if len(snapshots) != len(calls) || len(witnesses) != len(calls) || len(calls) == 0 {
-		return errors.New("executor batch member count mismatch")
-	}
-	current, err := reader.HeaderByNumber(ctx, nil)
-	if err != nil {
-		return err
-	}
-	if err = validateHeader(current, nil); err != nil {
-		return err
-	}
-	for i, snapshot := range snapshots {
-		if snapshot.Executor != calls[i].Executor || snapshot.Caller != caller || current.Number.Uint64() < snapshot.BlockNumber {
-			return errors.New("executor batch identity mismatch")
-		}
-		if err = closeExecution(ctx, reader, snapshot, current); err != nil {
-			return err
-		}
-		reads, e := protocolio.ReadGroup(ctx, reader, snapshotRequests(snapshot.Executor, snapshot.Account, current.Number)...)
-		if e != nil {
-			return e
-		}
-		if err = validateCurrent(snapshot, current, reads, caller); err != nil {
-			return err
-		}
-	}
-	results, err := SimulateExecutors(ctx, reader, caller, calls, current.Number, current.GasLimit)
-	if err != nil {
-		return err
-	}
-	for i, call := range calls {
-		if len(witnesses[i]) != 0 {
-			if err = VerifyResults(call.Data, results[i], witnesses[i]); err != nil {
-				return err
-			}
-		}
-		work, e := HasWork(call.Data, results[i])
-		if e != nil {
-			return e
-		}
-		if !work {
-			return provider.ErrNotReady
-		}
-	}
-	for _, snapshot := range snapshots {
-		if err = closeExecution(ctx, reader, snapshot, current); err != nil {
-			return err
-		}
-	}
-	return nil
 }

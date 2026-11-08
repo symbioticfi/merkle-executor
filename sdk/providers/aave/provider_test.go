@@ -158,7 +158,7 @@ func TestAuthenticatedCapacityPreflight(t *testing.T) {
 		})
 	}
 }
-func TestCapacityProbeErrorsAndAdvance(t *testing.T) {
+func TestCapacityProbeErrorsAndOutput(t *testing.T) {
 	s, r, tree, _ := capacityFixture(t)
 	reader := &noRPC{err: errors.New("secret RPC payload")}
 	p := &Provider{reader: reader}
@@ -188,17 +188,8 @@ func TestCapacityProbeErrorsAndAdvance(t *testing.T) {
 	if err != nil || out.Inputs[0] != "42" {
 		t.Fatal(out, err)
 	}
-	if _, err = p.Advance(t.Context(), s, out, nil); err == nil {
-		t.Fatal("advanced without confirmed execution")
-	}
-	s.Execution = &provider.Execution{TxHash: common.HexToHash("0x1"), BlockNumber: big.NewInt(1), BlockHash: common.HexToHash("0x2")}
-	progress, err := p.Advance(t.Context(), s, out, nil)
-	if err != nil || !progress.Done {
-		t.Fatal(progress, err)
-	}
-	out.Inputs[0] = "43"
-	if _, err = p.Advance(t.Context(), s, out, nil); err == nil {
-		t.Fatal("modified persisted output accepted")
+	if out.Task != nil || len(out.Data) != 0 {
+		t.Fatal("capacity probe retained settlement state")
 	}
 	if _, err = New(nil); err == nil {
 		t.Fatal("missing reader accepted")

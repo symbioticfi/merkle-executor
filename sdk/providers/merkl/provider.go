@@ -362,9 +362,6 @@ func VerifyProof(user, token common.Address, amount *big.Int, proof [][32]byte, 
 	}
 	return h == root
 }
-func (p *Provider) Advance(_ context.Context, _ provider.Snapshot, _ provider.Output, _ json.RawMessage) (provider.Progress, error) {
-	return provider.Progress{Done: true}, nil
-}
 
 // readBatch fetches the entire bounded distributor snapshot in one eth_call.
 // Every getter is required to execute successfully; decoding the default recipient
@@ -381,17 +378,7 @@ func (p *Provider) readBatch(ctx context.Context, s provider.Snapshot) ([]multic
 	return p.decodeBatch(raw)
 }
 func (p *Provider) batchPayload(account common.Address) ([]byte, error) {
-	distributor := binding.NewMerklDistributor()
-	calls := make([]multicall.Multicall3Call3, 0, 2+2*len(p.tokens))
-	add := func(data []byte) {
-		calls = append(calls, multicall.Multicall3Call3{Target: p.distributor, AllowFailure: false, CallData: data})
-	}
-	add(distributor.PackGetMerkleRoot())
-	add(distributor.PackClaimRecipient(account, common.Address{}))
-	for _, token := range p.tokens {
-		add(distributor.PackClaimed(account, token))
-		add(distributor.PackClaimRecipient(account, token))
-	}
+	calls := rewardCalls(p.distributor, account, p.tokens)
 	aggregate := multicall.NewMulticall3()
 	payload, err := aggregate.TryPackAggregate3(calls)
 	if err != nil {

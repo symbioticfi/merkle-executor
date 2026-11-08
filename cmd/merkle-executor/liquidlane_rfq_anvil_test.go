@@ -31,7 +31,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func loadRFQArtifact(t *testing.T, name string) serviceArtifact {
@@ -54,11 +53,11 @@ func loadRFQArtifact(t *testing.T, name string) serviceArtifact {
 	return serviceArtifact{ABI: parsed, Bytecode: v.Bytecode}
 }
 
-func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
+func TestAnvilLiquidLaneRFQConsumerAmbiguityAndFill(t *testing.T) {
 	testAnvilLiquidLaneRFQConsumer(t, false)
 }
 
-func TestAnvilLiquidLaneRFQConsumerRestartAndCancel(t *testing.T) {
+func TestAnvilLiquidLaneRFQConsumerAmbiguityAndCancel(t *testing.T) {
 	testAnvilLiquidLaneRFQConsumer(t, true)
 }
 
@@ -251,7 +250,7 @@ func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
 	deadlineGuard := recipe.Steps[len(recipe.Steps)-1]
 	recipe.Steps[len(recipe.Steps)-1] = issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, inputOperand(1), new(big.Int).SetUint64(deadline-1))
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
-	if e := planBotWithHTTP(ctx, path, new(bytes.Buffer), apiHTTP); e == nil || !strings.Contains(e.Error(), "full recipe simulation failed") {
+	if e := planBotWithHTTP(ctx, path, new(bytes.Buffer), apiHTTP); !recipes.BatchRejected(e) {
 		t.Fatal("recipe deadline cap was not enforced", e)
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 || posts.Load() != 0 || quotes.Load() != 2 {
@@ -261,32 +260,30 @@ func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
+	worker := serviceKeeper(t, ctx, path, apiHTTP)
 	run := func() {
-		if e := runBotWithHTTP(ctx, path, true, apiHTTP); e != nil {
+		if e := worker.Tick(ctx); e != nil {
 			t.Fatal(e)
 		}
 	}
-	load := func() keeper.Job {
-		var job keeper.Job
-		if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); e != nil || !found {
-			t.Fatal("job absent", e)
+	for posts.Load() == 0 {
+		run()
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(20 * time.Millisecond):
 		}
-		return job
 	}
-	run()
-	job := load()
-	if job.Phase != "authorized" || len(job.Progress) != 5 || job.Progress[2][0].Outcome != "publication-uncertain" || job.Result.Execution == nil || posts.Load() != 1 || quotes.Load() != 3 {
-		t.Fatalf("ambiguous publication lost ownership: phase=%s progress=%+v posts=%d quotes=%d", job.Phase, job.Progress, posts.Load(), quotes.Load())
+	if !worker.Pending() || posts.Load() != 1 || quotes.Load() != 3 {
+		t.Fatalf("ambiguous publication lost ownership: pending=%v posts=%d quotes=%d", worker.Pending(), posts.Load(), quotes.Load())
 	}
-	originalData := bytes.Clone(job.Plan.Outputs[2][0].Data)
 	treeCalls := curatorCalls.Load()
 	run()
-	job = load()
-	if job.Phase != "authorized" || job.Progress[2][0].Done || job.Progress[2][0].Reference != orderID || posts.Load() != 1 || quotes.Load() != 3 || curatorCalls.Load() != treeCalls || !bytes.Equal(originalData, job.Plan.Outputs[2][0].Data) {
-		t.Fatal("API-only fill released work or restart changed identity")
+	if !worker.Pending() || posts.Load() != 1 || quotes.Load() != 3 || curatorCalls.Load() != treeCalls {
+		t.Fatal("API-only fill released work or changed quote identity")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 {
-		t.Fatal("restart duplicated authorization", nonce, e)
+		t.Fatal("reconciliation duplicated authorization", nonce, e)
 	}
 	for token, want := range map[common.Address]int64{tokenIn: 1000, tokenOut: 0} {
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: erc20.NewERC20().PackBalanceOf(account)}, nil)
@@ -326,15 +323,12 @@ func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
 		}
 	}
 	run()
-	job = load()
-	wantOutcome := "settled"
 	wantBalances := map[common.Address]int64{tokenIn: 0, tokenOut: 950}
 	if cancelOrder {
-		wantOutcome = "cancelled"
 		wantBalances = map[common.Address]int64{tokenIn: 1000, tokenOut: 0}
 	}
-	if job.Phase != "settled" || !job.Progress[2][0].Done || job.Progress[2][0].Outcome != wantOutcome {
-		t.Fatal("canonical outcome did not complete", job.Phase, job.Progress)
+	if worker.Pending() {
+		t.Fatal("canonical outcome did not complete external work")
 	}
 	for token, want := range wantBalances {
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: erc20.NewERC20().PackBalanceOf(account)}, nil)
@@ -345,11 +339,9 @@ func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
 	lookupCalls := gets.Load()
 	run()
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 || posts.Load() != 1 || quotes.Load() != 3 || gets.Load() != lookupCalls || curatorCalls.Load() != treeCalls {
-		t.Fatal("settled restart repeated network mutation", nonce, e)
+		t.Fatal("settled runtime repeated network mutation", nonce, e)
 	}
-	if found, e := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); e != nil || found {
-		t.Fatal("settled transaction retained nonce journal", e)
-	}
+
 }
 
 // serviceRewriteTransport redirects one official provider hostname to a local

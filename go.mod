@@ -4,6 +4,8 @@ go 1.27.0
 
 toolchain go1.27.3
 
+replace github.com/symbioticfi/merkle-executor/sdk => ./sdk
+
 require (
 	github.com/ethereum/go-ethereum v1.17.10
 	github.com/go-errors/errors v1.5.1

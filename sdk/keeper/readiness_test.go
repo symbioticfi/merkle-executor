@@ -13,7 +13,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-func validationWork(t *testing.T, ready bool) ([]byte, []byte) {
+func validationWork(t *testing.T, ready bool) (recipes.Recipe, []byte, []byte) {
 	t.Helper()
 	var args abi.Arguments
 	for _, name := range []string{"uint256", "bytes32[]", "uint256[][]"} {
@@ -32,20 +32,25 @@ func validationWork(t *testing.T, ready bool) ([]byte, []byte) {
 		t.Fatal(err)
 	}
 	a := executor.NewRecipeExecutor()
-	calldata := a.PackExecute(nil, [][]byte{append([]byte{recipes.Manage}, step...)}, nil, [][]byte{{}})
+	recipe := recipes.Recipe{Steps: [][]byte{append([]byte{recipes.Manage}, step...)}}
+	calldata := a.PackExecute(recipe.Queries, recipe.Steps, nil, [][]byte{{}})
 	returned, err := a.GetABI().Methods["execute"].Outputs.Pack([]*big.Int{new(big.Int)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return calldata, returned
+	return recipe, calldata, returned
 }
 
 func TestReadinessAfterCanonicalGuards(t *testing.T) {
 	for _, mode := range []string{"ready", "idle", "idle reorg", "idle simulation failure", "malformed results"} {
 		t.Run(mode, func(t *testing.T) {
-			header := &types.Header{Number: big.NewInt(12)}
-			snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: common.HexToHash("0x04"), Root: common.HexToHash("0x05"), RecipeBlock: 11}
-			payload, returned := validationWork(t, mode == "ready")
+			header := &types.Header{Number: big.NewInt(12), GasLimit: 30_000_000}
+			recipe, payload, returned := validationWork(t, mode == "ready")
+			hash, err := recipes.HashRecipe(recipe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: hash, Root: common.HexToHash("0x05"), RecipeBlock: 11}
 			r := &validationReader{t: t, snapshot: snapshot, header: header, payload: payload, returned: returned, reorgOnSimulation: mode == "idle reorg"}
 			if mode == "idle simulation failure" {
 				r.simulationErr = errors.New("assertion failed")
@@ -53,10 +58,10 @@ func TestReadinessAfterCanonicalGuards(t *testing.T) {
 			if mode == "malformed results" {
 				r.returned = nil
 			}
-			work, err := recipes.ExecutionHasWork(t.Context(), r, snapshot, snapshot.Caller, payload, nil)
-			if err == nil && !work {
-				err = provider.ErrNotReady
-			}
+			err = recipes.ValidatePreparedBatch(t.Context(), r,
+				[]recipes.PreparedRecipe{{Snapshot: snapshot, Recipe: recipe}},
+				[]recipes.ExecutorCall{{Executor: snapshot.Executor, Data: payload}},
+				[][]common.Hash{nil}, []map[uint]string{nil}, snapshot.Caller)
 			if mode == "ready" {
 				if err != nil {
 					t.Fatal(err)

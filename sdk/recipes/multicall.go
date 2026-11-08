@@ -128,6 +128,21 @@ func batchCalls(call []byte) ([][]byte, error) {
 // runs the exact multicall against the unchanged contract; only that calldata
 // may be submitted. No helper contract is deployed on-chain.
 func SimulateBatch(ctx context.Context, reader BatchReader, snapshot Snapshot, calls [][]byte, gas uint64) ([][]byte, error) {
+	return simulateBatch(ctx, reader, snapshot, calls, gas, nil)
+}
+
+func originalExecutorRuntime(ctx context.Context, reader BatchReader, snapshot Snapshot) ([]byte, error) {
+	code, err := reader.CodeAt(ctx, snapshot.Executor, new(big.Int).SetUint64(snapshot.BlockNumber))
+	if err != nil {
+		return nil, errors.New("read original executor runtime failed")
+	}
+	if len(code) == 0 || len(code) > 24576 {
+		return nil, errors.New("invalid executor runtime size")
+	}
+	return code, nil
+}
+
+func simulateBatch(ctx context.Context, reader BatchReader, snapshot Snapshot, calls [][]byte, gas uint64, code []byte) ([][]byte, error) {
 	calldata, err := Multicall(calls)
 	if err != nil {
 		return nil, err
@@ -143,12 +158,11 @@ func SimulateBatch(ctx context.Context, reader BatchReader, snapshot Snapshot, c
 		}
 	}
 	block := new(big.Int).SetUint64(snapshot.BlockNumber)
-	code, err := reader.CodeAt(ctx, snapshot.Executor, block)
-	if err != nil {
-		return nil, errors.New("read original executor runtime failed")
-	}
-	if len(code) == 0 || len(code) > 24576 {
-		return nil, errors.New("invalid executor runtime size")
+	if code == nil {
+		code, err = originalExecutorRuntime(ctx, reader, snapshot)
+		if err != nil {
+			return nil, err
+		}
 	}
 	var artifact struct {
 		Runtime hexutil.Bytes `json:"runtime"`
@@ -193,8 +207,9 @@ func SimulateBatch(ctx context.Context, reader BatchReader, snapshot Snapshot, c
 // BatchExecution extends a prepared execution while its live actions make
 // progress and the complete transaction simulates. Runtime-input recipes remain
 // single executions: external values cannot be reused after state changes.
-// A reverted extension, gas limit or idle gate ends the batch. RPC failures fail
-// preparation; the builder never submits an unverified extension.
+// Exponential growth and bounded prefix search avoid replaying lengths 1..N.
+// A reverted extension, gas limit or idle gate ends the batch; RPC failures fail
+// preparation. The final selected bytes always receive an exact simulation.
 func BatchExecution(ctx context.Context, reader BatchReader, snapshot Snapshot, call []byte, gas uint64) ([]byte, error) {
 	recipe, inputs, err := decodeExecution(call)
 	if err != nil {
@@ -204,40 +219,89 @@ func BatchExecution(ctx context.Context, reader BatchReader, snapshot Snapshot, 
 	if len(inputs) != 0 || len(inspection.Inputs) != 0 {
 		return bytes.Clone(call), nil
 	}
-	var calls, previous [][]byte
+	code, err := originalExecutorRuntime(ctx, reader, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	finish := func(count int) ([]byte, error) {
+		calls := repeatedCalls(call, count)
+		data, err := compactBatch(calls)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = reader.CallContract(ctx, ethereum.CallMsg{From: snapshot.Caller, To: &snapshot.Executor, Data: data, Gas: gas}, new(big.Int).SetUint64(snapshot.BlockNumber)); err != nil {
+			return nil, simulationFailure(ctx, err)
+		}
+		return data, nil
+	}
+	count, good, upper := 1, 0, 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		calls = append(calls, bytes.Clone(call))
-		results, err := SimulateBatch(ctx, reader, snapshot, calls, gas)
+		results, err := simulateBatch(ctx, reader, snapshot, repeatedCalls(call, count), gas, code)
 		if err != nil {
-			var boundary *batchBoundary
-			if len(calls) > 1 && errors.As(err, &boundary) {
-				return compactBatch(calls[:len(calls)-1])
+			if !BatchRejected(err) || good == 0 {
+				return nil, err
 			}
-			return nil, err
-		}
-		last := results[len(results)-1]
-		// Approval setup/cleanup alone cannot justify another financial cycle.
-		// HasWork still treats it as work for ordinary one-shot execution.
-		work, _ := hasWork(call, last, false)
-		if !work {
-			if len(calls) == 1 {
-				if ordinary, _ := HasWork(call, last); ordinary {
-					return bytes.Clone(call), nil
-				}
-				return nil, provider.ErrNotReady
+			upper = count
+		} else {
+			selected, stopped, err := repetitionBoundary(call, results)
+			if err != nil {
+				return nil, err
 			}
-			return compactBatch(calls[:len(calls)-1])
-		}
-		for _, old := range previous {
-			if bytes.Equal(old, last) {
-				return compactBatch(calls[:len(calls)-1])
+			if stopped {
+				return finish(selected)
 			}
+			good = count
 		}
-		previous = append(previous, bytes.Clone(last))
+		if upper != 0 {
+			if upper-good == 1 {
+				return finish(good)
+			}
+			count = good + (upper-good)/2
+		} else {
+			if good > int(^uint(0)>>1)/2 {
+				return finish(good)
+			}
+			count = 2 * good
+		}
 	}
+}
+
+func repeatedCalls(call []byte, count int) [][]byte {
+	calls := make([][]byte, count)
+	for i := range calls {
+		calls[i] = call
+	}
+	return calls
+}
+
+func repetitionBoundary(call []byte, results [][]byte) (int, bool, error) {
+	seen := make(map[string]bool, len(results))
+	for i, raw := range results {
+		// Approval maintenance alone cannot justify another financial cycle.
+		work, err := hasWork(call, raw, false)
+		if err != nil {
+			return 0, false, err
+		}
+		if !work {
+			if i != 0 {
+				return i, true, nil
+			}
+			if ordinary, err := HasWork(call, raw); err != nil {
+				return 0, false, err
+			} else if ordinary {
+				return 1, true, nil
+			}
+			return 0, false, provider.ErrNotReady
+		}
+		if seen[string(raw)] {
+			return i, true, nil
+		}
+		seen[string(raw)] = true
+	}
+	return len(results), false, nil
 }
 
 func compactBatch(calls [][]byte) ([]byte, error) {

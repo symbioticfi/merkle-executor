@@ -3,6 +3,7 @@ FROM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35
 RUN apk add --no-cache git
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY sdk/go.mod sdk/go.sum ./sdk/
 RUN go mod download
 COPY . .
 ARG VERSION=dev

@@ -39,7 +39,7 @@ backend fixture provenance. The copied file's SHA-256 is
 custody. `TestSourceReadsCurrentBackendCertificate` validates all 78 executable
 calls and proofs independently of the backend certificate.
 
-## Transport and recovery
+## Transport and process-local advancement
 
 The daemon fixes the permission HTTP timeout at 10 seconds and response cap at
 2 MiB. Requests are unauthenticated. Context cancellation, sanitized errors
@@ -49,8 +49,8 @@ A failed adapter read prevents HTTP;
 invalid scope, malformed metadata, incomplete leaves or proof errors fail closed.
 There is no local-file, missing-route or stale-root fallback in the daemon.
 
-Only new preparation acquires permission artifacts. Saved signed attempts and
-external-order advancement recover from persisted identity and canonical evidence
+Only new preparation acquires permission artifacts. Pending signed attempts and
+external-order tasks use their RAM identity and canonical evidence
 without fetching a new tree. Standalone SDK hosts may separately use the optional
 local permission-tree interface.
 

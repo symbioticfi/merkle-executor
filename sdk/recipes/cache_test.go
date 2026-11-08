@@ -63,6 +63,9 @@ func (r cachedBatch) BatchRead(ctx context.Context, qs []protocolio.ReadRequest)
 	return out, nil
 }
 func cacheFixture(t *testing.T, recipe Recipe) (*cachedReader, *RecipeCache) {
+	if len(recipe.Queries) == 0 && len(recipe.Steps) == 0 {
+		recipe = admissionRecipe(t)
+	}
 	r := &cachedReader{executionReader: newExecutionReader(t)}
 	r.fakeReader = fakeChain(t, recipe)
 	return r, NewRecipeCache(2, 1<<20)
@@ -75,15 +78,18 @@ func cachedPrepare(t *testing.T, r *cachedReader, c *RecipeCache, batched bool, 
 	if batched {
 		reader = cachedBatch{r}
 	}
-	return PrepareExecution(t.Context(), reader, r.executor, r.account, common.HexToAddress("0x3333"), PreparationOptions{ChainID: big.NewInt(1), Cache: c}, func(s Snapshot, recipe Recipe) ([]byte, []common.Hash, error) {
-		r.validating = true
-		if build != nil {
-			if err := build(s, recipe); err != nil {
-				return nil, nil, err
-			}
+	caller := common.HexToAddress("0x3333")
+	prepared, err := DiscoverBatch(t.Context(), reader, []common.Address{r.executor}, []common.Address{r.account}, caller, PreparationOptions{ChainID: big.NewInt(1), Cache: c})
+	if err != nil {
+		return err
+	}
+	r.validating = true
+	if build != nil {
+		if err := build(prepared[0].Snapshot, CloneRecipe(prepared[0].Recipe)); err != nil {
+			return err
 		}
-		return executionPayload, []common.Hash{{1}}, nil
-	})
+	}
+	return ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{assembledCall(t, prepared[0])}, [][]common.Hash{{{1}}}, []map[uint]string{nil}, caller)
 }
 func TestRecipeCacheRejectsInvalidMetadataBeforeCachedHeader(t *testing.T) {
 	for _, mode := range []string{"zero", "future"} {
@@ -157,7 +163,7 @@ func TestRecipeCacheMissesAndRequiredHeaderFailures(t *testing.T) {
 				expectedLogs = 2
 			case "new block", "miss ignores old header":
 				r.recipeBlock = 10
-				r.logs = []types.Log{r.recipeLog(t, Recipe{}, 4)}
+				r.logs = []types.Log{r.recipeLog(t, admissionRecipe(t), 4)}
 				expectedLogs = 2
 				if mode == "miss ignores old header" {
 					r.badHeader = 8
@@ -167,7 +173,7 @@ func TestRecipeCacheMissesAndRequiredHeaderFailures(t *testing.T) {
 				h := types.CopyHeader(r.headers[8])
 				h.Extra = []byte("new canonical event")
 				r.headers[8] = h
-				r.logs = []types.Log{r.recipeLog(t, Recipe{}, 4)}
+				r.logs = []types.Log{r.recipeLog(t, admissionRecipe(t), 4)}
 				expectedLogs = 2
 			case "matched error", "matched null", "matched wrong", "header before caller":
 				r.badHeader = 8
@@ -196,8 +202,8 @@ func TestRecipeCacheMissesAndRequiredHeaderFailures(t *testing.T) {
 			if (err != nil) != wantError || r.logReads != expectedLogs {
 				t.Fatalf("error=%v logs%d want%d", err, r.logReads, expectedLogs)
 			}
-			if mode == "header before caller" && !strings.Contains(err.Error(), "cached header") {
-				t.Fatalf("caller masked event evidence: %v", err)
+			if mode == "header before caller" && !strings.Contains(err.Error(), "caller mismatch") {
+				t.Fatalf("event header masked unauthenticated caller: %v", err)
 			}
 		})
 	}
@@ -294,17 +300,25 @@ func TestRecipeCacheBoundedEvictionIsolationAndConcurrentReplacement(t *testing.
 		t.Fatal("concurrent insertion exceeded bounds")
 	}
 }
-func TestPrepareExecutionNilBuildFailsBeforeReads(t *testing.T) {
-	r, _ := cacheFixture(t, Recipe{})
-	if err := PrepareExecution(t.Context(), r, r.executor, r.account, r.caller, PreparationOptions{}, nil); err == nil || r.allReads != 0 {
-		t.Fatalf("nil build reached reads: %v reads%d", err, r.allReads)
+func TestSharedAPIsRejectMalformedInputsBeforeReads(t *testing.T) {
+	r, cache := cacheFixture(t, Recipe{})
+	for _, options := range []PreparationOptions{{Cache: cache}, {Cache: cache, ChainID: new(big.Int)}} {
+		if _, err := DiscoverBatch(t.Context(), r, []common.Address{r.executor}, []common.Address{r.account}, r.caller, options); err == nil {
+			t.Fatal("cache accepted missing positive chain identity")
+		}
+	}
+	if _, err := DiscoverBatch(t.Context(), r, nil, nil, r.caller, PreparationOptions{}); err == nil {
+		t.Fatal("empty discovery accepted")
+	}
+	if err := ValidatePreparedBatch(t.Context(), r, nil, nil, nil, nil, r.caller); err == nil || r.allReads != 0 {
+		t.Fatalf("malformed shared input reached reads: %v reads%d", err, r.allReads)
 	}
 }
 
 func TestRecipeCacheSamePinHintUsesInitialHeaderWithoutExtraRead(t *testing.T) {
 	r, c := cacheFixture(t, Recipe{})
 	r.recipeBlock = 10
-	r.logs = []types.Log{r.recipeLog(t, Recipe{}, 4)}
+	r.logs = []types.Log{r.recipeLog(t, admissionRecipe(t), 4)}
 	var initialCalls int
 	for attempt := range 3 {
 		r.allReads = 0

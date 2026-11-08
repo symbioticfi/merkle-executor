@@ -52,13 +52,10 @@ func (p *permissionProvider) PrepareRecipe(context.Context, provider.Snapshot, r
 	p.calls++
 	return []provider.Output{{}}, nil
 }
-func (*permissionProvider) Advance(context.Context, provider.Snapshot, provider.Output, json.RawMessage) (provider.Progress, error) {
-	return provider.Progress{Done: true}, nil
-}
 func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 	for _, mode := range []string{"valid", "local tree", "source error", "empty", "missing chain", "null chain", "wrong chain", "root", "account", "invalid unused leaf", "invalid unused proof", "mutate chain", "root during HTTP", "reorg during HTTP"} {
 		t.Run(mode, func(t *testing.T) {
-			header := &types.Header{Number: big.NewInt(12)}
+			header := &types.Header{Number: big.NewInt(12), GasLimit: 30_000_000}
 			recipe := recipes.Recipe{}
 			hash, _ := recipes.HashRecipe(recipe)
 			snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: hash, RecipeBlock: 12, Root: common.HexToHash("0x04")}
@@ -164,12 +161,19 @@ func TestPlannerPermissionSourceRequiresValidChainBeforeReads(t *testing.T) {
 }
 
 func TestPlannerValidationDoesNotFetchPermissions(t *testing.T) {
-	header := &types.Header{Number: big.NewInt(12)}
-	snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: common.HexToHash("0x04"), Root: common.HexToHash("0x05"), RecipeBlock: 11}
-	payload, returned := validationWork(t, true)
+	header := &types.Header{Number: big.NewInt(12), GasLimit: 30_000_000}
+	recipe, payload, returned := validationWork(t, true)
+	hash, err := recipes.HashRecipe(recipe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := recipes.Snapshot{BlockNumber: 12, BlockHash: header.Hash(), Executor: common.HexToAddress("0x01"), Account: common.HexToAddress("0x02"), Caller: common.HexToAddress("0x03"), RecipeHash: hash, Root: common.HexToHash("0x05"), RecipeBlock: 11}
 	r := &validationReader{t: t, snapshot: snapshot, header: header, payload: payload, returned: returned}
 	plan := Plan{Recipe: snapshot, Snapshot: provider.Snapshot{Executor: snapshot.Executor}, Calldata: r.payload}
-	if err := recipes.ValidateExecutionWithResults(t.Context(), r, plan.Recipe, snapshot.Caller, plan.Calldata, nil); err != nil || r.simulations != 1 {
+	if err := recipes.ValidatePreparedBatch(t.Context(), r,
+		[]recipes.PreparedRecipe{{Snapshot: plan.Recipe, Recipe: recipe}},
+		[]recipes.ExecutorCall{{Executor: plan.Recipe.Executor, Data: plan.Calldata}},
+		[][]common.Hash{plan.Leaves}, []map[uint]string{plan.Results}, snapshot.Caller); err != nil || r.simulations != 1 {
 		t.Fatalf("existing plan validation failed: %v simulations%d", err, r.simulations)
 	}
 }

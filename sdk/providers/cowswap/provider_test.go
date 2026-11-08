@@ -70,7 +70,7 @@ func TestCoWViemDigestAndUIDGolden(t *testing.T) {
 		t.Fatal("UID is not digest/owner/big-endian expiry")
 	}
 }
-func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
+func TestAmbiguousPostReconcilesAcrossTicksAndRequiresConfirmedFill(t *testing.T) {
 	account := addr(3)
 	domain := protocolio.Domain("Gnosis Protocol", "v2", big.NewInt(1), addr(4))
 	posts, gets, quotes := 0, 0, 0
@@ -108,7 +108,7 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 				t.Error("wrong account order")
 			}
 			if crypto.Keccak256Hash([]byte(submitted.AppData)).Hex() != submitted.AppDataHash || submitted.QuoteID != 1 {
-				t.Error("POST omitted persisted full appData/hash/quote identity")
+				t.Error("POST omitted prepared full appData/hash/quote identity")
 			}
 			exists = true
 			w.WriteHeader(502)
@@ -120,7 +120,7 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 				return
 			}
 			if r.URL.Path != "/api/v1/orders/"+uid {
-				t.Error("UID changed after restart")
+				t.Error("UID changed across ticks")
 			}
 			_ = json.NewEncoder(w).Encode(wire.CowOrderStatus{UID: uid, Owner: account.Hex(), Status: status, SellAmount: "1000", BuyAmount: "1980", ValidTo: 1600})
 		default:
@@ -181,47 +181,39 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	var d prepared
 	_ = json.Unmarshal(out.Data, &d)
 	uid = d.UID
-	if _, e = p.Advance(context.Background(), snap, out, nil); e == nil {
+	if _, e = p.advance(context.Background(), snap, d); e == nil {
 		t.Fatal("pre-authorization snapshot accepted")
 	}
 	snap.BlockNumber = big.NewInt(13)
 	snap.BlockHash = testHeader(snap.BlockNumber).Hash()
-	if _, e = p.Advance(context.Background(), snap, out, nil); e == nil || posts != 0 {
+	if _, e = p.advance(context.Background(), snap, d); e == nil || posts != 0 {
 		t.Fatal("unapproved digest posted")
 	}
 	approved = true
 	snap.BlockHash = common.HexToHash("0xdead")
-	if _, e = p.Advance(context.Background(), snap, out, nil); e == nil || posts != 0 {
+	if _, e = p.advance(context.Background(), snap, d); e == nil || posts != 0 {
 		t.Fatal("noncanonical snapshot posted an order")
 	}
 	snap.BlockHash = testHeader(snap.BlockNumber).Hash()
 	gets = 0
-	result, e := p.Advance(context.Background(), snap, out, nil)
+	result, e := p.advance(context.Background(), snap, d)
 	if e != nil || result.Done || posts != 1 {
 		t.Fatalf("ambiguous post not retained: %+v %v", result, e)
 	}
-	// Reconstruct provider and persisted Output exactly as a process restart does.
-	encoded, _ := json.Marshal(out)
-	var restored provider.Output
-	_ = json.Unmarshal(encoded, &restored)
-	p, e = fixtureProvider(cfg, deps)
-	if e != nil {
-		t.Fatal(e)
-	}
-	result, e = p.Advance(context.Background(), snap, restored, result.State)
+	result, e = p.advance(context.Background(), snap, d)
 	if e != nil || result.Done || posts != 1 || gets != 2 {
-		t.Fatalf("restart duplicated or lost order: %+v %v, posts=%d gets=%d", result, e, posts, gets)
+		t.Fatalf("next tick duplicated or lost order: %+v %v, posts=%d gets=%d", result, e, posts, gets)
 	}
 	if quotes != 1 {
-		t.Fatal("recovery obtained a fresh quote")
+		t.Fatal("settlement obtained a fresh quote")
 	}
 	status = "fulfilled"
-	result, e = p.Advance(context.Background(), snap, restored, result.State)
+	result, e = p.advance(context.Background(), snap, d)
 	if e != nil || result.Done {
 		t.Fatal("API fulfilled accepted without confirmed on-chain fill")
 	}
 	filled = big.NewInt(1000)
-	result, e = p.Advance(context.Background(), snap, restored, result.State)
+	result, e = p.advance(context.Background(), snap, d)
 	if e != nil || !result.Done || result.Outcome != "settled" {
 		t.Fatalf("confirmed full fill not complete: %+v %v", result, e)
 	}
@@ -229,7 +221,7 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	snap.BlockNumber = big.NewInt(14)
 	snap.Timestamp = 2000
 	snap.BlockHash = testHeader(snap.BlockNumber).Hash()
-	result, e = p.Advance(context.Background(), snap, restored, result.State)
+	result, e = p.advance(context.Background(), snap, d)
 	if e != nil || !result.Done || result.Outcome != "expired" {
 		t.Fatalf("confirmed expiry did not finish as expired: %+v %v", result, e)
 	}
@@ -237,39 +229,8 @@ func TestRestartReconcilesAmbiguousPostAndRequiresConfirmedFill(t *testing.T) {
 	snap.Timestamp = 1000
 	snap.BlockHash = testHeader(snap.BlockNumber).Hash()
 	filled = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
-	result, e = p.Advance(context.Background(), snap, restored, result.State)
+	result, e = p.advance(context.Background(), snap, d)
 	if e == nil || result.Done {
 		t.Fatal("invalidation sentinel marked fulfilled")
-	}
-	savedPayload := restored.Actions[cfg.Action]
-	restored.Actions[cfg.Action] = append([]byte(nil), savedPayload...)
-	restored.Actions[cfg.Action][len(savedPayload)-1] ^= 1
-	if _, e = p.Advance(context.Background(), snap, restored, nil); e == nil {
-		t.Fatal("calldata drift accepted")
-	}
-	restored.Actions[cfg.Action] = savedPayload
-	restored.Inputs[0] = "990"
-	if _, e = p.Advance(context.Background(), snap, restored, nil); e == nil {
-		t.Fatal("gross/net numerical input drift accepted")
-	}
-	restored.Inputs[0] = "1000"
-	for _, version := range []int{0, 2} {
-		d.Version = version
-		restored.Data, _ = json.Marshal(d)
-		if _, e = p.Advance(context.Background(), snap, restored, nil); e == nil {
-			t.Fatal("unsupported persisted format accepted")
-		}
-	}
-	d.Version = 1
-	d.UID = "0x00"
-	restored.Data, _ = json.Marshal(d)
-	if _, e = p.Advance(context.Background(), snap, restored, nil); e == nil {
-		t.Fatal("tampered persisted UID accepted")
-	}
-	d.UID = uid
-	d.FullAppData += " "
-	restored.Data, _ = json.Marshal(d)
-	if _, e = p.Advance(context.Background(), snap, restored, nil); e == nil {
-		t.Fatal("tampered full appData accepted")
 	}
 }
