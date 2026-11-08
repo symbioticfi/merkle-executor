@@ -37,9 +37,6 @@ func (p *exclusiveRecipeProvider) PrepareRecipe(context.Context, provider.Snapsh
 	p.calls++
 	return []provider.Output{{Results: p.results}}, nil
 }
-func (*exclusiveRecipeProvider) Advance(context.Context, provider.Snapshot, provider.Output, json.RawMessage) (provider.Progress, error) {
-	return provider.Progress{Done: true}, nil
-}
 func (p *exclusiveRecipeProvider) ExclusiveOutputTargets(provider.Output) (map[string]common.Address, error) {
 	return map[string]common.Address{"0:0": p.target}, nil
 }
@@ -77,7 +74,7 @@ func TestPlannerExclusiveRecipePreflightBeforeProviderIO(t *testing.T) {
 	}
 	for _, mode := range []string{"valid", "unowned target", "direct Call", "early witness", "late witness", "conflicting witness", "invalid witness index", "wrong witness value"} {
 		t.Run(mode, func(t *testing.T) {
-			header := &types.Header{Number: big.NewInt(12)}
+			header := &types.Header{Number: big.NewInt(12), GasLimit: 30_000_000}
 			leaf := recipes.Leaf{Target: target, Value: new(big.Int), Data: []byte{1, 2, 3, 4}, DataMask: make([]byte, 4)}
 			var err error
 			leaf.Hash, err = recipes.HashLeaf(leaf)

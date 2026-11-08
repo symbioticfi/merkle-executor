@@ -1,7 +1,6 @@
 package keeper
 
 import (
-	"bytes"
 	"context"
 	"maps"
 	"math/big"
@@ -40,7 +39,7 @@ type Plan struct {
 
 // PermissionSource supplies encoded artifacts; the SDK validates every leaf and
 // proof itself. Errors must omit credentials, URLs and remote payloads.
-// It is called only during new preparation, never durable recovery.
+// It is called only during preparation; pending RAM tasks retain their identity.
 type PermissionSource interface {
 	PermissionTree(context.Context, *big.Int, recipes.Snapshot) ([]byte, error)
 }
@@ -51,215 +50,182 @@ type Planner struct {
 	ChainID          *big.Int
 	Caller           common.Address
 	Confirmations    uint64
+	MaxGas           uint64 // Zero uses the conservative 16,777,216 gas budget.
 	RecipeCache      *recipes.RecipeCache
 }
 
 func (p *Planner) Prepare(ctx context.Context, strategy Strategy) (Plan, error) {
-	var plan Plan
-	if p.PermissionSource != nil && (p.ChainID == nil || p.ChainID.Sign() <= 0 || p.ChainID.BitLen() > 256) {
-		return plan, errors.New("permission source requires valid chain ID")
+	batch, err := p.PrepareExecution(ctx, []Strategy{strategy})
+	if len(batch.Members) == 0 {
+		return Plan{}, err
 	}
-	var returned []byte
+	return batch.Members[0].Plan, err
+}
+
+// buildPlan fills authorized data only. The caller owns discovery and final admission.
+func (p *Planner) buildPlan(ctx context.Context, strategy Strategy, snap recipes.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (Plan, bool, error) {
+	var plan Plan
+	var err error
 	selfContained := false
-	options := recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache, VerifySimulation: func(raw []byte) error {
-		if err := recipes.VerifyResults(plan.Calldata, raw, plan.Results); err != nil {
+
+	if strategy.Config.RecipeHash != "" && snap.RecipeHash != common.HexToHash(strategy.Config.RecipeHash) {
+		return plan, false, errors.New("configured recipe hash mismatch")
+	}
+	if tree.Root != snap.Root {
+		return plan, false, errors.New("permission tree does not match active account root")
+	}
+	if p.PermissionSource != nil && tree.ChainID == nil || tree.ChainID != nil && tree.ChainID.Cmp(p.ChainID) != 0 {
+		return plan, false, errors.New("permission tree chain mismatch")
+	}
+	if tree.Account != nil && *tree.Account != snap.Account {
+		return plan, false, errors.New("permission tree account mismatch")
+	}
+	// Constant action sets cannot adapt another execution to changed state.
+	// Leave them as one call without probing an identical second execution.
+	for _, step := range recipe.Steps {
+		if step[0] == recipes.Read || step[0] == recipes.Call {
+			selfContained = true
+			break
+		}
+	}
+	plan.Recipe = snap
+	plan.Snapshot = provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snap.BlockNumber), BlockHash: snap.BlockHash, Timestamp: snap.Timestamp, Executor: snap.Executor, Account: snap.Account, Caller: snap.Caller, RecipeHash: snap.RecipeHash, Root: snap.Root}
+	inputs := make(map[uint]string)
+	derivedInputs := make(map[uint]string)
+	actions := make(map[string]hexutil.Bytes)
+	var skips []uint
+	var expressions []recipes.Value
+	owned := make(map[uint]bool)
+	actionOwners := map[string]bool{}
+	requirements := make([]RecipeRequirements, len(strategy.Providers))
+	ready := make([]bool, len(strategy.Providers))
+	plan.Outputs = make([][]provider.Output, len(strategy.Providers))
+	prefix := recipes.PrefixRuntime{Tree: tree, Inputs: inputs, Actions: actions, AvailableInputs: map[uint]bool{}, BlockedActions: map[string]bool{}}
+	for i, runtime := range strategy.Providers {
+		requirements[i], err = runtime.RecipeRequirements(cloneSnapshot(plan.Snapshot), recipes.CloneRecipe(recipe), recipes.CloneTree(tree))
+		if err != nil {
+			return plan, false, errors.Errorf("invalid authenticated recipe: %w", err)
+		}
+		if len(requirements[i].Inputs)+len(requirements[i].Actions)+len(requirements[i].Values)+len(requirements[i].ExclusiveTargets) != 0 {
+			selfContained = false
+		}
+		expressions = append(expressions, requirements[i].Values...)
+		for _, index := range requirements[i].Inputs {
+			if owned[index] {
+				return plan, false, errors.New("multiple providers own the same recipe input")
+			}
+			owned[index] = true
+			if len(requirements[i].Values) == 0 {
+				prefix.AvailableInputs[index] = true
+			}
+		}
+		for _, key := range requirements[i].Actions {
+			if actionOwners[key] {
+				return plan, false, errors.New("multiple providers own the same recipe action")
+			}
+			actionOwners[key] = true
+			if len(requirements[i].Values) > 0 {
+				prefix.BlockedActions[key] = true
+			}
+		}
+	}
+	if err = ValidateRecipeComposition(recipe, tree, requirements); err != nil {
+		return plan, false, err
+	}
+	anchors, err := recipes.AnchoredInputs(recipe, owned)
+	if err != nil {
+		return plan, false, err
+	}
+	for _, anchor := range anchors {
+		expressions = append(expressions, recipes.EconomicExpressions(anchor)...)
+	}
+	if err = recipes.ValidatePrefix(recipe, expressions, prefix); err != nil {
+		return plan, false, err
+	}
+	resolve := func(i int, results map[uint]*big.Int) error {
+		var outputs []provider.Output
+		copyResults := make(map[uint]*big.Int, len(results))
+		for index, value := range results {
+			copyResults[index] = new(big.Int).Set(value)
+		}
+		outputs, err = strategy.Providers[i].PrepareRecipe(ctx, cloneSnapshot(plan.Snapshot), recipes.CloneRecipe(recipe), recipes.CloneTree(tree), copyResults)
+		if err != nil {
+			return errors.Errorf("resolve runtime: %w", err)
+		}
+		if len(outputs) == 0 {
+			return errors.New("provider returned no execution outputs")
+		}
+		frozen := make([]provider.Output, len(outputs))
+		for j, out := range outputs {
+			frozen[j] = out.Clone()
+		}
+		outputs = frozen
+		if err = merge(inputs, actions, &skips, outputs[0]); err != nil {
 			return err
 		}
-		returned = bytes.Clone(raw)
+		plan.Outputs[i] = outputs
+		ready[i] = true
 		return nil
-	}}
-	err := recipes.PrepareExecution(ctx, p.Chain, common.HexToAddress(strategy.Config.Executor), common.HexToAddress(strategy.Config.Account), p.Caller, options, func(snap recipes.Snapshot, recipe recipes.Recipe) ([]byte, []common.Hash, error) {
-		if strategy.Config.RecipeHash != "" && snap.RecipeHash != common.HexToHash(strategy.Config.RecipeHash) {
-			return nil, nil, errors.New("configured recipe hash mismatch")
-		}
-		tree, err := p.permissionTree(ctx, strategy.Config.Tree, snap)
-		if err != nil {
-			return nil, nil, errors.Errorf("load permission tree: %w", err)
-		}
-		if tree.Root != snap.Root {
-			return nil, nil, errors.New("permission tree does not match active account root")
-		}
-		if p.PermissionSource != nil && tree.ChainID == nil || tree.ChainID != nil && tree.ChainID.Cmp(p.ChainID) != 0 {
-			return nil, nil, errors.New("permission tree chain mismatch")
-		}
-		if tree.Account != nil && *tree.Account != snap.Account {
-			return nil, nil, errors.New("permission tree account mismatch")
-		}
-		// Constant action sets cannot adapt another execution to changed state.
-		// Leave them as one call without probing an identical second execution.
-		for _, step := range recipe.Steps {
-			if step[0] == recipes.Read || step[0] == recipes.Call {
-				selfContained = true
-				break
+	}
+	for i := range strategy.Providers {
+		if len(requirements[i].Values) == 0 {
+			if err = resolve(i, nil); err != nil {
+				return plan, false, err
 			}
 		}
-		plan.Recipe = snap
-		plan.Snapshot = provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snap.BlockNumber), BlockHash: snap.BlockHash, Timestamp: snap.Timestamp, Executor: snap.Executor, Account: snap.Account, Caller: snap.Caller, RecipeHash: snap.RecipeHash, Root: snap.Root}
-		inputs := make(map[uint]string)
-		derivedInputs := make(map[uint]string)
-		actions := make(map[string]hexutil.Bytes)
-		var skips []uint
-		var expressions []recipes.Value
-		owned := make(map[uint]bool)
-		actionOwners := map[string]bool{}
-		requirements := make([]RecipeRequirements, len(strategy.Providers))
-		ready := make([]bool, len(strategy.Providers))
-		plan.Outputs = make([][]provider.Output, len(strategy.Providers))
-		prefix := recipes.PrefixRuntime{Tree: tree, Inputs: inputs, Actions: actions, AvailableInputs: map[uint]bool{}, BlockedActions: map[string]bool{}}
-		for i, runtime := range strategy.Providers {
-			requirements[i], err = runtime.RecipeRequirements(plan.Snapshot, recipes.CloneRecipe(recipe), recipes.CloneTree(tree))
-			if err != nil {
-				return nil, nil, errors.Errorf("invalid authenticated recipe: %w", err)
-			}
-			if len(requirements[i].Inputs)+len(requirements[i].Actions)+len(requirements[i].Values)+len(requirements[i].ExclusiveTargets) != 0 {
-				selfContained = false
-			}
-			expressions = append(expressions, requirements[i].Values...)
-			for _, index := range requirements[i].Inputs {
-				if owned[index] {
-					return nil, nil, errors.New("multiple providers own the same recipe input")
-				}
-				owned[index] = true
-				if len(requirements[i].Values) == 0 {
-					prefix.AvailableInputs[index] = true
-				}
-			}
-			for _, key := range requirements[i].Actions {
-				if actionOwners[key] {
-					return nil, nil, errors.New("multiple providers own the same recipe action")
-				}
-				actionOwners[key] = true
-				if len(requirements[i].Values) > 0 {
-					prefix.BlockedActions[key] = true
-				}
-			}
-		}
-		if err = ValidateRecipeComposition(recipe, tree, requirements); err != nil {
-			return nil, nil, err
-		}
-		anchors, err := recipes.AnchoredInputs(recipe, owned)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, anchor := range anchors {
-			expressions = append(expressions, recipes.EconomicExpressions(anchor)...)
-		}
-		if err = recipes.ValidatePrefix(recipe, expressions, prefix); err != nil {
-			return nil, nil, err
-		}
-		resolve := func(i int, results map[uint]*big.Int) error {
-			var outputs []provider.Output
-			copyResults := make(map[uint]*big.Int, len(results))
-			for index, value := range results {
-				copyResults[index] = new(big.Int).Set(value)
-			}
-			outputs, err = strategy.Providers[i].PrepareRecipe(ctx, plan.Snapshot, recipes.CloneRecipe(recipe), recipes.CloneTree(tree), copyResults)
-			if err != nil {
-				return errors.Errorf("resolve runtime: %w", err)
-			}
-			if len(outputs) == 0 {
-				return errors.New("provider returned no execution outputs")
-			}
-			if err = merge(inputs, actions, &skips, outputs[0]); err != nil {
-				return err
-			}
-			plan.Outputs[i] = outputs
-			ready[i] = true
-			return nil
-		}
-		for i := range strategy.Providers {
-			if len(requirements[i].Values) == 0 {
-				if err = resolve(i, nil); err != nil {
-					return nil, nil, err
-				}
-			}
-		}
-		prefix.SkipSteps = skips
-		prefix.AvailableInputs = nil
-		resolved, err := recipes.ResolveValuesWithRuntime(ctx, p.Chain, snap, recipe, expressions, prefix)
-		if err != nil {
-			return nil, nil, err
-		}
-		for index, anchor := range anchors {
-			value, e := recipes.EconomicResult(anchor, resolved)
-			if e != nil {
-				return nil, nil, e
-			}
-			inputs[index] = value.String()
-			derivedInputs[index] = value.String()
-		}
-		plan.Results = recipes.ResultsWitness(resolved)
-		for i := range strategy.Providers {
-			if !ready[i] {
-				if err = resolve(i, resolved); err != nil {
-					return nil, nil, err
-				}
-			}
-		}
-		if plan.Results == nil {
-			plan.Results = map[uint]string{}
-		}
-		for _, outputs := range plan.Outputs {
-			for _, output := range outputs {
-				for index, value := range output.Results {
-					if old, ok := plan.Results[index]; ok && old != value {
-						return nil, nil, errors.New("provider prefix witness conflicts with recipe result")
-					}
-					plan.Results[index] = value
-				}
-			}
-		}
-		plan.Calldata, plan.Leaves, err = assembleOutputs(recipe, tree, derivedInputs, plan.Outputs)
-		if err != nil {
-			return nil, nil, errors.Errorf("assemble runtime: %w", err)
-		}
-		if err := ValidatePlanComposition(plan.Calldata, strategy.Providers, plan.Outputs); err != nil {
-			return nil, nil, err
-		}
-		return plan.Calldata, plan.Leaves, nil
-	})
+	}
+	prefix.SkipSteps = skips
+	prefix.AvailableInputs = nil
+	resolved, err := recipes.ResolveValuesWithRuntime(ctx, p.Chain, snap, recipe, expressions, prefix)
 	if err != nil {
-		return plan, err
+		return plan, false, err
 	}
-	// Readiness follows full simulation and both canonical closing guards.
-	work, err := recipes.HasWork(plan.Calldata, returned)
-	if err != nil {
-		return plan, err
+	for index, anchor := range anchors {
+		value, e := recipes.EconomicResult(anchor, resolved)
+		if e != nil {
+			return plan, false, e
+		}
+		inputs[index] = value.String()
+		derivedInputs[index] = value.String()
 	}
-	if !work {
-		return plan, provider.ErrNotReady
+	plan.Results = recipes.ResultsWitness(resolved)
+	for i := range strategy.Providers {
+		if !ready[i] {
+			if err = resolve(i, resolved); err != nil {
+				return plan, false, err
+			}
+		}
 	}
-	if !selfContained || len(plan.Results) != 0 {
-		return plan, nil
+	if plan.Results == nil {
+		plan.Results = map[uint]string{}
 	}
 	for _, outputs := range plan.Outputs {
 		for _, output := range outputs {
-			if len(output.Results)+len(output.Inputs)+len(output.Actions)+len(output.SkipSteps) != 0 {
-				return plan, nil
+			for index, value := range output.Results {
+				if old, ok := plan.Results[index]; ok && old != value {
+					return plan, false, errors.New("provider prefix witness conflicts with recipe result")
+				}
+				plan.Results[index] = value
 			}
 		}
 	}
-	backend, ok := p.Chain.(recipes.BatchReader)
-	if !ok {
-		return plan, nil
-	}
-	header, err := p.Chain.HeaderByNumber(ctx, new(big.Int).SetUint64(plan.Recipe.BlockNumber))
+	plan.Calldata, plan.Leaves, err = assembleOutputs(recipe, tree, derivedInputs, plan.Outputs)
 	if err != nil {
-		return plan, err
+		return plan, false, errors.Errorf("assemble runtime: %w", err)
 	}
-	if err = validHeader(header, new(big.Int).SetUint64(plan.Recipe.BlockNumber)); err != nil {
-		return plan, err
+	if err := ValidatePlanComposition(plan.Calldata, strategy.Providers, plan.Outputs); err != nil {
+		return plan, false, err
 	}
-	plan.Calldata, err = recipes.BatchExecution(ctx, backend, plan.Recipe, plan.Calldata, header.GasLimit)
-	if err != nil {
-		return plan, err
+	if selfContained && len(plan.Results) == 0 {
+		for _, group := range plan.Outputs {
+			for _, out := range group {
+				if len(out.Results)+len(out.Inputs)+len(out.Actions)+len(out.SkipSteps) != 0 || out.Task != nil {
+					selfContained = false
+				}
+			}
+		}
 	}
-	// Close metadata and canonical guards after the entire stateful preparation.
-	if err = recipes.ValidateSnapshot(ctx, p.Chain, plan.Recipe, p.Caller); err != nil {
-		return plan, err
-	}
-
-	return plan, nil
+	return plan, selfContained && len(plan.Results) == 0, nil
 }
 
 func (p *Planner) permissionTree(ctx context.Context, path string, snapshot recipes.Snapshot) (*recipes.Tree, error) {

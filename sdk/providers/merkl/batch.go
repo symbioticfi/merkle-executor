@@ -1,7 +1,6 @@
 package merkl
 
 import (
-	"context"
 	"encoding/json"
 	"math/big"
 	"sort"
@@ -9,7 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	multicall "github.com/symbioticfi/merkle-executor/sdk/bindings/multicall3"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/derived"
@@ -17,7 +15,7 @@ import (
 
 // Discovery selects unclaimed rewards; each execution still contains exactly
 // one self-claim and the distributor verifies its proof on chain.
-func (p *Automatic) prepareAll(ctx context.Context, s provider.Snapshot, claim recipeClaim, entries []wire.MerklEntry) ([]provider.Output, error) {
+func (p *Automatic) prepareAll(s provider.Snapshot, claim recipeClaim, entries []wire.MerklEntry, reads *rewardReads) ([]provider.Output, error) {
 	var tokens []string
 	for _, entry := range entries {
 		if entry.Chain.ID != s.ChainID.Int64() {
@@ -33,7 +31,6 @@ func (p *Automatic) prepareAll(ctx context.Context, s provider.Snapshot, claim r
 	}
 	sort.Strings(tokens)
 	var runtimes []*Provider
-	var requests []protocolio.ReadRequest
 	for i, token := range tokens {
 		if i > 0 && tokens[i-1] == token {
 			return nil, errors.New("Merkl duplicate reward token")
@@ -44,25 +41,12 @@ func (p *Automatic) prepareAll(ctx context.Context, s provider.Snapshot, claim r
 		if err != nil {
 			return nil, err
 		}
-		data, err := runtime.batchPayload(s.Account)
-		if err != nil {
-			return nil, err
-		}
-		requests = append(requests, protocolio.ContractRead(runtime.multicall, data, s.BlockNumber, false))
 		runtimes = append(runtimes, runtime)
 	}
-	reads, err := protocolio.ReadGroup(ctx, p.deps.Chain, requests...)
-	if err != nil {
-		return nil, err
-	}
 	var outputs []provider.Output
-	for i, runtime := range runtimes {
+	for _, runtime := range runtimes {
 		prepared, err := runtime.prepareRewards(s, entries, func() ([]multicall.Multicall3Result, error) {
-			raw, err := reads.At(i).CallData()
-			if err != nil {
-				return nil, err
-			}
-			return runtime.decodeBatch(raw)
+			return reads.forProvider(runtime)
 		})
 		if err != nil {
 			return nil, err
@@ -83,11 +67,7 @@ func (p *Automatic) prepareAll(ctx context.Context, s provider.Snapshot, claim r
 			return nil, err
 		}
 		prepared.Actions[claim.cfg.Action] = payload
-		encoded, err := derived.Encode(automaticPolicy, automaticConfig{Claims: []Config{runtime.cfg}}, prepared, true)
-		if err != nil {
-			return nil, err
-		}
-		outputs = append(outputs, encoded...)
+		outputs = append(outputs, prepared)
 	}
 	if len(outputs) == 0 {
 		return nil, errors.Errorf("%w: no unclaimed Merkl rewards", provider.ErrNotReady)

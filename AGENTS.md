@@ -5,15 +5,16 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
 - Go 1.27.3, Cobra CLI, strict YAML, go-errors wrapping, logr structured logs,
   context-aware I/O and table-driven tests. Keep configuration values in YAML.
 - Generic packages may not branch on protocol names. Native protocol calls, reads,
-  gates, amount selection, claims, authorization and balance guards belong in the
+  gates, amount selection, authorization and balance guards belong in the
   committed recipe. The isolated `sdk/providers/aave` provider may supply one
   authenticated borrow-capacity Input through its eth_call-only prefix probe;
   the recipe still caps the actual amount and enforces its health floor. Other
   protocol providers serve CoW orders, Liquid Lane HTTP RFQ and Merkl HTTP proofs.
-  Merkl and 3F standalone claim providers discover eligible rewards/requests and
-  fill one authorized claim per execution; the SDK batches those executions.
-  Native claim validity remains enforced by the distributor/request contracts;
-  the planner handles exact recipe constraints.
+  The isolated `sdk/providers/claims` provider may discover ready native issuer
+  requests and select native claim amounts for one unconditional authorized call
+  with no recipe queries or bindings. Native issuer, Merkl and 3F standalone
+  claims are stateless; the SDK batches their authorized executions unchanged.
+  Native contracts enforce claim validity; the planner enforces recipe constraints.
   Liquid Lane connector acquisition and calldata construction belong to vault-solver's
   Merkle extension. External signed terms come from RFQ/backend integrations and
   are validated by contracts; the daemon does not size connector swaps or verify
@@ -27,8 +28,9 @@ The service is independently maintained; its architecture is in `docs/DESIGN.md`
   provenance and deliberate subset limitations belong in `sdk/schemas`.
 - Runtime providers may fill authorized data only. Do not mutate recipe instructions,
   permission masks, targets or proofs to make a transaction succeed.
-- A failed/ambiguous submission retains nonce ownership. Persist before network
-  mutations; preserve external order identity through retries and restarts.
+- A failed/ambiguous submission retains nonce ownership in RAM. Capture signed
+  identity before network mutations; preserve external order identity through
+  in-process retries. Runtime state is RAM only, with no restart recovery.
 - Verify with `make check` and `make integration`; the latter uses an ephemeral
   local Anvil and no external chain. Report local, API-fixture and deployment
   evidence separately. Never use live signing credentials for tests.

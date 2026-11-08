@@ -2,15 +2,45 @@ package config
 
 import (
 	"math"
-	"time"
+	"strconv"
+	"strings"
 
 	"github.com/go-errors/errors"
-	engine "github.com/symbioticfi/merkle-executor/sdk/txengine"
+	"github.com/symbioticfi/merkle-executor/sdk/transaction"
+	"gopkg.in/yaml.v3"
 )
 
-// TxManager exposes the deployment's absolute transaction spend limit.
+// TxManager exposes deployment transaction budgets.
 type TxManager struct {
 	MaxFeeGwei float64 `yaml:"maxFeeGwei"`
+	MaxGas     uint64  `yaml:"maxGas"`
+}
+
+func (c *TxManager) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return errors.New("txManager must contain transaction budgets")
+	}
+	for i := 0; i < len(node.Content); i += 2 {
+		key, value := node.Content[i], node.Content[i+1]
+		switch key.Value {
+		case "maxFeeGwei":
+		case "maxGas":
+			// yaml.v3 otherwise truncates fractional numbers and can round overflow.
+			if value.Kind == yaml.AliasNode {
+				value = value.Alias
+			}
+			if value.Tag != "!!int" {
+				return errors.New("txManager.maxGas must be a uint64 integer")
+			}
+			if _, err := strconv.ParseUint(strings.TrimPrefix(strings.ReplaceAll(value.Value, "_", ""), "+"), 0, 64); err != nil {
+				return errors.New("txManager.maxGas must be a uint64 integer")
+			}
+		default:
+			return errors.New("unknown txManager field")
+		}
+	}
+	type plain TxManager
+	return node.Decode((*plain)(c))
 }
 
 func (c TxManager) validate(required bool) error {
@@ -20,16 +50,6 @@ func (c TxManager) validate(required bool) error {
 	return nil
 }
 
-// EngineConfig is the fixed runtime policy; only its fee ceiling is configurable.
-func (c TxManager) EngineConfig() engine.Config {
-	return engine.Config{
-		Confirmations: DefaultConfirmations, MaxFeeGwei: c.MaxFeeGwei, PollInterval: DefaultTransactionPollInterval,
-		BroadcastTimeout: 5 * time.Second, AccountPollInterval: 30 * time.Second,
-		ReplacementInterval: 30 * time.Second, PendingTimeout: 5 * time.Minute, ShutdownTimeout: time.Minute,
-		Horizon: engine.HorizonConfig{
-			MaxBlocks: 6, BlockTime: 12 * time.Second, TipFloorGwei: 0.02, FullBlockTipGwei: 0.1,
-			CongestedTipFloorGwei: 0.2, CongestedTipCapGwei: 15, CongestedRewardBlocks: 3, CongestedRewardPercentile: 50,
-			EscalateAfterFullBlocks: 2, StallAfterBlocks: 3, GasHeadroomBps: 500, FallbackGasHeadroomBps: 1000,
-		},
-	}
+func (c TxManager) SenderConfig() transaction.Config {
+	return transaction.Config{Confirmations: DefaultConfirmations, MaxFeeGwei: c.MaxFeeGwei, MaxGas: c.MaxGas}
 }

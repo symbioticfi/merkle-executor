@@ -1,58 +1,57 @@
-# Shared Merkle execution
+# Shared SDK and host ownership
 
-`merkle-executor/sdk` is an independent Go module. The daemon keeps its CLI,
-strict YAML, credentials, provider selection, telemetry setup and process lifecycle.
-The SDK owns recipe/tree/proof validation, pinned discovery, bounded input assembly,
-simulation, canonical evidence, durable recovery and opt-in providers. Its RPC,
-signer and transaction-engine components support a standalone host without requiring
-each consumer to run a separate sender. Components start only on explicit host calls.
+`github.com/symbioticfi/merkle-executor/sdk` is an independently versioned module.
+External hosts pin immutable `sdk/vX.Y.Z` releases. This repository builds its
+daemon against `./sdk` so local, CI and container checks use the same source.
+`make check` and `make integration` check both modules; the SDK also works alone.
 
-Vault-solver imports an immutable SDK module version and supplies its existing
-transaction manager. Its adapter does not construct another manager or signer.
-Signed originals and replacements are journaled before broadcast. A durable job
-reserves the common signer lane; uncertain results and restart retain it until
-canonical evidence and durable workflow acknowledgement permit release.
+The host supplies RPC/HTTP transports, signing credentials, provider registration,
+logging/metrics and process scheduling. SDK imports never read environment values
+or start workers. Hosts may supply their existing common sender through
+`keeper.Sender`; constructing another signer owner is unnecessary.
 
-The repository contains two modules. `make check` and `make integration` test
-both explicitly. For local SDK editing, an untracked Go workspace can include
-`.` and `./sdk`; production module requirements remain immutable. SDK imports
-are checked to exclude daemon and vault-solver code. All ABI artifacts, bindings
-and protocol wire schemas are owned and regenerated inside the SDK. `make -C sdk generate` works without the daemon module.
+The host calls `Keeper.Tick(context)` repeatedly and can inspect `Pending()` before
+ending a one-shot session. `keeper.Planner` groups discovery and final validation
+across executors. `Prepare` prepares one strategy; `PrepareExecution` selects one
+atomic direct, same-executor or delegated envelope. Prepared bytes go unchanged
+to sender admission. Supply one shared budget to `Planner.MaxGas` and
+`transaction.Config.MaxGas` (zero defaults to 16,777,216); the fresh block gas
+limit also caps admission. Configuration must stay fixed for a Keeper's lifetime;
+strategy names must be nonempty and unique so settlement ownership is unambiguous.
 
-The SDK includes CoW, Merkl, 3F claim discovery and Liquid Lane consumer RFQ providers. Vault-specific
-connector and 3F auction feeds, sizing and calldata construction remain in
-vault-solver, using the SDK's recipe-aware provider interface.
+At the recipe layer, use `recipes.DiscoverBatch` followed by
+`recipes.ValidatePreparedBatch` for both one executor and many. One executor uses
+one-element slices. The standalone discovery, preparation and validation helpers
+are removed, along with `PreparationOptions.VerifySimulation`; supply numerical
+witnesses to the shared validator. Both sizes receive the same commitment,
+identity, root, leaf-role, simulation and canonical-block checks.
 
-The public SDK downloads through the Go module proxy. Local, CI and container
-builds need no GitHub token:
+Providers implement `RecipeRequirements` and `PrepareRecipe`. They receive only
+an authenticated recipe/tree and snapshot. Outputs contain authorized inputs,
+masked actions, witnesses and optionally a process-local `provider.Task`.
+Stateless providers return no task. A task implements
+`Advance(context.Context, provider.Snapshot) (provider.Progress, error)` and owns
+its typed progress in RAM. It runs only after canonical authorization, retaining
+exact order identity across in-process retries. Account reservations last until
+all tasks finish. Prepared plans are process-local and cannot be serialized into
+restart recovery.
 
-```sh
-docker build --build-arg VERSION=release --build-arg COMMIT="$(git rev-parse HEAD)" \
-  --build-arg DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -f deploy/Dockerfile -t merkle-executor .
-docker run --rm merkle-executor version
-```
+Hosts may register `providers/claims.NewAutomatic` for standalone native issuer
+claims. [Provider behavior and supported shapes](PROVIDERS.md#native-issuer-claims)
+describe this stateless integration; generic admission and full simulation still apply.
 
-`make build` accepts the same `VERSION`, `COMMIT`, and `DATE` metadata. CI builds
-an image with explicit values and checks its `version` output. The SDK remains
-pinned to an immutable module revision; local `go.work` files are excluded from
-the container context.
+`keeper.Planner.PermissionSource` supplies permission artifact bytes, and the SDK
+validates every leaf/proof plus chain/account/root identity itself. The built-in
+source resolves the pinned account adapter and retrieves the backend certificate.
+SDK hosts can instead use a local immutable tree file. Neither source can bypass
+closing metadata, role, simulation or canonical guards.
 
-The optional `keeper.Planner.PermissionSource` accepts context, a copied chain ID and
-an authenticated recipe snapshot, and returns encoded permission JSON. The SDK still
-owns `DecodeTree`, verifies every leaf/proof, requires the source response's chain ID,
-and checks the active root and optional account before providers run. Source errors
-must be sanitized; their wrapped causes remain available for cancellation handling.
-Omitting this seam retains `keeper.Config.Tree` local-file behavior for SDK consumers.
+Liquid Lane connector acquisition and calldata construction, and host-specific
+3F auction feeds/sizing, remain in vault-solver. Contract validation of external
+signed terms remains authoritative. This repository does not change or migrate
+other repositories automatically.
 
-The daemon derives accounts at startup and uses curator-backend for this seam. It
-fetches only during new preparation, preserving saved-attempt and external-order
-recovery during backend outages. The daemon constructs SDK Merkl, CoW and RFQ
-providers with its HTTP/RPC clients. A 3F claim provider uses the same pinned RPC
-client to enumerate owned, withdrawable requests for a single-claim recipe.
-Liquid Lane connector acquisition and calldata construction belong to vault-solver's
-Merkle extension. External signed terms come from RFQ/backend integrations and
-are validated by contracts. The daemon does not size connector swaps or verify
-their signatures. The SDK applies generic permission/runtime validation, full
-execution simulation and canonical receipt checks. Protocol policy stays in
-isolated provider packages; generic execution does not branch on protocol names.
+This rewrite removes `state`, `submission`, `txmanager` and `txengine`, including
+Store, Persist, Hold/Release and recovery APIs. Integrators must migrate to the RAM
+contracts. There is no compatibility shim or restart guarantee. See
+[transaction ownership](TRANSACTIONS.md) before deploying the new runtime.

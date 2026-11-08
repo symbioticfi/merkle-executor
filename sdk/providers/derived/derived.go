@@ -1,10 +1,8 @@
-// Package derived implements protocol-neutral authenticated runtime envelopes.
+// Package derived validates authenticated runtime fields.
 package derived
 
 import (
 	"bytes"
-	"encoding/json"
-	"io"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -15,71 +13,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
-
-type Envelope struct {
-	Version int             `json:"version"`
-	Policy  string          `json:"policy"`
-	Config  json.RawMessage `json:"config,omitempty"`
-	Output  provider.Output `json:"output"`
-	Matched bool            `json:"matched"`
-}
-
-func Encode(policy string, cfg any, inner provider.Output, matched bool) ([]provider.Output, error) {
-	var raw json.RawMessage
-	var err error
-	if matched {
-		raw, err = json.Marshal(cfg)
-		if err != nil {
-			return nil, err
-		}
-	}
-	data, err := json.Marshal(Envelope{Version: 1, Policy: policy, Config: raw, Output: inner, Matched: matched})
-	if err != nil {
-		return nil, err
-	}
-	outer := inner
-	outer.Data = data
-	return []provider.Output{outer}, nil
-}
-
-func Decode(policy string, out provider.Output, cfg any) (provider.Output, bool, error) {
-	var envelope Envelope
-	if err := StrictJSON(out.Data, &envelope); err != nil {
-		return provider.Output{}, false, err
-	}
-	if envelope.Version != 1 || envelope.Policy != policy {
-		return provider.Output{}, false, errors.New("persisted derived provider version or policy mismatch")
-	}
-	inner := out
-	inner.Data = envelope.Output.Data
-	actual, _ := json.Marshal(inner)
-	expected, _ := json.Marshal(envelope.Output)
-	if !bytes.Equal(actual, expected) {
-		return provider.Output{}, false, errors.New("persisted derived output differs from its immutable envelope")
-	}
-	if !envelope.Matched {
-		if len(envelope.Config) != 0 || len(inner.Inputs) != 0 || len(inner.Actions) != 0 || len(inner.SkipSteps) != 0 || len(inner.Data) != 0 || len(inner.Results) != 0 {
-			return provider.Output{}, false, errors.New("invalid unmatched provider envelope")
-		}
-		return inner, false, nil
-	}
-	if err := StrictJSON(envelope.Config, cfg); err != nil {
-		return provider.Output{}, false, err
-	}
-	return inner, true, nil
-}
-
-func StrictJSON(raw []byte, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return errors.New("malformed persisted derived provider data")
-	}
-	if err := decoder.Decode(new(any)); err != io.EOF {
-		return errors.New("multiple persisted derived provider values")
-	}
-	return nil
-}
 
 type SignTemplate struct {
 	Action recipes.ManagedAction
@@ -181,7 +114,7 @@ func Requirements(template SignTemplate, economic []recipes.EconomicValue, mutab
 	return requirements, nil
 }
 
-// BindOutput proves every committed binding leaves the persisted signed bytes
+// BindOutput proves every committed binding leaves the selected signed bytes
 // exactly unchanged. Quoted external fields may fill their declared inputs;
 // literals/results must equal the selected payload word.
 func BindOutput(template SignTemplate, payload []byte, results map[uint]*big.Int, out *provider.Output) error {
@@ -220,8 +153,4 @@ func BindOutput(template SignTemplate, payload []byte, results map[uint]*big.Int
 		}
 	}
 	return nil
-}
-
-func Empty(policy string) ([]provider.Output, error) {
-	return Encode(policy, nil, provider.Output{}, false)
 }

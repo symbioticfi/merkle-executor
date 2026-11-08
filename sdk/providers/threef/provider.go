@@ -3,9 +3,9 @@ package threef
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"math"
 	"math/big"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -16,13 +16,20 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"github.com/symbioticfi/merkle-executor/sdk/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-const policy = "threef/claim-v1"
+type Provider struct {
+	chain provider.Reader
+	mu    sync.Mutex
+	hint  factoryHint
+}
 
-type Provider struct{ chain provider.Reader }
+type factoryHint struct {
+	chainID string
+	factory common.Address
+	count   uint64
+}
 type config struct {
 	Key      string
 	Factory  common.Address
@@ -64,7 +71,7 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 		return nil, err
 	}
 	if !ok {
-		return derived.Empty(policy)
+		return []provider.Output{{}}, nil
 	}
 	if err := protocolio.Snapshot(s); err != nil {
 		return nil, err
@@ -124,11 +131,7 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 			}
 			payload := bytes.Clone(c.Template)
 			copy(payload[c.Offset:c.Offset+32], common.LeftPadBytes(address.Bytes(), 32))
-			prepared, err := derived.Encode(policy, c, provider.Output{Actions: map[string]hexutil.Bytes{c.Key: payload}}, true)
-			if err != nil {
-				return nil, err
-			}
-			outputs = append(outputs, prepared...)
+			outputs = append(outputs, provider.Output{Actions: map[string]hexutil.Bytes{c.Key: payload}})
 		}
 	}
 	if len(outputs) == 0 {
@@ -139,7 +142,18 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 func requestAt(f common.Address, index uint64) common.Address {
 	return crypto.CreateAddress(f, 7+3*index)
 }
-func (p *Provider) count(ctx context.Context, s provider.Snapshot, f common.Address) (uint64, error) {
+func (p *Provider) count(ctx context.Context, s provider.Snapshot, f common.Address) (count uint64, err error) {
+	p.mu.Lock()
+	hint := p.hint
+	p.mu.Unlock()
+	defer func() {
+		if err == nil {
+			p.mu.Lock()
+			p.hint = factoryHint{chainID: s.ChainID.String(), factory: f, count: count}
+			p.mu.Unlock()
+		}
+	}()
+
 	binding := factory.NewThreeFRequestsFactory()
 	exists := func(i uint64) (bool, error) {
 		data, _ := binding.TryPackIsRequest(requestAt(f, i))
@@ -153,14 +167,40 @@ func (p *Provider) count(ctx context.Context, s provider.Snapshot, f common.Addr
 		}
 		return ok, nil
 	}
-	ok, err := exists(0)
-	if err != nil || !ok {
-		return 0, err
-	}
-	// The factory creates a request, PT and YT at consecutive CREATE nonces.
-	// EIP-2681 bounds the search without truncating the factory's inventory.
+	// Membership is append-only on the supported factory. Recheck the cached
+	// boundary at every pinned block so a changed chain cannot preserve a stale
+	// lower bound. Balances and readiness are never cached.
 	const end = (math.MaxUint64-9)/3 + 1
 	low, high := uint64(1), uint64(1)
+	cached := hint.chainID == s.ChainID.String() && hint.factory == f && hint.count > 0
+	if cached {
+		valid, e := exists(hint.count - 1)
+		if e != nil {
+			return 0, e
+		}
+		cached = valid
+		if valid {
+			if hint.count == end {
+				return end, nil
+			}
+			next, e := exists(hint.count)
+			if e != nil {
+				return 0, e
+			}
+			if !next {
+				return hint.count, nil
+			}
+			low, high = hint.count+1, hint.count+1
+		}
+	}
+	if !cached {
+		ok, e := exists(0)
+		if e != nil || !ok {
+			return 0, e
+		}
+	}
+	// The factory creates a request, PT and YT at consecutive CREATE nonces.
+	// EIP-2681 bounds the search without truncating the inventory.
 	for high < end {
 		ok, err := exists(high)
 		if err != nil {
@@ -189,37 +229,4 @@ func (p *Provider) count(ctx context.Context, s provider.Snapshot, f common.Addr
 		}
 	}
 	return low, nil
-}
-func (*Provider) Advance(_ context.Context, s provider.Snapshot, out provider.Output, _ json.RawMessage) (provider.Progress, error) {
-	var c config
-	inner, matched, err := derived.Decode(policy, out, &c)
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	if !matched {
-		return provider.Progress{Done: true}, nil
-	}
-	if err := s.Execution.Validate(); err != nil {
-		return provider.Progress{}, err
-	}
-	expected, offset := claimTemplate(s.Account, c.Factory)
-	if c.Offset != offset || len(c.Template) != len(expected) {
-		return provider.Progress{}, errors.New("invalid persisted 3F template")
-	}
-	copy(expected[offset:offset+32], c.Template[offset:offset+32])
-	if !bytes.Equal(c.Template, expected) || len(inner.Inputs)+len(inner.Results)+len(inner.SkipSteps) != 0 {
-		return provider.Progress{}, errors.New("invalid persisted 3F claim")
-	}
-	data := inner.Actions[c.Key]
-	if len(inner.Actions) != 1 || len(data) != len(expected) {
-		return provider.Progress{}, errors.New("invalid persisted 3F action")
-	}
-	if _, err := derived.WordAddress(data[offset : offset+32]); err != nil {
-		return provider.Progress{}, errors.New("invalid persisted 3F request")
-	}
-	copy(expected[offset:offset+32], data[offset:offset+32])
-	if !bytes.Equal(data, expected) {
-		return provider.Progress{}, errors.New("persisted 3F action changed pinned data")
-	}
-	return provider.Progress{Done: true}, nil
 }

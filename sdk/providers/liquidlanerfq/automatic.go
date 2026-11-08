@@ -3,9 +3,7 @@ package liquidlanerfq
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"math/big"
-	"reflect"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -20,7 +18,6 @@ import (
 
 // API deployment provenance: vault-solver cc75494298aa, Makefile RFQ_OPENAPI_URL.
 const ConsumerAPI = "https://swap.symbiotic.fi/api/v1"
-const automaticPolicy = "liquid-lane-consumer/recipe-v1"
 
 type Automatic struct{ deps provider.Deps }
 type recipeRequest struct {
@@ -189,7 +186,7 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		return nil, err
 	}
 	if request == nil {
-		return derived.Empty(automaticPolicy)
+		return []provider.Output{{}}, nil
 	}
 	amount, err := recipes.EconomicResult(request.budget, results)
 	if err != nil {
@@ -234,23 +231,44 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if err = derived.BindOutput(request.template, payload, results, &out); err != nil {
 		return nil, err
 	}
-	return derived.Encode(automaticPolicy, request.cfg, out, true)
+	return []provider.Output{out}, nil
 }
-func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
-	var cfg Config
-	inner, matched, err := derived.Decode(automaticPolicy, out, &cfg)
-	if err != nil {
-		return provider.Progress{}, err
+
+// settlementTask keeps quote identity and bounded lookup progress in memory.
+type settlementTask struct {
+	provider *Provider
+	prepared prepared
+	state    progressState
+}
+
+func (p *Provider) task(d prepared) provider.Task {
+	// Request amounts and quote bytes are private to this preparation; outputs
+	// may be copied or assembled by the caller without changing the task.
+	return &settlementTask{provider: p, prepared: d}
+}
+
+func (t *settlementTask) Advance(ctx context.Context, s provider.Snapshot) (provider.Progress, error) {
+	next := t.state.clone()
+	progress, err := t.provider.advance(ctx, s, t.prepared, &next)
+	if err == nil {
+		t.state = next
 	}
-	if !matched {
-		return provider.Progress{Done: true}, nil
+	return progress, err
+}
+
+func (s progressState) clone() progressState {
+	copy := s
+	if s.Lookup != nil {
+		lookup := *s.Lookup
+		lookup.Cursors = make(map[string]bool, len(s.Lookup.Cursors))
+		for key, value := range s.Lookup.Cursors {
+			lookup.Cursors[key] = value
+		}
+		lookup.IDs = make(map[string]bool, len(s.Lookup.IDs))
+		for key, value := range s.Lookup.IDs {
+			lookup.IDs[key] = value
+		}
+		copy.Lookup = &lookup
 	}
-	if !reflect.DeepEqual(cfg.HTTP, consumerHTTP()) || cfg.MaxLookupPages != 10 || len(cfg.SolverIDs) != 0 {
-		return provider.Progress{}, errors.New("persisted RFQ automatic constants differ")
-	}
-	runtime, err := New(cfg, p.deps)
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	return runtime.Advance(ctx, s, inner, state)
+	return copy
 }

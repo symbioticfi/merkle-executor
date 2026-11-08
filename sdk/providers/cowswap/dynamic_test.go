@@ -179,8 +179,8 @@ func TestAutoPrepareVerifiedAndCancellation(t *testing.T) {
 				wantBPS = 101
 			}
 			full, hash := appData(wantBPS)
-			if d.Version != 1 || d.Order.SellAmount != "1000" || d.Order.FeeAmount != "0" || d.SlippageBPS != wantBPS || d.Order.QuoteID != 42 || d.FullAppData != full || d.Order.AppData != hash.Hex() || crypto.Keccak256Hash([]byte(d.FullAppData)) != hash {
-				t.Fatalf("persisted AUTO order invalid: %+v", d)
+			if d.Order.SellAmount != "1000" || d.Order.FeeAmount != "0" || d.SlippageBPS != wantBPS || d.Order.QuoteID != 42 || d.FullAppData != full || d.Order.AppData != hash.Hex() || crypto.Keccak256Hash([]byte(d.FullAppData)) != hash {
+				t.Fatalf("prepared AUTO order invalid: %+v", d)
 			}
 		})
 	}

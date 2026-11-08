@@ -6,11 +6,10 @@ import (
 	"testing"
 
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-func TestLookupBeyondThousandOrdersSurvivesRestart(t *testing.T) {
-	for _, mode := range []string{"new order", "existing order", "duplicate quote", "duplicate ID", "repeated cursor", "uncertain publication", "crash after publication"} {
+func TestLookupBeyondThousandOrdersContinuesAcrossTicks(t *testing.T) {
+	for _, mode := range []string{"new order", "existing order", "duplicate quote", "duplicate ID", "repeated cursor", "uncertain publication"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			h.p.cfg.MaxLookupPages = 10
@@ -42,22 +41,16 @@ func TestLookupBeyondThousandOrdersSurvivesRestart(t *testing.T) {
 				h.pages[10].Orders[0] = h.pages[0].Orders[0]
 			case "repeated cursor":
 				h.pages[10].Cursor = json.RawMessage(`"oc_page1"`)
-			case "uncertain publication", "crash after publication":
+			case "uncertain publication":
 				h.httpMode = "lost"
 			}
-			progress, err := h.p.Advance(t.Context(), s, out, nil)
+			progress, err := out.Task.Advance(t.Context(), s)
 			if err != nil || progress.Done || progress.Outcome != "lookup-scanning" || h.gets != 10 || h.posts != 0 {
 				t.Fatalf("lookup did not checkpoint without publishing: %+v %v gets=%d posts=%d", progress, err, h.gets, h.posts)
 			}
-			checkpoint := append(json.RawMessage(nil), progress.State...)
-			// Only serialized provider progress is carried into a newly constructed runtime.
-			h.p, err = New(h.p.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
-			if err != nil {
-				t.Fatal(err)
-			}
-			progress, err = h.p.Advance(t.Context(), s, out, append(json.RawMessage(nil), progress.State...))
+			progress, err = out.Task.Advance(t.Context(), s)
 			if h.lookups[10].Get("cursor") != "oc_page10" {
-				t.Fatal("restart did not resume the saved page", h.lookups[10])
+				t.Fatal("next tick did not resume the page", h.lookups[10])
 			}
 			switch mode {
 			case "duplicate quote", "duplicate ID", "repeated cursor":
@@ -73,24 +66,9 @@ func TestLookupBeyondThousandOrdersSurvivesRestart(t *testing.T) {
 					t.Fatal(progress, err, h.posts)
 				}
 
-				if mode == "crash after publication" {
-					// The POST was accepted, then the process died before saving its result.
-					// The appended remote order must be found from the previous checkpoint.
-					h.pages[10].Orders[0] = wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: "open", QuoteID: quoteID, Swapper: s.Account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: addr(0x33).Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: addr(0x44).Hex(), Amount: "900", Recipient: s.Account.Hex()}}}
-					h.gets = 10
-					h.p, err = New(h.p.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
-					if err != nil {
-						t.Fatal(err)
-					}
-					progress, err = h.p.Advance(t.Context(), s, out, checkpoint)
-					if err != nil || progress.Reference != orderID || h.posts != 1 {
-						t.Fatalf("crash lost published identity: %+v %v posts=%d", progress, err, h.posts)
-					}
-				}
-
 				if mode == "uncertain publication" {
 					h.gets = 0
-					progress, err = h.p.Advance(t.Context(), s, out, progress.State)
+					progress, err = out.Task.Advance(t.Context(), s)
 					if err != nil || progress.Outcome != "lookup-scanning" || h.posts != 1 || h.lookups[11].Get("cursor") != "" {
 						t.Fatalf("ambiguous POST reused completed absence lookup: %+v %v posts=%d", progress, err, h.posts)
 					}
@@ -100,40 +78,7 @@ func TestLookupBeyondThousandOrdersSurvivesRestart(t *testing.T) {
 	}
 }
 
-func TestMalformedLookupCheckpointNeverPublishes(t *testing.T) {
-	for _, mode := range []string{"cursor", "history", "ids", "match"} {
-		t.Run(mode, func(t *testing.T) {
-			h := newHarness(t)
-			h.p.cfg.MaxLookupPages = 1
-			out, s := h.authorized(t)
-			h.pages = []wire.RfqOrdersResponse{{Orders: []wire.RfqOrder{}, Cursor: json.RawMessage(`"oc_next"`)}}
-			progress, err := h.p.Advance(t.Context(), s, out, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var saved progressState
-			if err := json.Unmarshal(progress.State, &saved); err != nil {
-				t.Fatal(err)
-			}
-			switch mode {
-			case "cursor":
-				saved.Lookup.Cursor = "bad"
-			case "history":
-				saved.Lookup.Cursors["oc_next"] = false
-			case "ids":
-				saved.Lookup.IDs = nil
-			case "match":
-				saved.Lookup.Match = orderID
-			}
-			raw, _ := json.Marshal(saved)
-			if _, err := h.p.Advance(t.Context(), s, out, raw); err == nil || h.posts != 0 {
-				t.Fatalf("corrupt lookup allowed publication: %v posts=%d", err, h.posts)
-			}
-		})
-	}
-}
-
-func TestOrderTransactionHintSurvivesLookupRestart(t *testing.T) {
+func TestOrderTransactionHintSurvivesNextLookupTick(t *testing.T) {
 	h := newHarness(t)
 	out, s := h.authorized(t)
 	var d prepared
@@ -142,17 +87,13 @@ func TestOrderTransactionHintSurvivesLookupRestart(t *testing.T) {
 	h.p.cfg.MaxLookupPages = 1
 	h.pages[0].Cursor = json.RawMessage(`"oc_next"`)
 	h.pages = append(h.pages, wire.RfqOrdersResponse{Orders: []wire.RfqOrder{}, Cursor: json.RawMessage("null")})
-	progress, err := h.p.Advance(t.Context(), s, out, nil)
+	progress, err := out.Task.Advance(t.Context(), s)
 	if err != nil || progress.Done || progress.Outcome != "lookup-scanning" || h.c.receiptReads != 0 {
 		t.Fatal("partial lookup consumed receipt hint", progress, err)
 	}
-	h.p, err = New(h.p.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	progress, err = h.p.Advance(t.Context(), s, out, progress.State)
+	progress, err = out.Task.Advance(t.Context(), s)
 	if err != nil || !progress.Done || progress.Outcome != "settled" || progress.Reference != orderID || h.c.receiptReads != 1 || h.c.logReads != 0 || h.posts != 0 {
-		t.Fatal("restart lost matching order transaction", progress, err)
+		t.Fatal("next tick lost matching order transaction", progress, err)
 	}
 }
 
@@ -163,12 +104,12 @@ func TestOrderMayPrecedeTransactionHash(t *testing.T) {
 	_ = json.Unmarshal(out.Data, &d)
 	h.addEvent(t, d, 12, false)
 	h.pages[0].Orders[0].TxHash = nil
-	progress, err := h.p.Advance(t.Context(), s, out, nil)
+	progress, err := out.Task.Advance(t.Context(), s)
 	if err != nil || progress.Done || progress.Outcome != "awaiting-receipt" || progress.Reference != orderID || h.posts != 0 || h.c.receiptReads != 0 {
 		t.Fatal("API indexing race released or republished order", progress, err)
 	}
 	h.order(h.c.logs[0].TxHash)
-	progress, err = h.p.Advance(t.Context(), s, out, progress.State)
+	progress, err = out.Task.Advance(t.Context(), s)
 	if err != nil || !progress.Done || progress.Outcome != "settled" || h.posts != 0 {
 		t.Fatal("later transaction hash did not settle", progress, err)
 	}
@@ -180,7 +121,7 @@ func TestMalformedOrderTransactionHashCannotSettleOrPublish(t *testing.T) {
 		out, s := h.authorized(t)
 		h.order([32]byte{})
 		h.pages[0].Orders[0].TxHash = &hash
-		progress, err := h.p.Advance(t.Context(), s, out, nil)
+		progress, err := out.Task.Advance(t.Context(), s)
 		if err == nil || progress.Done || h.posts != 0 || h.c.receiptReads != 0 {
 			t.Fatal("malformed transaction hash reached settlement", progress, err)
 		}

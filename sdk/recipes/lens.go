@@ -31,7 +31,7 @@ func ResolveValues(ctx context.Context, reader provider.Reader, snapshot Snapsho
 
 // ResolveValuesWithRuntime uses one same-executor code override for the union of
 // signed-value dependencies, replaying authenticated Manage/Approve/Call effects
-// before later reads. The full original execute validates the durable witness.
+// before later reads. The full original execute validates the prepared witness.
 func ResolveValuesWithRuntime(ctx context.Context, reader provider.Reader, snapshot Snapshot, recipe Recipe, expressions []Value, runtime PrefixRuntime) (map[uint]*big.Int, error) {
 	program, err := buildPrefix(recipe, expressions, runtime)
 	if err != nil {
@@ -112,7 +112,7 @@ func ResultsWitness(results map[uint]*big.Int) map[uint]string {
 	return witness
 }
 
-// VerifyResults validates durable indices against the original immutable steps
+// VerifyResults validates prepared indices against the original immutable steps
 // and checks the original executor's returned values, including on recovery.
 func VerifyResults(calldata, returned []byte, witness map[uint]string) error {
 	if len(witness) == 0 {

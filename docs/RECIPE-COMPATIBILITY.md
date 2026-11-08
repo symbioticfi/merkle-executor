@@ -2,7 +2,9 @@
 
 Recipes own native state reads, eligibility, financial policy and account-context
 calls. A numerical cap is policy; it does not select an amount. Native amount
-selection uses committed expressions or fixed literals. Off-chain witnesses may
+selection uses committed expressions or fixed literals, except for authorized
+standalone claims filled by the isolated
+[native claim provider](PROVIDERS.md#native-issuer-claims). Off-chain witnesses may
 supply signed economics or proofs when the owning provider recognizes and
 validates their immutable permission shape. The complete original execution
 simulation remains mandatory before signing.
@@ -11,33 +13,31 @@ simulation remains mandatory before signing.
 
 | Template | Selection and enforcement |
 | --- | --- |
-| Lending | Available collateral up to its policy cap; fresh capacity after supply and total-debt headroom select borrowing. Exact spend, supply/debt rounding and issuer output checks remain in the recipe. |
-| Claims | Full settled owner entitlement. Complementary live getters bind exact output floors where available. Native numbered selectors bind one identity to both readiness and claim; ID zero is valid. |
-| Health claim | Same full claims, with ID-specific ledger debit checks, then debt repayment and health checks. |
+| Lending | Available collateral up to its policy cap; fresh capacity after supply and total-debt headroom select borrowing. Native post-borrow health, supply/debt rounding and issuer output checks remain in the recipe. |
+| Claims | The owning claim provider fills authorized arguments for a standalone claim; native contracts enforce validity. Each claim is a separate execution. |
 | Health recovery / health repay | Recipe reads select available liquidity, balances, debt and repayment; exact effect and health checks remain authoritative. |
 | LL executing | Connector acquisition and calldata construction belong to vault-solver's Merkle extension. The RFQ backend supplies awarded trade amounts through `/orders` and signed terms for contract validation. The committed recipe enforces payment, recipient, RWA delta and approval-reset checks; the SDK validates permissions and simulates the complete execution. |
 | 3F executing | The native selector reads a whole current authorization and checks its funding asset, actual collateral underlying, remaining policy budget and yield. The guarded mint rechecks authorization and policy. The library also supports externally selected terms, but the normal daemon requires an owning witness provider or native reads. |
-| Signing | Existing CoW/RFQ providers acquire external quotes for recognized, pinned authorization shapes. Browser authoring requires verified matching read descriptors. A generic arbitrary signature buffer does not create a provider. |
+| Signing | The bounded builder selects the wallet balance up to its amount cap and checks the minimum amount, price and expiry. Existing CoW/RFQ providers acquire external quotes for recognized, pinned authorization shapes. Browser authoring requires verified matching read descriptors. A generic arbitrary signature buffer does not create a provider. |
 | Custom | Unchanged masked preimages come from the trusted curator artifact. Runtime Inputs need an exact recipe value or an owning provider. |
 
-## Claim-all semantics
+Aave capacity belongs to one direct pool borrow. The outer recipe reads the same
+pool's `getUserAccountData(account)` health word after borrowing and checks a
+committed floor of at least `1e18` before any further effect.
 
-A recipe claims every configured completed entry it can process in its bounded
-claim groups. Repeated scheduled runs select subsequent cleared-ledger successors
-until all readiness gates are zero. Pending entries do not block later completed
-entries. A successful transaction is evidence for those groups, not a certificate
-that an unconfigured issuer or reward token has been exhausted.
+## Claim discovery and batching
+
+The SDK admits and batches the separate ready-claim outputs through its common
+validator. Gas-limited prefixes leave remaining claims eligible for later runs.
+A successful transaction establishes execution of the selected claims, not that
+an unconfigured issuer or reward token has been exhausted. Rich native recipes
+with committed reads, exact bindings and guards remain supported by the generic
+executor and are not rewritten or matched by this standalone provider.
 
 Configured 3F `burnAll` groups use native withdrawal availability and full PT/YT
 conversion as their asset payout gate/floor. Each target needs a corresponding
 burn permission. Native mint selection does not authorize future burn targets or
 prove a complete inventory of them; zero-value conversions are idle.
-
-Noon and Pareto selectors use complete bounded owner ledgers. Their helper must
-be deployed and its reviewed address configured before authoring. Scope overflow
-or failed required getters revert instead of silently truncating. Native 3F
-selection similarly requires an explicit complete inventory baseline and bounded
-factory scope. See the adapters repository's `docs/RECIPE-CLAIM-SELECTION.md`.
 
 Merkl uses off-chain allocation/proof witnesses plus pinned-block distributor roots and
 claimed ledgers. It supports multiple configured guarded claims and independent
@@ -57,8 +57,8 @@ connector signature verifier. External swap data remains subject to the committe
 permission layout and contract guards, generic SDK runtime validation, full
 execution simulation and canonical receipt checks.
 
-The generic bounded-signing library does not itself acquire a quote. Its
-range-only financial Inputs cannot execute through the native input resolver.
+The generic bounded-signing library does not itself acquire a quote. It commits
+an exact balance-capped amount; range-only financial Inputs do not select amounts.
 CoW/RFQ acquisition still requires a recognized provider shape with an authorized
 recipe-selected budget, including fixed amounts; arbitrary bounded sign buffers remain rejected. Browser
 signing authoring also requires verified matching price/clock facts and exact

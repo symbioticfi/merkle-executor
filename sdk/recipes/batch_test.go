@@ -16,6 +16,7 @@ type batchingRecipeReader struct {
 	*fakeReader
 	groups                     [][]protocolio.ReadRequest
 	singleCalls, singleHeaders int
+	simulations                int
 	reorgFence                 bool
 }
 
@@ -25,82 +26,99 @@ func (r *batchingRecipeReader) CallContract(ctx context.Context, msg ethereum.Ca
 }
 func (r *batchingRecipeReader) HeaderByNumber(ctx context.Context, block *big.Int) (*types.Header, error) {
 	r.singleHeaders++
-	h, e := r.fakeReader.HeaderByNumber(ctx, block)
-	if r.reorgFence && h != nil {
-		copy := *h
-		copy.Extra = []byte{1}
-		return &copy, e
-	}
-	return h, e
+	return r.fakeReader.HeaderByNumber(ctx, block)
 }
 func (r *batchingRecipeReader) BatchRead(ctx context.Context, requests []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
 	r.groups = append(r.groups, requests)
 	results := make([]protocolio.ReadResult, len(requests))
-	for i, req := range requests {
-		switch req.Kind {
+	for i, request := range requests {
+		switch request.Kind {
 		case protocolio.ReadCall:
-			if !req.MulticallSafe || req.Call.From != (common.Address{}) {
+			if isExecutionCall(request.Call.Data) {
+				r.simulations++
+				if request.MulticallSafe || request.Call.From != r.caller {
+					r.t.Fatal("full original simulation lost sender-sensitive semantics")
+				}
+			} else if !request.MulticallSafe || request.Call.From != (common.Address{}) {
 				r.t.Fatal("verified metadata getter lost aggregate eligibility")
 			}
-			if *req.Call.To != r.account && *req.Call.To != r.executor {
+			if *request.Call.To != r.account && *request.Call.To != r.executor {
 				results[i].Err = errors.New("unknown speculative account")
 				continue
 			}
-			results[i].Data, results[i].Err = r.fakeReader.CallContract(ctx, req.Call, req.Block)
+			results[i].Data, results[i].Err = r.fakeReader.CallContract(ctx, request.Call, request.Block)
 		case protocolio.ReadHeader:
-			results[i].Header, results[i].Err = r.fakeReader.HeaderByNumber(ctx, req.Block)
+			results[i].Header, results[i].Err = r.fakeReader.HeaderByNumber(ctx, request.Block)
+			if r.reorgFence && r.simulations != 0 && results[i].Header != nil {
+				header := types.CopyHeader(results[i].Header)
+				header.Extra = []byte("closing reorg")
+				results[i].Header = header
+			}
 		case protocolio.ReadLogs:
-			results[i].Logs, results[i].Err = r.FilterLogs(ctx, req.Filter)
+			results[i].Logs, results[i].Err = r.FilterLogs(ctx, request.Filter)
 		default:
 			r.t.Fatal("unexpected discovery request")
 		}
 	}
 	return results, nil
 }
+
 func TestDiscoveryBatchesExpectedAccountMetadataAndEventEvidence(t *testing.T) {
-	reader := &batchingRecipeReader{fakeReader: fakeChain(t, Recipe{})}
-	snapshot, _, err := DiscoverForAccount(context.Background(), reader, reader.executor, reader.account, nil)
+	reader := &batchingRecipeReader{fakeReader: fakeChain(t, admissionRecipe(t))}
+	prepared, err := DiscoverBatch(t.Context(), reader, []common.Address{reader.executor}, []common.Address{reader.account}, reader.caller, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reader.groups) != 2 || len(reader.groups[0]) != 5 || len(reader.groups[1]) != 2 || reader.singleCalls != 0 || reader.singleHeaders != 2 {
+	if len(reader.groups) != 3 || len(reader.groups[0]) != 5 || len(reader.groups[1]) != 2 || len(reader.groups[2]) != 1 || reader.singleCalls != 0 || reader.singleHeaders != 1 {
 		t.Fatalf("discovery groups=%v calls=%d headers=%d", reader.groups, reader.singleCalls, reader.singleHeaders)
 	}
 	reader.groups = nil
 	reader.singleHeaders = 0
-	if err := ValidateSnapshot(context.Background(), reader, snapshot, reader.caller); err != nil {
+	call := assembledCall(t, prepared[0])
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{nil}, []map[uint]string{nil}, reader.caller); err != nil {
 		t.Fatal(err)
 	}
-	if len(reader.groups) != 2 || len(reader.groups[0]) != 2 || len(reader.groups[1]) != 5 || reader.singleHeaders != 1 {
-		t.Fatal("validation did not batch opening evidence or lost final fence")
+	if len(reader.groups) != 2 || len(reader.groups[0]) != 7 || len(reader.groups[1]) != 1 || reader.singleHeaders != 1 || reader.simulations != 1 {
+		t.Fatal("admission did not batch metadata, opening pin and exact simulation before final fence")
 	}
-	reader.reorgFence = true
-	if err := ValidateSnapshot(context.Background(), reader, snapshot, reader.caller); err == nil {
+	reader.reorgFence, reader.simulations = true, 0
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{nil}, []map[uint]string{nil}, reader.caller); err == nil {
 		t.Fatal("batched reads hid reorg at final fence")
 	}
 }
+
 func TestDiscoveryStillRejectsAccountMismatchBeforeRoot(t *testing.T) {
-	reader := &batchingRecipeReader{fakeReader: fakeChain(t, Recipe{})}
-	if _, _, err := DiscoverForAccount(context.Background(), reader, reader.executor, common.HexToAddress("0x09"), nil); err == nil {
+	reader := &batchingRecipeReader{fakeReader: fakeChain(t, admissionRecipe(t))}
+	if _, err := DiscoverBatch(t.Context(), reader, []common.Address{reader.executor}, []common.Address{common.HexToAddress("0x09")}, reader.caller, PreparationOptions{}); err == nil {
 		t.Fatal("unexpected executor account accepted")
 	}
 }
-func TestRoleBatchDeduplicatesLeavesAndPreservesFinalFence(t *testing.T) {
-	reader := &batchingRecipeReader{fakeReader: fakeChain(t, Recipe{})}
-	snap := Snapshot{BlockNumber: 10, BlockHash: reader.headers[10].Hash(), Account: reader.account, Executor: reader.executor}
-	a, b := common.HexToHash("0x01"), common.HexToHash("0x02")
-	if err := VerifyRoles(context.Background(), reader, snap, []common.Hash{a, b, a}); err != nil {
+
+func TestAdmissionDeduplicatesRolesAndPreservesFinalFence(t *testing.T) {
+	reader := &batchingRecipeReader{fakeReader: fakeChain(t, admissionRecipe(t))}
+	prepared, err := DiscoverBatch(t.Context(), reader, []common.Address{reader.executor}, []common.Address{reader.account}, reader.caller, PreparationOptions{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reader.groups) != 1 || len(reader.groups[0]) != 2 || reader.roleCalls != 2 || reader.singleCalls != 0 || reader.singleHeaders != 1 {
-		t.Fatal("roles not deduplicated and batched")
+	call := assembledCall(t, prepared[0])
+	reader.groups, reader.singleHeaders = nil, 0
+	a, b := common.HexToHash("0x01"), common.HexToHash("0x02")
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{{a, b, a}}, []map[uint]string{nil}, reader.caller); err != nil {
+		t.Fatal(err)
+	}
+	if len(reader.groups) != 2 || len(reader.groups[0]) != 9 || len(reader.groups[1]) != 1 || reader.roleCalls != 2 || reader.singleCalls != 0 || reader.singleHeaders != 1 {
+		t.Fatal("roles not deduplicated and batched with final closing fence")
 	}
 	reader.allowed = false
-	if err := VerifyRoles(context.Background(), reader, snap, []common.Hash{a}); err == nil {
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{{a}}, []map[uint]string{nil}, reader.caller); err == nil {
 		t.Fatal("missing role accepted")
 	}
-	reader.groups = nil
-	if err := VerifyRoles(context.Background(), reader, snap, nil); err != nil || len(reader.groups) != 0 {
-		t.Fatal("empty role set emitted a contract batch")
+	checked := reader.roleCalls
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{nil}, []map[uint]string{nil}, reader.caller); err != nil || reader.roleCalls != checked {
+		t.Fatal("empty role set emitted a role read")
+	}
+	reader.reorgFence, reader.simulations, reader.allowed = true, 0, true
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{{a}}, []map[uint]string{nil}, reader.caller); err == nil {
+		t.Fatal("role admission skipped final canonical fence")
 	}
 }

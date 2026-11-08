@@ -273,7 +273,7 @@ func runFrontendGuardedMerkl(t *testing.T, native, current, single bool) {
 	// distributor paying half its ledger delta must fail original-code simulation.
 	if !native && !current {
 		call(fixture.Distributor, da, "setPayoutBps", big.NewInt(5000))
-		if err = planBotWithHTTP(ctx, path, new(bytes.Buffer), httpClient); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
+		if err = planBotWithHTTP(ctx, path, new(bytes.Buffer), httpClient); !recipes.BatchRejected(err) {
 			t.Fatal("frontend exact-cash-delta guard did not reject underpayment", err)
 		}
 		call(fixture.Distributor, da, "setPayoutBps", big.NewInt(10000))
@@ -294,7 +294,7 @@ func runFrontendGuardedMerkl(t *testing.T, native, current, single bool) {
 	if native {
 		wantDeltaB = "0"
 	}
-	if !current && (len(plan.Outputs) != 5 || len(plan.Outputs[1][0].Actions) != 2 || plan.Outputs[1][0].Inputs[0] != "100" || plan.Outputs[1][0].Inputs[1] != "0" || plan.Outputs[1][0].Inputs[2] != "200" || plan.Outputs[1][0].Inputs[3] != wantDeltaB || fetches.Load()-before != 1) {
+	if !current && (len(plan.Outputs) != 6 || len(plan.Outputs[1][0].Actions) != 2 || plan.Outputs[1][0].Inputs[0] != "100" || plan.Outputs[1][0].Inputs[1] != "0" || plan.Outputs[1][0].Inputs[2] != "200" || plan.Outputs[1][0].Inputs[3] != wantDeltaB || fetches.Load()-before != 1) {
 		t.Fatalf("partial guarded reward plan: %+v HTTP=%d", plan.Outputs, fetches.Load()-before)
 	}
 	if current && !single && (len(plan.Outputs[1][0].Actions) != 1 || plan.Outputs[1][0].Inputs[0] != fixture.Rewards[1].Token.Big().String() || plan.Outputs[1][0].Inputs[1] != "200" || fetches.Load()-before != 1) {
@@ -366,7 +366,7 @@ func runFrontendGuardedMerkl(t *testing.T, native, current, single bool) {
 	}
 	rewardRows.Store(newRows)
 	call(fixture.Distributor, da, "setRootAfterClaim", fixture.RewardRoot)
-	if err = planBotWithHTTP(ctx, path, new(bytes.Buffer), httpClient); err == nil || !strings.Contains(err.Error(), "full recipe simulation failed") {
+	if err = planBotWithHTTP(ctx, path, new(bytes.Buffer), httpClient); !recipes.BatchRejected(err) {
 		t.Fatal("frontend guard accepted a root change during claim", err)
 	}
 	call(fixture.Distributor, da, "setRootAfterClaim", common.Hash{})

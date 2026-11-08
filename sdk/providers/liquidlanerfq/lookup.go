@@ -13,33 +13,16 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-// lookupState is scoped to the immutable saved quote. It is discarded after a
+// lookupState is scoped to the prepared quote. It is discarded after a
 // complete lookup; an ambiguous POST outcome starts a fresh absence check.
-// Sets retain duplicate/cycle checks across page budgets and restarts.
+// Sets retain duplicate/cycle checks across page budgets within the running process.
 type lookupState struct {
-	Cursor    string          `json:"cursor"`
-	Cursors   map[string]bool `json:"cursors"`
-	IDs       map[string]bool `json:"ids"`
-	Match     string          `json:"match,omitempty"`
-	TxHash    common.Hash     `json:"txHash,omitempty"`
-	Cancelled bool            `json:"cancelled,omitempty"`
-}
-
-func (l *lookupState) validate() error {
-	if !cursorPattern.MatchString(l.Cursor) || !l.Cursors[l.Cursor] || l.IDs == nil || (l.Match != "" && (!uuid.MatchString(l.Match) || !l.IDs[l.Match])) || (l.Match == "" && (l.TxHash != (common.Hash{}) || l.Cancelled)) {
-		return errors.New("RFQ invalid persisted lookup cursor")
-	}
-	for cursor, seen := range l.Cursors {
-		if !seen || !cursorPattern.MatchString(cursor) {
-			return errors.New("RFQ invalid persisted lookup history")
-		}
-	}
-	for id, seen := range l.IDs {
-		if !seen || !uuid.MatchString(id) {
-			return errors.New("RFQ invalid persisted lookup identity")
-		}
-	}
-	return nil
+	Cursor    string
+	Cursors   map[string]bool
+	IDs       map[string]bool
+	Match     string
+	TxHash    common.Hash
+	Cancelled bool
 }
 
 func knownStatus(s string) bool {
@@ -50,10 +33,6 @@ func knownStatus(s string) bool {
 	return false
 }
 func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, st *progressState) (bool, bool, error) {
-	var quote wire.RfqQuote
-	if json.Unmarshal(d.Quote, &quote) != nil {
-		return false, false, errors.New("RFQ saved quote unavailable")
-	}
 	query := url.Values{"swapper": {s.Account.Hex()}, "limit": {"100"}, "sortKey": {"createdAt"}, "sort": {"asc"}}
 	if st.OrderID != "" {
 		query.Set("orderId", st.OrderID)
@@ -61,9 +40,6 @@ func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, 
 	if st.Lookup == nil {
 		st.Lookup = &lookupState{Cursors: map[string]bool{}, IDs: map[string]bool{}}
 	} else {
-		if err := st.Lookup.validate(); err != nil {
-			return false, false, err
-		}
 		query.Set("cursor", st.Lookup.Cursor)
 	}
 	lookup := st.Lookup
@@ -83,7 +59,7 @@ func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, 
 			if st.OrderID != "" && o.OrderID != st.OrderID {
 				return false, false, errors.New("RFQ exact order lookup returned another order")
 			}
-			if o.QuoteID != quote.QuoteID {
+			if o.QuoteID != d.QuoteID {
 				if st.OrderID != "" {
 					return false, false, errors.New("RFQ saved order quote mismatch")
 				}

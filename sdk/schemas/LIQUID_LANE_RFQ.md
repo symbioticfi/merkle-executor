@@ -53,14 +53,14 @@ The exact selected JSON quote is retained and sent as
 the fixed outbound encoding also preserves the backend's quoteId/signature
 idempotency key. Current signature validation precedes the backend's deduplication.
 Requoting may change filler and improve final outputs, so no predicted outer Order
-hash is persisted. The durable identity is chain, Reactor, account, Request digest,
+hash is retained. The process-local identity is chain, Reactor, account, Request digest,
 quoteId and `0x00`.
 
 `GET /orders` uses all-status swapper pagination (`limit=100`), or saved `orderId`.
 No quoteId or nonce filter is assumed. A complete bounded lookup is required before
 POST. Null/missing arrays, repeated or malformed cursors, duplicate IDs/quote matches,
-and identity mismatches fail closed. Exhausting a tick's page budget checkpoints
-lookup progress without publication; the next tick resumes the same quote scan.
+and identity mismatches fail closed. Exhausting a tick's page budget retains
+lookup progress in RAM without publication; the next tick resumes the same quote scan.
 API filled status does not prove settlement. Ordinary order views lack the full encoded Request and filler.
 
 ## Authorization and settlement
@@ -104,7 +104,7 @@ The nullable `txHash` subset was verified against RFQ backend revision
 
 The automatic provider looks up at most 10 API pages per tick, with at most 100 orders
 per page. Cursor, seen order IDs/cursors and a possible quote match plus transaction
-hash survive restart, preserving duplicate checks across tick boundaries. Only a
+hash remain in RAM across ticks; process exit discards them. Only a
 complete lookup permits publication or receipt reconciliation. A completed lookup
 is discarded; an ambiguous POST response starts a fresh lookup next tick. The fixed
 automatic bounds cannot be changed through daemon YAML.

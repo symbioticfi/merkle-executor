@@ -22,7 +22,6 @@ import (
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func TestAnvilServiceDelegatedBatch(t *testing.T) {
@@ -138,26 +137,10 @@ func TestAnvilServiceDelegatedBatch(t *testing.T) {
 	}
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
-	if err := runBot(ctx, path, true); err != nil {
-		t.Fatal(err)
-	}
-	var hash common.Hash
-	for _, address := range cfg.Strategies {
-		var job keeper.Job
-		if found, err := state.Read(cfg.StateDir, "strategy."+address+".v1", &job); err != nil || !found {
-			t.Fatalf("missing batch member: %v", err)
-		}
-		if job.Phase != "settled" || !job.Result.Confirmed {
-			t.Fatalf("unsettled member: %s", job.Phase)
-		}
-		if hash != (common.Hash{}) && hash != job.Result.Hash {
-			t.Fatal("members used different transactions")
-		}
-		hash = job.Result.Hash
-	}
-	transaction, pending, err := client.TransactionByHash(ctx, hash)
-	if err != nil || pending || transaction.To() == nil || *transaction.To() != caller || !bytes.Equal(transaction.Data(), plan.Data) {
-		t.Fatalf("not the planned self-transaction: %v", err)
+	runService(t, ctx, path, "ok", 2)
+	transaction := serviceTransaction(t, ctx, client, caller, 0)
+	if transaction.To() == nil || *transaction.To() != caller || !bytes.Equal(transaction.Data(), plan.Data) {
+		t.Fatal("not the planned self-transaction")
 	}
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 {
 		t.Fatalf("expected one transaction: nonce %d, %v", nonce, err)
@@ -166,9 +149,5 @@ func TestAnvilServiceDelegatedBatch(t *testing.T) {
 	if err != nil || new(big.Int).SetBytes(amount).Cmp(big.NewInt(25)) != 0 {
 		t.Fatalf("later executor did not consume earlier proceeds: %v", err)
 	}
-	for _, name := range []string{"executor-batch.v1", "txmanager.active.v1"} {
-		if found, err := state.Read(cfg.StateDir, name, new(any)); err != nil || found {
-			t.Fatalf("unacknowledged batch: %s, %v", name, err)
-		}
-	}
+
 }

@@ -2,7 +2,6 @@ package keeper
 
 import (
 	"context"
-	"encoding/json"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -24,10 +23,8 @@ type RecipeRequirements struct {
 // Provider derives its configuration from authenticated program bytes.
 // The SDK invokes this only after validating the active root, chain and account.
 // Inputs, results, recipe bytes and permissions are copied for each invocation.
-// Each output supplies one execution's runtime data. Recovery passes the
-// persisted outputs to Advance without preparing them again.
+// Each output supplies one execution's runtime data and an optional RAM task.
 type Provider interface {
 	RecipeRequirements(provider.Snapshot, recipes.Recipe, *recipes.Tree) (RecipeRequirements, error)
 	PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) ([]provider.Output, error)
-	Advance(context.Context, provider.Snapshot, provider.Output, json.RawMessage) (provider.Progress, error)
 }

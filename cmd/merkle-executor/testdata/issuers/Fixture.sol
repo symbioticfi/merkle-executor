@@ -49,6 +49,10 @@ contract FixtureAsyncIssuer {
         pendingShares[controller] = 0;
     }
 
+    function claimableRedeemRequest(uint256, address controller) external view returns (uint256) {
+        return maxRedeem[controller];
+    }
+
     function redeem(uint256 shares, address receiver, address controller) external returns (uint256 assets) {
         require(msg.sender == controller && receiver == controller && shares > 0);
         maxRedeem[controller] -= shares;

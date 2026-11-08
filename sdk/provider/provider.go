@@ -35,8 +35,7 @@ type CodeOverrideReader interface {
 	CallContractWithCode(context.Context, ethereum.CallMsg, *big.Int, []byte) ([]byte, error)
 }
 
-// Execution identifies the confirmed recipe transaction. It is persisted before
-// releasing nonce ownership and is available only while reconciling that execution.
+// Execution identifies a canonically confirmed recipe transaction.
 type Execution struct {
 	TxHash      common.Hash `json:"txHash"`
 	BlockNumber *big.Int    `json:"blockNumber"`
@@ -56,7 +55,7 @@ func (e *Execution) Validate() error {
 	return nil
 }
 
-// Clone keeps returned provider data from changing the durable transaction record.
+// Clone isolates receipt evidence from mutable provider data.
 func (e *Execution) Clone() *Execution {
 	if e == nil {
 		return nil
@@ -92,7 +91,7 @@ type Snapshot struct {
 	Execution   *Execution     `json:"execution,omitempty"`
 }
 
-// Output is persisted before sending. Action keys are "stepIndex:actionIndex";
+// Output fills one execution. Action keys are "stepIndex:actionIndex";
 // values replace calldata only, never the target, mask, proof or native value.
 // Inputs are decimal uint256 strings. Duplicate assignments are rejected.
 type Output struct {
@@ -102,18 +101,57 @@ type Output struct {
 	Actions   map[string]hexutil.Bytes `json:"actions,omitempty"`
 	SkipSteps []uint                   `json:"skipSteps,omitempty"`
 	Data      json.RawMessage          `json:"data,omitempty"`
+	// Task retains optional external settlement work for this process only.
+	Task Task `json:"-"`
+}
+
+// Clone isolates authorized runtime fields while retaining the same in-memory task.
+func (o Output) Clone() Output {
+	copy := o
+	if o.Results != nil {
+		copy.Results = make(map[uint]string, len(o.Results))
+		for key, value := range o.Results {
+			copy.Results[key] = value
+		}
+	}
+	if o.Inputs != nil {
+		copy.Inputs = make(map[uint]string, len(o.Inputs))
+		for key, value := range o.Inputs {
+			copy.Inputs[key] = value
+		}
+	}
+	if o.Actions != nil {
+		copy.Actions = make(map[string]hexutil.Bytes, len(o.Actions))
+		for key, value := range o.Actions {
+			copy.Actions[key] = append(hexutil.Bytes(nil), value...)
+		}
+	}
+	copy.SkipSteps = append([]uint(nil), o.SkipSteps...)
+	copy.Data = append(json.RawMessage(nil), o.Data...)
+	return copy
+}
+
+// Task follows external settlement after the recipe transaction confirms.
+// It owns its state in memory. Hosts call it serially after confirmation.
+type Task interface {
+	Advance(context.Context, Snapshot) (Progress, error)
+}
+
+// TaskFunc adapts in-memory settlement work to Task.
+type TaskFunc func(context.Context, Snapshot) (Progress, error)
+
+func (f TaskFunc) Advance(ctx context.Context, s Snapshot) (Progress, error) {
+	return f(ctx, s)
 }
 
 // Progress separates confirmed recipe execution from external settlement.
 type Progress struct {
-	Done      bool            `json:"done"`
-	Outcome   string          `json:"outcome,omitempty"`
-	State     json.RawMessage `json:"state,omitempty"`
-	Reference string          `json:"reference,omitempty"`
+	Done      bool   `json:"done"`
+	Outcome   string `json:"outcome,omitempty"`
+	Reference string `json:"reference,omitempty"`
 }
 
-// ExclusiveOutputTargetProvider reconstructs ownership from immutable persisted
-// preparation data, including after restart and after its progress is done.
+// ExclusiveOutputTargetProvider declares receipt attribution for prepared data.
 type ExclusiveOutputTargetProvider interface {
 	ExclusiveOutputTargets(Output) (map[string]common.Address, error)
 }

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -74,6 +73,8 @@ func newRPCFixture(t *testing.T, chainID string) *rpcFixture {
 			result = "0x5208"
 		case "eth_getTransactionCount":
 			result = "0x7"
+		case "eth_getBalance":
+			result = "0x64"
 		case "eth_sendRawTransaction":
 			result = common.HexToHash("0x123")
 		case "eth_getTransactionReceipt":
@@ -186,22 +187,16 @@ func TestRPCFailuresRedactCredentialsAndBodiesButPreserveErrorIdentity(t *testin
 			_, e := client.CallContract(ctx, ethereum.CallMsg{To: &a}, nil)
 			return e
 		},
-		"header-number":     func(ctx context.Context) error { _, e := client.HeaderByNumber(ctx, nil); return e },
-		"header-hash":       func(ctx context.Context) error { _, e := client.HeaderByHash(ctx, common.Hash{}); return e },
-		"logs":              func(ctx context.Context) error { _, e := client.FilterLogs(ctx, ethereum.FilterQuery{}); return e },
-		"estimate":          func(ctx context.Context) error { _, e := client.EstimateGas(ctx, ethereum.CallMsg{To: &a}); return e },
-		"receipt":           func(ctx context.Context) error { _, e := client.TransactionReceipt(ctx, common.Hash{}); return e },
-		"nonce":             func(ctx context.Context) error { _, e := client.NonceAt(ctx, a, nil); return e },
-		"pending-nonce":     func(ctx context.Context) error { _, e := client.PendingNonceAt(ctx, a); return e },
-		"send":              func(ctx context.Context) error { return client.SendTransaction(ctx, testTransaction()) },
-		"balance":           func(ctx context.Context) error { _, e := client.BalanceAt(ctx, a, nil); return e },
-		"telemetry-balance": func(ctx context.Context) error { _, e := client.ReadBalanceAt(ctx, a); return e },
-		"telemetry-nonces":  func(ctx context.Context) error { _, _, e := client.ReadNonces(ctx, a); return e },
-		"fee-history":       func(ctx context.Context) error { _, e := client.FeeHistory(ctx, 3, nil, []float64{50}); return e },
-		"next-block-gas": func(ctx context.Context) error {
-			_, e := client.EstimateGasNextBlock(ctx, ethereum.CallMsg{To: &a}, &types.Header{Number: big.NewInt(1)}, time.Second)
-			return e
-		},
+		"header-number": func(ctx context.Context) error { _, e := client.HeaderByNumber(ctx, nil); return e },
+		"header-hash":   func(ctx context.Context) error { _, e := client.HeaderByHash(ctx, common.Hash{}); return e },
+		"logs":          func(ctx context.Context) error { _, e := client.FilterLogs(ctx, ethereum.FilterQuery{}); return e },
+		"estimate":      func(ctx context.Context) error { _, e := client.EstimateGas(ctx, ethereum.CallMsg{To: &a}); return e },
+		"receipt":       func(ctx context.Context) error { _, e := client.TransactionReceipt(ctx, common.Hash{}); return e },
+		"nonce":         func(ctx context.Context) error { _, e := client.NonceAt(ctx, a, nil); return e },
+		"pending-nonce": func(ctx context.Context) error { _, e := client.PendingNonceAt(ctx, a); return e },
+		"send":          func(ctx context.Context) error { return client.SendTransaction(ctx, testTransaction()) },
+		"balance":       func(ctx context.Context) error { _, e := client.BalanceAt(ctx, a, nil); return e },
+		"fee-history":   func(ctx context.Context) error { _, e := client.FeeHistory(ctx, 3, nil, []float64{50}); return e },
 	}
 	for name, operation := range operations {
 		t.Run(name, func(t *testing.T) {

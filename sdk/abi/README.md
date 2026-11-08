@@ -30,5 +30,10 @@ subset limits are documented in [schema provenance](../schemas/PROVENANCE.md).
 Batch mode is `0x01` followed by 31 zero bytes: ordered CALLs, default atomic
 execution. The local Anvil fixture `recipes/testdata/anvil/MetaMaskDelegator.json`
 records that deployment's runtime, address, capture block and Keccak hash.
-Native protocol calls and reads are encoded in committed recipes; issuer artifacts
+Native protocol calls and reads are normally encoded in committed recipes; issuer artifacts
 used by local integration tests live under `cmd/merkle-executor/testdata/issuers`.
+
+`NativeClaims.json` is the selected native issuer claim/discovery subset, generated
+as `bindings/nativeclaims` by the same abigen v2 script. Its pinned interface
+sources and deliberate limits are recorded in
+[native claim provenance](../schemas/NATIVE_CLAIMS.md).
