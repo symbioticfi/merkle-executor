@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	"github.com/symbioticfi/merkle-executor/internal/observability"
@@ -170,6 +171,12 @@ func runBotWithHTTP(ctx context.Context, path string, httpClient *http.Client) (
 	k, manager, err := newKeeper(env)
 	if err != nil {
 		return err
+	}
+	if manager != nil {
+		manager.Metrics, err = transaction.NewMetrics(prometheus.WrapRegistererWithPrefix("merkle_executor_", metrics.Registerer()))
+		if err != nil {
+			return errors.Errorf("register transaction metrics: %w", err)
+		}
 	}
 	defer func() {
 		if err != nil && k.Pending() {

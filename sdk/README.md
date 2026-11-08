@@ -84,12 +84,14 @@ Hosts pass the same gas budget to `keeper.Planner.MaxGas` and
 
 Each solver process configures its own signer and `transaction.Manager`, then
 initializes it and explicitly runs `Start` on the host lifecycle context. Both
-services use `Send`/`SendAsync` or `manager.Sender(name)` with
+services' Merkle integrations use `Send`/`SendAsync` or `manager.Sender(name)` with
 `ExecutionRequest`/`ExecutionResult` for the same admission, signing, nonce,
 funding, fee-replacement and canonical-receipt lifecycle. Solver orchestration
 and providers select and prioritize existing orders or claims. The transaction
 engine receives chosen calls; it does not own a domain work queue. Hosts retain
-YAML, credentials, RPC transport selection and telemetry setup. Separate signers
+YAML, credentials, RPC transport selection and telemetry setup. Optional
+`transaction.NewMetrics` collectors record admitted outcomes, broadcasts,
+canonical costs and unresolved ownership without background workers. Separate signers
 across processes are a trusted configuration assumption.
 
 Before every signature, fresh sender funding must cover the final maximum gas
