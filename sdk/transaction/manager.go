@@ -182,14 +182,17 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	return nil
 }
 func (m *Manager) Confirmations() uint64 { return m.cfg.Confirmations }
-func (m *Manager) Available() bool {
+
+// Ready reports lifecycle readiness independently of pending transaction admission.
+func (m *Manager) Ready() bool {
 	select {
 	case <-m.stopping:
 		return false
 	default:
 	}
-	return m.initialized.Load() && !m.strict.Load() && !m.full.Load()
+	return m.initialized.Load()
 }
+func (m *Manager) Available() bool { return m.Ready() && !m.strict.Load() && !m.full.Load() }
 func (m *Manager) LaneReady() bool { return m.Available() && m.demand.Load() == 0 }
 
 // Send waits for the actual admitted outcome; cancellation after admission cannot report "not sent".
