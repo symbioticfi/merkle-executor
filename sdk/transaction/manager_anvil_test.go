@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -155,6 +156,13 @@ func TestAnvilAmbiguousSubmissionAndFeeReplacement(t *testing.T) {
 		t.Fatal("request not admitted")
 	}
 	original := relay.attempt(t, common.Hash{})
+	// Advance an empty block: the old cap is below its base fee, so the pending
+	// transaction stays in the pool while replacement pricing observes a new head.
+	baseFee := new(big.Int).Add(original.GasFeeCap(), big.NewInt(1))
+	if err := rpcClient.CallContext(t.Context(), nil, "anvil_setNextBlockBaseFeePerGas", hexutil.EncodeBig(baseFee)); err != nil {
+		t.Fatal(err)
+	}
+	mineAnvilBlock(t, rpcClient)
 	replacement := relay.attempt(t, original.Hash())
 	if replacement.Nonce() != original.Nonce() || !bytes.Equal(replacement.Data(), original.Data()) || replacement.GasFeeCap().Cmp(original.GasFeeCap()) <= 0 || replacement.GasTipCap().Cmp(original.GasTipCap()) <= 0 {
 		t.Fatal("replacement changed intent or did not progress fees")

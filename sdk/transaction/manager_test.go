@@ -234,7 +234,15 @@ func TestRejectedReplacementRetainsIdentityWithoutRatchetingAcceptedFees(t *test
 			return nil
 		}
 	}
-	original, rejected, retry := next(), next(), next()
+	original := next()
+	chain.mu.Lock()
+	chain.advanceLocked("first replacement block")
+	chain.mu.Unlock()
+	rejected := next()
+	chain.mu.Lock()
+	chain.advanceLocked("retry replacement block")
+	chain.mu.Unlock()
+	retry := next()
 	if rejected.GasFeeCap().Cmp(original.GasFeeCap()) <= 0 || retry.Hash() != rejected.Hash() {
 		t.Fatal("rejected signature ratcheted accepted fee floor")
 	}

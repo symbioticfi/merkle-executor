@@ -90,6 +90,7 @@ type work struct {
 	results         chan Result
 	errors          chan error
 	signed          bool // Published by closing ready; only the worker writes it.
+	signedHead      uint64
 	readyOnce       sync.Once
 	finished        bool
 }
@@ -100,15 +101,22 @@ type attempt struct {
 }
 type fees struct{ tip, cap *big.Int }
 type pendingNonce struct {
-	nonce           uint64
-	attempts        []attempt
-	accepted        fees
-	lastReplacement time.Time
+	nonce            uint64
+	attempts         []attempt
+	accepted         fees
+	lastReplacement  time.Time
+	lastBroadcast    time.Time
+	retryBroadcast   bool
+	receiptCursor    int
+	observedAttempts int
+	prioritizedLast  bool
 }
 
 // Manager has one unbuffered transaction handoff; domain backlogs stay in the solver.
 // The worker alone changes the pending nonce and its signed attempts.
 type Manager struct {
+	// Metrics is configured by the host before Initialize and Start.
+	Metrics                   *Metrics
 	backend                   Backend
 	signer                    signer.Signer
 	chainID, feeLimit         *big.Int
@@ -174,14 +182,17 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	return nil
 }
 func (m *Manager) Confirmations() uint64 { return m.cfg.Confirmations }
-func (m *Manager) Available() bool {
+
+// Ready reports lifecycle readiness independently of pending transaction admission.
+func (m *Manager) Ready() bool {
 	select {
 	case <-m.stopping:
 		return false
 	default:
 	}
-	return m.initialized.Load() && !m.strict.Load() && !m.full.Load()
+	return m.initialized.Load()
 }
+func (m *Manager) Available() bool { return m.Ready() && !m.strict.Load() && !m.full.Load() }
 func (m *Manager) LaneReady() bool { return m.Available() && m.demand.Load() == 0 }
 
 // Send waits for the actual admitted outcome; cancellation after admission cannot report "not sent".
@@ -309,6 +320,7 @@ func (m *Manager) Start(ctx context.Context) {
 			return
 		case w := <-m.queue:
 			m.current = w
+			m.Metrics.begin(w.req)
 			m.initial(ctx, w)
 		case <-ticker.C:
 			m.step(ctx, true)
@@ -382,11 +394,13 @@ func (m *Manager) initial(ctx context.Context, w *work) {
 	}
 	stopCaller()
 	m.capture(w, tx)
-	err = m.broadcast(ctx, tx)
+	err = m.broadcast(ctx, tx, w.req, "initial")
 	if !definiteRejection(err) {
 		m.accept(tx)
 	}
 	m.pending.lastReplacement = time.Now()
+	m.pending.lastBroadcast = time.Now()
+	m.pending.retryBroadcast = err != nil
 	if err != nil {
 		m.report(w, err)
 		if !w.strict && definiteRejection(err) {
@@ -414,7 +428,7 @@ func (m *Manager) invalid(ctx context.Context, w *work) error {
 	return ctx.Err()
 }
 func (m *Manager) prepare(ctx context.Context, w *work, nonce uint64, floor fees) (*types.Transaction, error) {
-	gas, priced, err := m.quote(ctx, w.req, floor)
+	gas, priced, head, err := m.quote(ctx, w.req, floor)
 	if err != nil {
 		return nil, err
 	}
@@ -461,6 +475,7 @@ func (m *Manager) prepare(ctx context.Context, w *work, nonce uint64, floor fees
 	if err != nil || from != m.signer.Address() || signed.Type() != types.DynamicFeeTxType || txSigner.Hash(signed) != txSigner.Hash(unsigned) {
 		return nil, errors.New("signer changed transaction payload")
 	}
+	w.signedHead = head
 	return signed, nil
 }
 func (m *Manager) capture(w *work, tx *types.Transaction) {
@@ -470,6 +485,7 @@ func (m *Manager) capture(w *work, tx *types.Transaction) {
 		}
 	}
 	m.pending.attempts = append(m.pending.attempts, attempt{tx: tx, work: w})
+	m.Metrics.signed()
 	m.full.Store(len(m.pending.attempts) == maxAttempts)
 	if !w.signed {
 		w.signed = true
@@ -506,6 +522,7 @@ func (m *Manager) finish(w *work, err error, receipt *types.Receipt) {
 		result.Hash = receipt.TxHash
 	}
 	w.finished = true
+	m.Metrics.finish(w.req, result)
 	w.results <- result
 	w.readyOnce.Do(func() { close(w.ready) })
 	if m.current == w {
@@ -554,21 +571,35 @@ func (m *Manager) step(ctx context.Context, replace bool) {
 	if latest == nil {
 		return
 	}
+	kind := "rebroadcast"
 	if replace && time.Since(m.pending.lastReplacement) >= m.cfg.ReplacementInterval {
 		m.pending.lastReplacement = time.Now()
-		if len(m.pending.attempts) >= maxAttempts {
-			m.report(w, ErrBusy)
-			return
-		}
-		tx, err := m.prepare(ctx, w, m.pending.nonce, m.pending.accepted)
+		header, err := m.backend.HeaderByNumber(ctx, nil)
 		if err != nil {
-			m.report(w, err)
-			return
+			m.report(w, failure("read replacement head", err))
+		} else if header == nil || header.Number == nil || !header.Number.IsUint64() {
+			m.report(w, errors.New("invalid replacement head"))
+		} else if header.Number.Uint64() > w.signedHead {
+			if len(m.pending.attempts) >= maxAttempts {
+				m.report(w, ErrBusy)
+			} else if tx, err := m.prepare(ctx, w, m.pending.nonce, m.pending.accepted); err != nil {
+				m.report(w, err)
+			} else {
+				m.capture(w, tx)
+				latest, kind = tx, "replacement"
+			}
 		}
-		m.capture(w, tx)
-		latest = tx
 	}
-	err := m.broadcast(ctx, latest)
+	interval := m.cfg.ReplacementInterval
+	if m.pending.retryBroadcast {
+		interval = min(interval, 5*time.Second)
+	}
+	if kind == "rebroadcast" && time.Since(m.pending.lastBroadcast) < interval {
+		return
+	}
+	err := m.broadcast(ctx, latest, w.req, kind)
+	m.pending.lastBroadcast = time.Now()
+	m.pending.retryBroadcast = err != nil
 	if !definiteRejection(err) {
 		m.accept(latest)
 	}
@@ -582,8 +613,36 @@ func (m *Manager) observe(ctx context.Context) bool {
 	if m.pending == nil {
 		return false
 	}
-	for _, a := range m.pending.attempts {
-		receipt, err := m.backend.TransactionReceipt(ctx, a.tx.Hash())
+	if ctx.Err() != nil {
+		return false
+	}
+	pending := m.pending
+	count := len(pending.attempts)
+	priority := -1
+	if count > pending.observedAttempts && !pending.prioritizedLast {
+		priority = count - 1
+		pending.observedAttempts = count
+	}
+	for checked := 0; checked < count; checked++ {
+		if ctx.Err() != nil {
+			break
+		}
+		index := pending.receiptCursor
+		if checked == 0 && priority >= 0 {
+			index = priority
+			pending.prioritizedLast = true
+		} else {
+			pending.prioritizedLast = false
+			if index == priority {
+				index = (index + 1) % count
+			}
+			// Advance before I/O so a timed-out sweep resumes beyond this attempt.
+			pending.receiptCursor = (index + 1) % count
+		}
+		a := pending.attempts[index]
+		read, cancel := context.WithTimeout(ctx, 2*time.Second)
+		receipt, err := m.backend.TransactionReceipt(read, a.tx.Hash())
+		cancel()
 		if errors.Is(err, ethereum.NotFound) {
 			continue
 		}
@@ -591,24 +650,32 @@ func (m *Manager) observe(ctx context.Context) bool {
 			if m.current != nil {
 				m.report(m.current, failure("read transaction receipt", err))
 			}
-			return false
+			continue
 		}
 		if _, err = executionFromReceipt(receipt, a.tx.Hash()); err != nil {
 			if m.current != nil {
 				m.report(m.current, err)
 			}
-			return false
+			continue
 		}
 		receipt, err = confirmReceipt(ctx, m.backend, receipt, m.cfg.Confirmations)
 		if err != nil {
 			if m.current != nil {
 				m.report(m.current, err)
 			}
-			return false
+			continue
 		}
 		if receipt == nil {
 			continue
 		}
+		// Identical signatures retain their first request owner regardless of poll order.
+		for _, owned := range pending.attempts {
+			if owned.tx.Hash() == receipt.TxHash {
+				a = owned
+				break
+			}
+		}
+		m.Metrics.receipt(a.work.req, receipt)
 		if !a.work.finished {
 			m.finish(a.work, nil, receipt)
 		}
@@ -726,35 +793,36 @@ func (m *Manager) MaxFeePerGas(ctx context.Context) (*big.Int, error) {
 	}
 	return ceiling, nil
 }
-func (m *Manager) quote(ctx context.Context, req Request, floor fees) (uint64, fees, error) {
+func (m *Manager) quote(ctx context.Context, req Request, floor fees) (uint64, fees, uint64, error) {
 	priced, header, err := m.price(ctx, req, floor)
 	if err != nil {
-		return 0, fees{}, err
+		return 0, fees{}, 0, err
 	}
 	limit := min(m.cfg.MaxGas, header.GasLimit)
 	gas, err := m.backend.EstimateGas(ctx, ethereum.CallMsg{From: m.signer.Address(), To: &req.To, Data: req.Data, Gas: limit, GasFeeCap: priced.cap, GasTipCap: priced.tip})
 	if err != nil {
-		return 0, fees{}, failure("estimate transaction gas", err)
+		return 0, fees{}, 0, failure("estimate transaction gas", err)
 	}
 	if gas == 0 || gas > limit {
-		return 0, fees{}, errors.New("transaction gas exceeds budget or block limit")
+		return 0, fees{}, 0, errors.New("transaction gas exceeds budget or block limit")
 	}
 	margin := gas / 10
 	if gas%10 != 0 {
 		margin++
 	}
 	if gas > math.MaxUint64-margin {
-		return 0, fees{}, errors.New("transaction gas overflows")
+		return 0, fees{}, 0, errors.New("transaction gas overflows")
 	}
-	return min(gas+margin, limit), priced, nil
+	return min(gas+margin, limit), priced, header.Number.Uint64(), nil
 }
-func (m *Manager) broadcast(ctx context.Context, tx *types.Transaction) error {
+func (m *Manager) broadcast(ctx context.Context, tx *types.Transaction, req Request, kind string) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	defer func() { m.Metrics.broadcast(req, kind, err) }()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	err := m.backend.SendTransaction(ctx, tx)
+	err = m.backend.SendTransaction(ctx, tx)
 	if err != nil {
 		message := strings.ToLower(err.Error())
 		if !strings.Contains(message, "already known") && !strings.Contains(message, "already imported") {
