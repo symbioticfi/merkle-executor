@@ -94,6 +94,11 @@ YAML, credentials, RPC transport selection and telemetry setup. Optional
 canonical costs and unresolved ownership without background workers. Separate signers
 across processes are a trusted configuration assumption.
 
+Hosts use `Manager.Ready()` for service readiness: it stays true during pending
+execution and turns false when shutdown starts. `Available()` and `LaneReady()`
+remain transaction-admission checks; pending strict work may block admission
+without interrupting quotes or other service reads.
+
 Before every signature, fresh sender funding must cover the final maximum gas
 cost. Signed identities enter RAM before broadcast and remain owned
 through uncertain responses. Native callers receive signed hashes and canonical receipts for their
