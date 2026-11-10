@@ -96,7 +96,7 @@ Anvil success.
 
 ## Dependency refresh
 
-The host and SDK use Go 1.27.3, go-ethereum/abigen 1.17.10 and golangci-lint
+The host and SDK use Go 1.27.4, go-ethereum/abigen 1.17.10 and golangci-lint
 2.15.0. CI uses Foundry 1.9.0 and the runtime image uses distroless Debian 13.
 Both Go modules refresh their direct and indirect requirements; external consumers
 pin an immutable SDK release. Re-run generation and the gates above
