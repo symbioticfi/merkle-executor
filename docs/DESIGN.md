@@ -154,3 +154,14 @@ execution uses the original `execute(bytes[],bytes[],uint256[],bytes[])` ABI.
 All twelve operations, uint256 values, bindings, masks and sorted-pair permission
 proofs remain supported. Native claim validity belongs to distributor/request
 contracts, with exact recipe constraints enforced by the planner.
+
+### AccessManager callers
+
+`recipes.RouteExecution` accepts an authenticated recipe snapshot and the outer
+execution sender. When the sender is the configured caller, it preserves the
+original transaction. Otherwise it checks the configured caller's OpenZeppelin
+AccessManager `canCall(sender, executor, selector)` at the snapshot block, requires
+an immediate grant, and wraps the unchanged payload in `execute(executor, data)`.
+Hosts retain their full outer transaction simulation and fresh identity checks.
+The helper does not infer an authority from arbitrary account bytecode, schedule
+delayed calls, grant roles, or change any recipe instruction or permission.

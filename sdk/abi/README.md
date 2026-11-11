@@ -37,3 +37,8 @@ used by local integration tests live under `cmd/merkle-executor/testdata/issuers
 as `bindings/nativeclaims` by the same abigen v2 script. Its pinned interface
 sources and deliberate limits are recorded in
 [native claim provenance](../schemas/NATIVE_CLAIMS.md).
+
+`AccessManager.json` contains the `canCall` and `execute` subset of OpenZeppelin
+AccessManagerUpgradeable v5.7.0. `recipes.RouteExecution` requires an immediate
+grant for the exact target and selector before wrapping a call. Scheduling and
+role administration are outside this execution helper.
