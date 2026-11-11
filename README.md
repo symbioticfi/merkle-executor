@@ -13,7 +13,7 @@ still execute. Drain work before upgrading or restarting.
 
 ## Run
 
-Use Go 1.27.3 and copy [the example configuration](config/example.yaml).
+Use Go 1.27.4 and copy [the example configuration](config/example.yaml).
 
 ```sh
 make build

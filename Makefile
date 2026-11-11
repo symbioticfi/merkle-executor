@@ -1,6 +1,6 @@
 SHELL := bash
 .DEFAULT_GOAL := help
-export GOTOOLCHAIN := go1.27.3
+export GOTOOLCHAIN := go1.27.4
 PKG := github.com/symbioticfi/merkle-executor
 VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
