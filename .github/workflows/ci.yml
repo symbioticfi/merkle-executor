@@ -1,5 +1,9 @@
 name: checks
-on: [push, pull_request]
+on:
+  push:
+    branches-ignore: [stage, main] # build & deploy runs these checks via workflow_call
+  pull_request:
+  workflow_call:
 permissions:
   contents: read
 jobs:
