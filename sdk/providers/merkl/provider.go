@@ -136,7 +136,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	out, claimable, e := p.prepareRewards(s, entries, func() ([]multicall.Multicall3Result, error) { return reads.forProvider(p) })
 	if e == nil && claimable.Sign() == 0 {
 		// Idle members are reported only after the whole claim validates.
-		return provider.Output{}, errors.Errorf("%w: Merkl rewards below minClaimable", provider.ErrNotReady)
+		return provider.Output{}, errors.Errorf("%w: no unclaimed Merkl rewards", provider.ErrNotReady)
 	}
 	return out, e
 }
