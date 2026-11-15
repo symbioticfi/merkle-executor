@@ -2,10 +2,13 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"math/big"
 	"net/http"
+	"slices"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -18,8 +21,6 @@ import (
 type Deps struct {
 	Chain Reader
 	HTTP  *http.Client
-	// LookupSecret resolves configured credential references without environment access in the SDK.
-	LookupSecret func(string) string
 }
 
 // Reader pins protocol reads to the same block used for recipe discovery.
@@ -108,26 +109,16 @@ type Output struct {
 // Clone isolates authorized runtime fields while retaining the same in-memory task.
 func (o Output) Clone() Output {
 	copy := o
-	if o.Results != nil {
-		copy.Results = make(map[uint]string, len(o.Results))
-		for key, value := range o.Results {
-			copy.Results[key] = value
-		}
-	}
-	if o.Inputs != nil {
-		copy.Inputs = make(map[uint]string, len(o.Inputs))
-		for key, value := range o.Inputs {
-			copy.Inputs[key] = value
-		}
-	}
+	copy.Results = maps.Clone(o.Results)
+	copy.Inputs = maps.Clone(o.Inputs)
 	if o.Actions != nil {
 		copy.Actions = make(map[string]hexutil.Bytes, len(o.Actions))
 		for key, value := range o.Actions {
-			copy.Actions[key] = append(hexutil.Bytes(nil), value...)
+			copy.Actions[key] = bytes.Clone(value)
 		}
 	}
-	copy.SkipSteps = append([]uint(nil), o.SkipSteps...)
-	copy.Data = append(json.RawMessage(nil), o.Data...)
+	copy.SkipSteps = slices.Clone(o.SkipSteps)
+	copy.Data = bytes.Clone(o.Data)
 	return copy
 }
 

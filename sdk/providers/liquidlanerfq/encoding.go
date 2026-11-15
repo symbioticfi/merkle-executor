@@ -159,35 +159,3 @@ func equalRequest(a, b reactor.IReactorRequest) bool {
 	}
 	return true
 }
-func authorizingSign(e *provider.Execution, d prepared, domain common.Hash) error {
-	a := account.NewMerkleAccount()
-	expected, _, err := authorization(domain, d.Request)
-	if err != nil {
-		return err
-	}
-	count := 0
-	for _, log := range e.Logs {
-		if log.Address != d.Account || len(log.Topics) == 0 || log.Topics[0] != a.GetABI().Events["Sign"].ID {
-			continue
-		}
-		if len(log.Topics) != 3 {
-			return errors.New("RFQ malformed authorization event")
-		}
-		event, err := a.UnpackSignEvent(&log)
-		if err != nil {
-			return errors.New("RFQ malformed authorization event")
-		}
-		if common.Hash(event.Digest) != d.Digest {
-			continue
-		}
-		payload, err := a.TryPackSign(event.DomainSeparator, event.Buffer, event.Plan)
-		if err != nil || !bytes.Equal(payload, expected) {
-			return errors.New("RFQ authorizing Sign differs from request")
-		}
-		count++
-	}
-	if count != 1 {
-		return errors.New("RFQ exact authorizing Sign event required")
-	}
-	return nil
-}

@@ -2,7 +2,6 @@ package merkl
 
 import (
 	"context"
-	"encoding/json"
 	"math/big"
 	"sort"
 
@@ -56,7 +55,7 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 		if action.Leaf.Value.Sign() != 0 {
 			return nil, errors.New("Merkl claim value must be zero")
 		}
-		cfg := Config{HTTP: rewardHTTP(), Multicall3: protocolio.StandardMulticall3, Distributor: layout.distributor.Hex(), Action: action.Key, CalldataBytes: len(layout.data), MinClaimable: "1", AllowIdle: true}
+		cfg := Config{HTTP: rewardHTTP(), Multicall3: protocolio.StandardMulticall3, Distributor: layout.distributor.Hex(), Action: action.Key, CalldataBytes: len(layout.data)}
 		fields := map[int]bool{}
 		for i, token := range layout.tokens {
 			identity := cfg.Distributor + token.Hex()
@@ -135,11 +134,11 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if !s.ChainID.IsInt64() {
 		return nil, errors.New("Merkl API chain ID exceeds int64")
 	}
-	client, err := NewClient(rewardHTTP(), p.deps.HTTP, p.deps.LookupSecret)
+	client, err := protocolio.NewHTTP(rewardHTTP(), p.deps.HTTP)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := client.Rewards(ctx, s.Account, s.ChainID)
+	entries, err := rewards(ctx, client, s.Account, s.ChainID)
 	if err != nil {
 		return nil, err
 	}
@@ -155,15 +154,11 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	used := map[string]bool{}
 	for _, claim := range claims {
 		allOptional = allOptional && len(claim.cfg.ClaimableInputs) == 1
-		selected, prepared, err := p.prepareClaim(s, claim.cfg, entries, used, reads)
+		selected, prepared, claimable, err := p.prepareClaim(s, claim.cfg, entries, used, reads)
 		if err != nil {
 			return nil, err
 		}
-		var metadata map[string]string
-		if err = json.Unmarshal(prepared.Data, &metadata); err != nil {
-			return nil, err
-		}
-		anyClaimable = anyClaimable || metadata["claimable"] != "0"
+		anyClaimable = anyClaimable || claimable.Sign() != 0
 		payload := claim.layout.payload(claim.action.Leaf.Data, prepared.Actions[claim.cfg.Action])
 		prepared.Actions[claim.cfg.Action] = payload
 		if err = derived.BindOutput(derived.SignTemplate{Action: claim.action}, payload, results, &prepared); err != nil {
@@ -181,21 +176,21 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		}
 	}
 	if !anyClaimable && !allOptional {
-		return nil, errors.Errorf("%w: Merkl rewards below minClaimable", provider.ErrNotReady)
+		return nil, errors.Errorf("%w: no unclaimed Merkl rewards", provider.ErrNotReady)
 	}
 	return []provider.Output{out}, nil
 }
 
 // A runtime reward token is chosen from proven, unclaimed API entries. The recipe
 // and permission mask still decide whether the supplied token is authorized.
-func (p *Automatic) prepareClaim(s provider.Snapshot, cfg Config, entries []wire.MerklEntry, used map[string]bool, reads *rewardReads) (Config, provider.Output, error) {
+func (p *Automatic) prepareClaim(s provider.Snapshot, cfg Config, entries []wire.MerklEntry, used map[string]bool, reads *rewardReads) (Config, provider.Output, *big.Int, error) {
 	candidates := []string{""}
 	for _, token := range cfg.Tokens {
 		if common.HexToAddress(token) != (common.Address{}) {
 			continue
 		}
 		if len(cfg.Tokens) != 1 {
-			return cfg, provider.Output{}, errors.New("Merkl runtime token requires a single-entry claim")
+			return cfg, provider.Output{}, nil, errors.New("Merkl runtime token requires a single-entry claim")
 		}
 		candidates = nil
 		for _, entry := range entries {
@@ -212,28 +207,22 @@ func (p *Automatic) prepareClaim(s provider.Snapshot, cfg Config, entries []wire
 		sort.Strings(candidates)
 	}
 	var out provider.Output
+	var claimable *big.Int
 	for _, token := range candidates {
 		if token != "" {
 			cfg.Tokens = []string{token}
 		}
 		runtime, err := New(cfg, p.deps)
 		if err != nil {
-			return cfg, out, err
+			return cfg, out, nil, err
 		}
-		out, err = runtime.prepareRewards(s, entries, func() ([]multicall.Multicall3Result, error) { return reads.forProvider(runtime) })
-		if err != nil {
-			return cfg, out, err
-		}
-		var metadata map[string]string
-		if err = json.Unmarshal(out.Data, &metadata); err != nil {
-			return cfg, out, err
-		}
-		if metadata["claimable"] != "0" {
-			return cfg, out, nil
+		out, claimable, err = runtime.prepareRewards(s, entries, func() ([]multicall.Multicall3Result, error) { return reads.forProvider(runtime) })
+		if err != nil || claimable.Sign() != 0 {
+			return cfg, out, claimable, err
 		}
 	}
 	if len(candidates) == 0 {
-		return cfg, out, errors.Errorf("%w: no Merkl reward token available", provider.ErrNotReady)
+		return cfg, out, nil, errors.Errorf("%w: no Merkl reward token available", provider.ErrNotReady)
 	}
-	return cfg, out, nil
+	return cfg, out, claimable, nil
 }

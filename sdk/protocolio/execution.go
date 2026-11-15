@@ -1,16 +1,13 @@
 package protocolio
 
 import (
-	"bytes"
 	"context"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 
-	account "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
@@ -39,45 +36,34 @@ func Execution(ctx context.Context, r provider.Reader, s provider.Snapshot) erro
 	return Canonical(ctx, r, s)
 }
 
-// ManagedCall is a zero-value account call whose successful execution a provider
-// must establish before declaring its request or claim phase complete.
-type ManagedCall struct {
-	Target common.Address `json:"target"`
-	Data   hexutil.Bytes  `json:"data"`
+// CheckHeader requires a uint64-numbered header, at number when one is given.
+func CheckHeader(header *types.Header, number *big.Int) error {
+	if header == nil || header.Number == nil || !header.Number.IsUint64() {
+		return errors.New("invalid block header")
+	}
+	if number != nil && header.Number.Cmp(number) != 0 {
+		return errors.New("RPC returned another block")
+	}
+	return nil
 }
 
-// ExecutedCalls requires the expected calls in order in the account's successful
-// Manage events. A matching event cannot be reused for another expected call.
-// Call Execution first to establish canonical confirmation of this receipt.
-// Matching is local to this invocation. Receipt-dependent providers must declare
-// provider.ExclusiveOutputTargetProvider and use keeper composition validation to avoid
-// claiming another provider's or a static action's evidence, including on restart.
-func ExecutedCalls(s provider.Snapshot, expected []ManagedCall) error {
-	if err := s.Execution.Validate(); err != nil {
-		return err
-	}
-	if s.Account == (common.Address{}) || len(expected) == 0 {
-		return errors.New("account and expected managed calls are required")
-	}
-	a := account.NewMerkleAccount()
-	eventID := a.GetABI().Events[account.MerkleAccountManageEventName].ID
-	next := 0
-	for _, log := range s.Execution.Logs {
-		if log.Address != s.Account || len(log.Topics) == 0 || log.Topics[0] != eventID {
-			continue
-		}
-		event, err := a.UnpackManageEvent(&log)
+// Ancestor follows parent hashes from witness down to number.
+func Ancestor(ctx context.Context, r interface {
+	HeaderByHash(context.Context, common.Hash) (*types.Header, error)
+}, witness *types.Header, number *big.Int) (*types.Header, error) {
+	ancestor := witness
+	for ancestor.Number.Cmp(number) > 0 {
+		parent, err := r.HeaderByHash(ctx, ancestor.ParentHash)
 		if err != nil {
-			return errors.New("invalid account Manage event")
+			return nil, Failure("read confirmation ancestry", err)
 		}
-		for _, action := range event.Actions {
-			if action.Value != nil && action.Value.Sign() == 0 && action.Target == expected[next].Target && bytes.Equal(action.Data, expected[next].Data) {
-				next++
-				if next == len(expected) {
-					return nil
-				}
-			}
+		if err = CheckHeader(parent, new(big.Int).Sub(ancestor.Number, big.NewInt(1))); err != nil {
+			return nil, err
 		}
+		if parent.Hash() != ancestor.ParentHash {
+			return nil, errors.New("inconsistent confirmation ancestry")
+		}
+		ancestor = parent
 	}
-	return errors.New("confirmed recipe did not execute the expected managed calls")
+	return ancestor, nil
 }

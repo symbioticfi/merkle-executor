@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"math/big"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -128,7 +127,7 @@ func derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (*borrow, er
 	before := uint(len(r.Steps))
 	uses := 0
 	for i, step := range r.Steps {
-		operands, err := stepOperands(r, uint(i))
+		operands, err := recipes.Operands(r, uint(i))
 		if err != nil {
 			return nil, err
 		}
@@ -176,15 +175,15 @@ func capacityChain(r recipes.Recipe, v recipes.Value, nodes map[uint]bool) (bool
 	if r.Steps[i][0] != recipes.Min {
 		return false, nil
 	}
-	args, err := binaryArgs.Unpack(r.Steps[i][1:])
+	operands, err := recipes.Operands(r, i)
 	if err != nil {
 		return false, err
 	}
-	a, err := capacityChain(r, operand(args[0].(*big.Int)), nodes)
+	a, err := capacityChain(r, operands[0], nodes)
 	if err != nil {
 		return false, err
 	}
-	b, err := capacityChain(r, operand(args[1].(*big.Int)), nodes)
+	b, err := capacityChain(r, operands[1], nodes)
 	if err != nil {
 		return false, err
 	}
@@ -238,11 +237,11 @@ func nativeBorrow(s provider.Snapshot, r recipes.Recipe, a recipes.ManagedAction
 			}
 		}
 		if step[0] == recipes.LessOrEqual {
-			check, e := binaryArgs.Unpack(step[1:])
+			check, e := recipes.Operands(r, i)
 			if e != nil {
 				return fail()
 			}
-			left, right := operand(check[0].(*big.Int)), operand(check[1].(*big.Int))
+			left, right := check[0], check[1]
 			if left.Source == recipes.Literal && left.Value.Cmp(big.NewInt(1_000_000_000_000_000_000)) >= 0 && right.Source == recipes.Result && healthReads[uint(right.Value.Uint64())] && (floor == nil || left.Value.Cmp(floor) > 0) {
 				floor = left.Value
 			}
@@ -254,82 +253,12 @@ func nativeBorrow(s provider.Snapshot, r recipes.Recipe, a recipes.ManagedAction
 	return &borrow{Pool: a.Leaf.Target, Asset: args[0].(common.Address), Floor: floor, Step: a.Step}, a.Bindings[0].Value, true, nil
 }
 
-func stepOperands(r recipes.Recipe, index uint) ([]recipes.Value, error) {
-	step := r.Steps[index]
-	var raw []*big.Int
-	switch step[0] {
-	case recipes.Read:
-		q, err := uintArgs.Unpack(step[1:])
-		if err != nil {
-			return nil, err
-		}
-		args, err := queryArgs.Unpack(r.Queries[q[0].(*big.Int).Uint64()])
-		if err != nil {
-			return nil, err
-		}
-		raw = args[2].([]*big.Int)
-	case recipes.Call:
-		args, err := callArgs.Unpack(step[1:])
-		if err != nil {
-			return nil, err
-		}
-		raw = args[2].([]*big.Int)
-	case recipes.Manage:
-		args, err := manageArgs.Unpack(step[1:])
-		if err != nil {
-			return nil, err
-		}
-		raw = append(raw, args[0].(*big.Int))
-		for _, bindings := range args[2].([][]*big.Int) {
-			raw = append(raw, bindings...)
-		}
-	case recipes.Approve:
-		raw = []*big.Int{new(big.Int).SetBytes(step[1:33])}
-	default:
-		args := binaryArgs
-		if step[0] == recipes.MulDiv {
-			args = mulDivArgs
-		}
-		values, err := args.Unpack(step[1:])
-		if err != nil {
-			return nil, err
-		}
-		for _, v := range values {
-			raw = append(raw, v.(*big.Int))
-		}
-	}
-	values := make([]recipes.Value, len(raw))
-	for i, v := range raw {
-		values[i] = operand(v)
-	}
-	return values, nil
-}
-func operand(v *big.Int) recipes.Value {
-	var word [32]byte
-	v.FillBytes(word[:])
-	return recipes.Value{Source: word[4], Value: new(big.Int).SetBytes(word[5:])}
-}
 func selector(s string) []byte { return crypto.Keccak256([]byte(s))[:4] }
-func argTypes(names ...string) abi.Arguments {
-	args := abi.Arguments{}
-	for _, name := range names {
-		t, err := abi.NewType(name, "", nil)
-		if err != nil {
-			panic(err)
-		}
-		args = append(args, abi.Argument{Type: t})
-	}
-	return args
-}
 
 var (
-	callArgs     = argTypes("address", "bytes", "uint256[]")
-	queryArgs    = argTypes("address", "bytes", "uint256[]", "uint256")
-	borrowArgs   = argTypes("address", "uint256", "uint256", "uint16", "address")
-	accountArgs  = argTypes("address")
-	capacityArgs = argTypes("address", "address", "address", "uint256")
-	uintArgs     = argTypes("uint256")
-	binaryArgs   = argTypes("uint256", "uint256")
-	mulDivArgs   = argTypes("uint256", "uint256", "uint256")
-	manageArgs   = argTypes("uint256", "bytes32[]", "uint256[][]")
+	queryArgs    = recipes.Arguments("address", "bytes", "uint256[]", "uint256")
+	borrowArgs   = recipes.Arguments("address", "uint256", "uint256", "uint16", "address")
+	accountArgs  = recipes.Arguments("address")
+	capacityArgs = recipes.Arguments("address", "address", "address", "uint256")
+	uintArgs     = recipes.Arguments("uint256")
 )

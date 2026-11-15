@@ -42,7 +42,7 @@ func New(baseURL string, h *http.Client, chain provider.Reader) (*Source, error)
 	if err := ValidateURL(baseURL); err != nil {
 		return nil, err
 	}
-	client, err := protocolio.NewHTTP(protocolio.HTTPConfig{URL: baseURL, TimeoutSeconds: HostTimeoutSeconds, MaxResponseBytes: HostMaxResponseBytes}, h, nil)
+	client, err := protocolio.NewHTTP(protocolio.HTTPConfig{URL: baseURL, TimeoutSeconds: HostTimeoutSeconds, MaxResponseBytes: HostMaxResponseBytes}, h)
 	if err != nil {
 		return nil, err
 	}

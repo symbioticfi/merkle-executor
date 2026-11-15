@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/go-errors/errors"
 	binding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkldistributor"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
@@ -98,7 +99,7 @@ func TestAnvilMerklMulticallUsesPinnedDistributorState(t *testing.T) {
 		}
 		return client.CallContract(received, msg, block)
 	})
-	cfg := merkl.Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: distributor.Hex(), Multicall3: aggregate.Hex(), Tokens: []string{token.Hex()}, ProofCapacities: []int{1}, Action: "0:0", CalldataBytes: 452, MinClaimable: "10", AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: true, DedicatedClaimGroup: true}
+	cfg := merkl.Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: distributor.Hex(), Multicall3: aggregate.Hex(), Tokens: []string{token.Hex()}, ProofCapacities: []int{1}, Action: "0:0", CalldataBytes: 452, ClaimableInputs: []uint{1}}
 	p, err := merkl.New(cfg, provider.Deps{Chain: reader, HTTP: srv.Client()})
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +117,7 @@ func TestAnvilMerklMulticallUsesPinnedDistributorState(t *testing.T) {
 	claim := func(snapshot provider.Snapshot, delta string) {
 		t.Helper()
 		out, err := prepare(snapshot)
-		if err != nil || out.Inputs[0] != "100" || out.Inputs[1] != delta || !bytes.Equal(out.Actions["0:0"], payload) || len(out.SkipSteps) != 0 {
+		if err != nil || out.Inputs[1] != delta || !bytes.Equal(out.Actions["0:0"], payload) || len(out.SkipSteps) != 0 {
 			t.Fatalf("claim changed cumulative amount/current delta/layout: output=%+v error=%v", out, err)
 		}
 	}
@@ -131,9 +132,9 @@ func TestAnvilMerklMulticallUsesPinnedDistributorState(t *testing.T) {
 	claim(original, "20")
 	serviceSeedTransaction(t, ctx, client, owner, &distributor, servicePack(t, distributorArtifact, "setRecipient", account, token, account))
 	claim(currentSnapshot(), "10") // Explicit recipient overrides redirected default.
-	configure(95, account)
-	if out, err := prepare(currentSnapshot()); err != nil || len(out.Actions) != 0 || len(out.SkipSteps) != 1 || out.Inputs[0] != "0" || out.Inputs[1] != "0" {
-		t.Fatalf("valid below-minimum claim did not skip: %+v %v", out, err)
+	configure(100, account)
+	if out, err := prepare(currentSnapshot()); !errors.Is(err, provider.ErrNotReady) || len(out.Actions) != 0 {
+		t.Fatalf("fully claimed reward was not idle: %+v %v", out, err)
 	}
 	serviceSeedTransaction(t, ctx, client, owner, &distributor, servicePack(t, distributorArtifact, "setFailure", true))
 	if out, err := prepare(currentSnapshot()); err == nil || len(out.Actions) != 0 || len(out.SkipSteps) != 0 {

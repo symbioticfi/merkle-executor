@@ -23,23 +23,20 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-// HTTPConfig never accepts literal credentials. All errors omit URLs, response bodies and headers.
+// HTTPConfig bounds one public protocol API. All errors omit URLs, response bodies and headers.
 type HTTPConfig struct {
-	URL              string `yaml:"url"`
-	APIKeyEnv        string `yaml:"apiKeyEnv"`
-	TimeoutSeconds   int    `yaml:"timeoutSeconds"`
-	MaxResponseBytes int64  `yaml:"maxResponseBytes"`
+	URL              string
+	TimeoutSeconds   int
+	MaxResponseBytes int64
 }
 type Client struct {
 	base    string
-	bearer  string
 	http    *http.Client
 	limit   int64
 	timeout time.Duration
 }
 
-// NewHTTP resolves credential references only through the host's lookup function.
-func NewHTTP(c HTTPConfig, injected *http.Client, lookup func(string) string) (*Client, error) {
+func NewHTTP(c HTTPConfig, injected *http.Client) (*Client, error) {
 	u, err := url.Parse(c.URL)
 	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, errors.New("protocol HTTP URL must be an http(s) base URL without credentials, query or fragment")
@@ -62,16 +59,7 @@ func NewHTTP(c HTTPConfig, injected *http.Client, lookup func(string) string) (*
 	}
 	hc.Timeout = time.Duration(c.TimeoutSeconds) * time.Second
 	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	bearer := ""
-	if c.APIKeyEnv != "" {
-		if lookup != nil {
-			bearer = lookup(c.APIKeyEnv)
-		}
-		if bearer == "" || strings.ContainsAny(bearer, "\r\n") {
-			return nil, errors.New("configured protocol API key is missing or invalid")
-		}
-	}
-	return &Client{base: strings.TrimRight(c.URL, "/"), bearer: bearer, http: &hc, limit: c.MaxResponseBytes, timeout: hc.Timeout}, nil
+	return &Client{base: strings.TrimRight(c.URL, "/"), http: &hc, limit: c.MaxResponseBytes, timeout: hc.Timeout}, nil
 }
 
 // JSON returns a status even on non-2xx replies, allowing callers to distinguish 404 from an uncertain request.
@@ -96,9 +84,6 @@ func (c *Client) JSON(ctx context.Context, method, path string, in, out any) (in
 	req.Header.Set("Accept", "application/json")
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
-	}
-	if c.bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+c.bearer)
 	}
 	resp, e := c.http.Do(req)
 	if e != nil {

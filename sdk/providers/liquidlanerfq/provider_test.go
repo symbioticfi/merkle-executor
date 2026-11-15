@@ -530,7 +530,7 @@ func TestOrderReceiptDoesNotScanHistory(t *testing.T) {
 }
 
 func TestConfigRejectsUnsafePolicy(t *testing.T) {
-	for _, mode := range []string{"zero address", "equal tokens", "zero amount", "negative", "index", "duplicate index", "pages", "solver", "no reader"} {
+	for _, mode := range []string{"zero address", "equal tokens", "zero amount", "negative", "index", "duplicate index", "pages", "no reader"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			c := h.cfg
@@ -552,8 +552,6 @@ func TestConfigRejectsUnsafePolicy(t *testing.T) {
 				c.AmountOutInput = &v
 			case "pages":
 				c.MaxLookupPages = 101
-			case "solver":
-				c.SolverIDs = []string{"a", "a"}
 			}
 			deps := provider.Deps{Chain: h.c, HTTP: h.server.Client()}
 			if mode == "no reader" {

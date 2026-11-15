@@ -328,7 +328,7 @@ func (p *Planner) ConfirmedSnapshot(ctx context.Context, original provider.Snaps
 	if err != nil {
 		return original, errors.Errorf("read confirmation head: %w", err)
 	}
-	if err := validHeader(witness, nil); err != nil {
+	if err := protocolio.CheckHeader(witness, nil); err != nil {
 		return original, err
 	}
 	number := new(big.Int).Sub(witness.Number, new(big.Int).SetUint64(p.Confirmations))
@@ -361,7 +361,7 @@ func (p *Planner) VerifyConfirmedSnapshot(ctx context.Context, snapshot provider
 	if err != nil {
 		return errors.Errorf("read snapshot confirmation block: %w", err)
 	}
-	if err := validHeader(witness, witnessNumber); err != nil {
+	if err := protocolio.CheckHeader(witness, witnessNumber); err != nil {
 		return err
 	}
 	header, err := p.confirmedAncestor(ctx, witness, snapshot.BlockNumber)
@@ -378,40 +378,19 @@ func (p *Planner) VerifyConfirmedSnapshot(ctx context.Context, snapshot provider
 }
 
 func (p *Planner) confirmedAncestor(ctx context.Context, witness *types.Header, number *big.Int) (*types.Header, error) {
-	ancestor := witness
-	for ancestor.Number.Cmp(number) > 0 {
-		parent, err := p.Chain.HeaderByHash(ctx, ancestor.ParentHash)
-		if err != nil {
-			return nil, errors.Errorf("read confirmation ancestor: %w", err)
-		}
-		expected := new(big.Int).Sub(ancestor.Number, big.NewInt(1))
-		if err := validHeader(parent, expected); err != nil {
-			return nil, err
-		}
-		if parent.Hash() != ancestor.ParentHash {
-			return nil, errors.New("inconsistent confirmation ancestry")
-		}
-		ancestor = parent
+	ancestor, err := protocolio.Ancestor(ctx, p.Chain, witness, number)
+	if err != nil {
+		return nil, err
 	}
 	stable, err := p.Chain.HeaderByNumber(ctx, witness.Number)
 	if err != nil {
 		return nil, errors.Errorf("recheck canonical confirmation block: %w", err)
 	}
-	if err := validHeader(stable, witness.Number); err != nil {
+	if err := protocolio.CheckHeader(stable, witness.Number); err != nil {
 		return nil, err
 	}
 	if stable.Hash() != witness.Hash() {
 		return nil, errors.New("confirmation block was reorganized")
 	}
 	return ancestor, nil
-}
-
-func validHeader(header *types.Header, number *big.Int) error {
-	if header == nil || header.Number == nil || !header.Number.IsUint64() {
-		return errors.New("invalid confirmation header")
-	}
-	if number != nil && header.Number.Cmp(number) != 0 {
-		return errors.New("RPC returned another confirmation block")
-	}
-	return nil
 }

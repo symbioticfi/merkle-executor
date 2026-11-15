@@ -94,7 +94,7 @@ func TestBFFConsumerSchema(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			defer srv.Close()
-			client, err := protocolio.NewHTTP(protocolio.HTTPConfig{URL: srv.URL, TimeoutSeconds: 2}, srv.Client(), nil)
+			client, err := protocolio.NewHTTP(protocolio.HTTPConfig{URL: srv.URL, TimeoutSeconds: 2}, srv.Client())
 			if err != nil {
 				t.Fatal(err)
 			}

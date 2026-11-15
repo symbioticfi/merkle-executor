@@ -85,26 +85,26 @@ func callHTTP(ctx context.Context, client *http.Client, endpoint string, batch [
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return rpcFailure("encode RPC read", err)
+		return Failure("encode RPC read", err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return rpcFailure("create RPC read", err)
+		return Failure("create RPC read", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	bounded := *client
 	bounded.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := bounded.Do(request)
 	if err != nil {
-		return rpcFailure("read RPC", err)
+		return Failure("read RPC", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return rpcFailure("read RPC HTTP status", rpc.HTTPError{StatusCode: response.StatusCode, Status: response.Status})
+		return Failure("read RPC HTTP status", rpc.HTTPError{StatusCode: response.StatusCode, Status: response.Status})
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxBatchResponseBytes+1))
 	if err != nil {
-		return rpcFailure("read RPC response", err)
+		return Failure("read RPC response", err)
 	}
 	if len(raw) > maxBatchResponseBytes {
 		return errors.New("RPC read response exceeds limit")
@@ -133,17 +133,17 @@ func callHTTP(ctx context.Context, client *http.Client, endpoint string, batch [
 			if len(response.Result) > 0 && !bytes.Equal(response.Result, []byte("null")) {
 				return errors.New("RPC read response has both result and error")
 			}
-			batch[i].Error = rpcFailure("read RPC member", response.Error)
+			batch[i].Error = Failure("read RPC member", response.Error)
 		} else if len(response.Result) == 0 {
 			return errors.New("RPC read member result missing")
 		} else if bytes.Equal(response.Result, []byte("null")) {
 			if batch[i].Method == "eth_getBlockByNumber" || batch[i].Method == "eth_getTransactionReceipt" {
-				batch[i].Error = rpcFailure("read RPC member", ethereum.NotFound)
+				batch[i].Error = Failure("read RPC member", ethereum.NotFound)
 			} else {
 				batch[i].Error = errors.New("RPC read member returned null")
 			}
 		} else {
-			batch[i].Error = rpcFailure("decode read RPC member", json.Unmarshal(response.Result, batch[i].Result))
+			batch[i].Error = Failure("decode read RPC member", json.Unmarshal(response.Result, batch[i].Result))
 		}
 	}
 	return nil
@@ -359,16 +359,18 @@ type RPCBatchReader struct {
 	Codec     AggregateCodec
 }
 
-type rpcReadError struct {
+// Failure names a failed operation while keeping its cause for errors.Is/As.
+// Endpoint text in the cause (URLs, credentials, payloads) is never rendered.
+type operationError struct {
 	operation string
 	cause     error
 }
 
-func (e *rpcReadError) Error() string { return e.operation + " failed" }
-func (e *rpcReadError) Unwrap() error { return e.cause }
-func rpcFailure(operation string, err error) error {
+func (e *operationError) Error() string { return e.operation + " failed" }
+func (e *operationError) Unwrap() error { return e.cause }
+func Failure(operation string, err error) error {
 	if err == nil {
 		return nil
 	}
-	return &rpcReadError{operation: operation, cause: err}
+	return &operationError{operation: operation, cause: err}
 }

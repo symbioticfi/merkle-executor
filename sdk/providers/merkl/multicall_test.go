@@ -50,7 +50,7 @@ func multicallReader(t *testing.T, tokens []common.Address, inner reader) reader
 		}
 		results := make([]multicall.Multicall3Result, len(calls))
 		for i, call := range calls {
-			if call.Target != addr(4) || call.AllowFailure || !bytes.Equal(call.CallData, expected[i]) {
+			if call.Target != addr(4) || !call.AllowFailure || !bytes.Equal(call.CallData, expected[i]) {
 				t.Fatalf("batch call %d changed target/failure policy/account/token", i)
 			}
 			raw, err := inner(ctx, ethereum.CallMsg{From: addr(5), To: &call.Target, Data: call.CallData}, block)
@@ -154,7 +154,7 @@ func TestPrepareRejectsInvalidAggregateWithoutIndividualFallback(t *testing.T) {
 				}
 				return multicall.NewMulticall3().GetABI().Methods["aggregate3"].Outputs.Pack(results)
 			})
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "0:0", CalldataBytes: 452, AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: true, DedicatedClaimGroup: true}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "0:0", CalldataBytes: 452, ClaimableInputs: []uint{1}}
 			p, err := New(cfg, provider.Deps{Chain: chain, HTTP: srv.Client()})
 			if err != nil {
 				t.Fatal(err)
@@ -170,7 +170,7 @@ func TestPrepareRejectsInvalidAggregateWithoutIndividualFallback(t *testing.T) {
 				return
 			}
 			expected := a.PackClaim([]common.Address{addr(3)}, []common.Address{addr(1)}, []*big.Int{big.NewInt(100)}, [][][32]byte{{sibling}})
-			if err != nil || out.Inputs[0] != "100" || out.Inputs[1] != "20" || !bytes.Equal(out.Actions["0:0"], expected) {
+			if err != nil || out.Inputs[1] != "20" || !bytes.Equal(out.Actions["0:0"], expected) {
 				t.Fatalf("unused default changed account claim: output=%+v error=%v", out, err)
 			}
 		})

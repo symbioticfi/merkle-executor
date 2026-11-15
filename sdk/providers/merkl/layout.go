@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"math/big"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
@@ -12,17 +11,9 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-func layoutArgs(names ...string) abi.Arguments {
-	args := make(abi.Arguments, len(names))
-	for i, name := range names {
-		args[i].Type, _ = abi.NewType(name, "", nil)
-	}
-	return args
-}
-
-var guardedArgs = layoutArgs("bytes[]", "bytes[]", "uint256[]")
+var guardedArgs = recipes.Arguments("bytes[]", "bytes[]", "uint256[]")
 var guardedSelector = crypto.Keccak256([]byte("execute(bytes[],bytes[],uint256[])"))[:4]
-var nestedCallArgs = layoutArgs("address", "bytes", "uint256[]")
+var nestedCallArgs = recipes.Arguments("address", "bytes", "uint256[]")
 
 type claimLayout struct {
 	data        []byte

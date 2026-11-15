@@ -7,7 +7,6 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -134,7 +133,7 @@ func openEnvironment(ctx context.Context, path string, httpClient *http.Client) 
 			name string
 			new  func(provider.Deps) (keeper.Provider, error)
 		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}, {"claims", claims.NewAutomatic}} {
-			p, err := registration.new(provider.Deps{Chain: client, HTTP: httpClient, LookupSecret: os.Getenv})
+			p, err := registration.new(provider.Deps{Chain: client, HTTP: httpClient})
 			if err != nil {
 				return nil, errors.Errorf("configure provider %s: %w", registration.name, err)
 			}

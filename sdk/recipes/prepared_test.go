@@ -123,10 +123,11 @@ func (r *idleEnvelopeReader) CallContractWithCode(_ context.Context, call ethere
 	})
 	results := make([][]byte, len(entries))
 	for i, entry := range entries {
-		recipe, _, err := decodeExecution(entry.Data)
+		decoded, err := decodeExecution(entry.Data)
 		if err != nil {
 			return nil, err
 		}
+		recipe := decoded.recipe
 		values := make([]*big.Int, len(recipe.Steps))
 		for i := range values {
 			values[i] = new(big.Int)
