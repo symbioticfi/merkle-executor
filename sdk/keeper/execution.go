@@ -13,11 +13,12 @@ type PlanMember struct {
 }
 type ExecutionPlan struct {
 	To       common.Address   `json:"to"`
+	Sender   common.Address   `json:"sender,omitempty"`
 	Members  []PlanMember     `json:"members"`
 	Failures map[string]error `json:"-"`
 }
 
-// Transaction encodes a direct call or an ordered delegated self-call.
+// Transaction encodes a direct, AccessManager-forwarded or delegated call.
 func (b ExecutionPlan) Transaction() (common.Address, []byte, error) {
 	if len(b.Members) == 0 {
 		return common.Address{}, nil, errors.New("empty executor batch")
@@ -43,6 +44,13 @@ func (b ExecutionPlan) Transaction() (common.Address, []byte, error) {
 			return b.To, nil, err
 		}
 		calls[i] = recipes.ExecutorCall{Executor: member.Plan.Snapshot.Executor, Data: member.Plan.Calldata}
+	}
+	if b.Sender != (common.Address{}) && b.Sender != caller {
+		if len(calls) != 1 || b.To != caller {
+			return b.To, nil, errors.New("AccessManager execution requires one executor and its caller target")
+		}
+		data, err := recipes.AccessManagerCalldata(calls[0].Executor, calls[0].Data)
+		return b.To, data, err
 	}
 	if len(calls) == 1 && b.To == calls[0].Executor {
 		return b.To, bytes.Clone(calls[0].Data), nil

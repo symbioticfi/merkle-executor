@@ -59,7 +59,8 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 		return ExecutionPlan{}, candidateFailures(failures)
 	}
 	batch.Failures = failures
-	if supportsBatch && len(strategies) > 1 {
+	forwarded := p.Sender != (common.Address{}) && p.Sender != p.Caller
+	if supportsBatch && len(strategies) > 1 && !forwarded {
 		delegated, err = recipes.SupportsDelegatedBatch(ctx, reader, p.Caller, block)
 		if err != nil {
 			return batch, err
@@ -168,6 +169,7 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 			continue
 		}
 		batch.To = p.Caller
+		batch.Sender = p.Sender
 		batch.Members = append(batch.Members, PlanMember{Name: name, Plan: plan})
 		selected = append(selected, discovered[i].Prepared)
 		for _, group := range plan.Outputs {
@@ -178,9 +180,11 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 			}
 		}
 		if !delegated {
-			batch.To = snap.Executor
+			if !forwarded {
+				batch.To = snap.Executor
+			}
 			calls, leaves, witnesses := batch.validation()
-			err = recipes.ValidatePreparedBatch(ctx, p.Chain, selected, calls, leaves, witnesses, p.Caller, p.MaxGas)
+			err = recipes.ValidatePreparedBatchForSender(ctx, p.Chain, selected, calls, leaves, witnesses, p.Caller, p.Sender, p.MaxGas)
 			if errors.Is(err, provider.ErrNotReady) {
 				batch = ExecutionPlan{Failures: failures}
 				selected = nil
@@ -228,14 +232,14 @@ func candidateFailures(failures map[string]error) error {
 
 func (p *Planner) fit(ctx context.Context, batch ExecutionPlan, selected []recipes.PreparedRecipe, strategies []Strategy, prior error) (ExecutionPlan, error) {
 	for len(batch.Members) > 0 {
-		if len(batch.Members) == 1 {
+		if len(batch.Members) == 1 && (p.Sender == (common.Address{}) || p.Sender == p.Caller) {
 			batch.To = batch.Members[0].Plan.Snapshot.Executor
 		}
 		calls, leaves, witnesses := batch.validation()
 		err := prior
 		prior = nil
 		if err == nil {
-			err = recipes.ValidatePreparedBatch(ctx, p.Chain, selected, calls, leaves, witnesses, p.Caller, p.MaxGas)
+			err = recipes.ValidatePreparedBatchForSender(ctx, p.Chain, selected, calls, leaves, witnesses, p.Caller, p.Sender, p.MaxGas)
 		}
 		if err == nil {
 			return batch, nil

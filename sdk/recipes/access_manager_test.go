@@ -107,3 +107,22 @@ func TestRouteExecutionRejectsInvalidIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestRouteExecutionBatchUsesExecuteGrant(t *testing.T) {
+	manager := accessmanager.NewAccessManager()
+	data := executorABI.PackExecute(nil, nil, nil, nil)
+	batch, err := Multicall([][]byte{data, data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &authorityReader{snapshot: Snapshot{Executor: common.Address{1}, Caller: common.Address{2}, BlockNumber: 123}, sender: common.Address{3}, data: data}
+	r.result, err = manager.GetABI().Methods["canCall"].Outputs.Pack(true, uint32(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, err := RouteExecution(t.Context(), r, r.snapshot, r.sender, batch)
+	expected := manager.PackMulticall([][]byte{manager.PackExecute(r.snapshot.Executor, data), manager.PackExecute(r.snapshot.Executor, data)})
+	if err != nil || r.reads != 1 || call.Executor != r.snapshot.Caller || !bytes.Equal(call.Data, expected) {
+		t.Fatalf("wrong atomic forwarding: %v", err)
+	}
+}

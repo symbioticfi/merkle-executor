@@ -161,7 +161,16 @@ contracts, with exact recipe constraints enforced by the planner.
 execution sender. When the sender is the configured caller, it preserves the
 original transaction. Otherwise it checks the configured caller's OpenZeppelin
 AccessManager `canCall(sender, executor, selector)` at the snapshot block, requires
-an immediate grant, and wraps the unchanged payload in `execute(executor, data)`.
-Hosts retain their full outer transaction simulation and fresh identity checks.
+an immediate grant, and wraps a single unchanged payload in
+`execute(executor, data)`. Same-executor batches use the manager's atomic `multicall` of forwarded `execute` calls, so the
+existing execute-only grant also authorizes batching.
+The daemon sets `Planner.Sender` from the optional `signer.address` (defaulting
+to the discovered caller) and checks the sending key against it. Forwarded plans
+admit one executor per transaction, retaining same-executor batches; other ready
+executors remain eligible on later ticks. `ValidatePreparedBatchForSender` keeps
+numeric witnesses, work detection and fresh identity/role checks, checks the
+immediate grant, simulates the unchanged outer call from the signing EOA, and
+closes the canonical block pins. Direct and delegated execution are unchanged.
+Other SDK hosts retain their full outer transaction simulation and fresh identity checks.
 The helper does not infer an authority from arbitrary account bytecode, schedule
 delayed calls, grant roles, or change any recipe instruction or permission.

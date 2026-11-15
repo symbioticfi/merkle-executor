@@ -22,9 +22,17 @@ func RouteExecution(ctx context.Context, reader Reader, snapshot Snapshot, sende
 	if sender == snapshot.Caller {
 		return call, nil
 	}
+	dataToCheck := data
+	if isMulticall(data) {
+		entries, err := Executions(data)
+		if err != nil {
+			return ExecutorCall{}, err
+		}
+		dataToCheck = entries[0]
+	}
 	manager := accessmanager.NewAccessManager()
 	raw, err := reader.CallContract(ctx, ethereum.CallMsg{
-		To: &snapshot.Caller, Data: manager.PackCanCall(sender, snapshot.Executor, [4]byte(data[:4])),
+		To: &snapshot.Caller, Data: manager.PackCanCall(sender, snapshot.Executor, [4]byte(dataToCheck[:4])),
 	}, new(big.Int).SetUint64(snapshot.BlockNumber))
 	if err != nil {
 		return ExecutorCall{}, errors.Errorf("read AccessManager caller permission: %w", err)
@@ -37,6 +45,25 @@ func RouteExecution(ctx context.Context, reader Reader, snapshot Snapshot, sende
 		return ExecutorCall{}, errors.New("AccessManager caller lacks an immediate executor grant")
 	}
 	call.Executor = snapshot.Caller
-	call.Data = manager.PackExecute(snapshot.Executor, data)
-	return call, nil
+	call.Data, err = AccessManagerCalldata(snapshot.Executor, data)
+	return call, err
+}
+
+// AccessManagerCalldata preserves atomic same-executor batches using the
+// manager's multicall of execute calls. Only the inner execute selector needs
+// authorization; the executor's own multicall need not be granted separately.
+func AccessManagerCalldata(executor common.Address, data []byte) ([]byte, error) {
+	manager := accessmanager.NewAccessManager()
+	if !isMulticall(data) {
+		return manager.PackExecute(executor, data), nil
+	}
+	entries, err := Executions(data)
+	if err != nil {
+		return nil, err
+	}
+	forwarded := make([][]byte, len(entries))
+	for i, entry := range entries {
+		forwarded[i] = manager.PackExecute(executor, entry)
+	}
+	return manager.PackMulticall(forwarded), nil
 }
