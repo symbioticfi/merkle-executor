@@ -5,14 +5,6 @@ package transaction
 import (
 	"bytes"
 	"context"
-	"math/big"
-	"net"
-	"os/exec"
-	"strconv"
-	"sync"
-	"testing"
-	"time"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -22,6 +14,13 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/merkle-executor/sdk/chain"
 	"github.com/symbioticfi/merkle-executor/sdk/signer"
+	"math/big"
+	"net"
+	"os/exec"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
 )
 
 type localRelay struct {

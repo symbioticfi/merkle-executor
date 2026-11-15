@@ -1,10 +1,9 @@
 package recipes
 
 import (
+	"github.com/ethereum/go-ethereum/common"
 	"math/big"
 	"testing"
-
-	"github.com/ethereum/go-ethereum/common"
 )
 
 var testTarget = common.HexToAddress("0x11")

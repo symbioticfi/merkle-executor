@@ -4,10 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"math/big"
-	"os"
-	"testing"
-
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -16,6 +12,9 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"math/big"
+	"os"
+	"testing"
 )
 
 func fixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
