@@ -7,7 +7,6 @@ import (
 	"math/big"
 	"net/http"
 	"regexp"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -23,20 +22,19 @@ import (
 )
 
 type Config struct {
-	HTTP           protocolio.HTTPConfig `yaml:"http"`
-	Reactor        string                `yaml:"reactor"`
-	Protocol       string                `yaml:"protocol"`
-	TokenIn        string                `yaml:"tokenIn"`
-	TokenOut       string                `yaml:"tokenOut"`
-	AmountIn       string                `yaml:"amountIn"`
-	MinAmountOut   string                `yaml:"minAmountOut"`
-	Action         string                `yaml:"action"`
-	AmountInInput  *uint                 `yaml:"amountInInput"`
-	AmountOutInput *uint                 `yaml:"amountOutInput"`
-	DeadlineInput  *uint                 `yaml:"deadlineInput"`
-	NonceInput     *uint                 `yaml:"nonceInput"`
-	SolverIDs      []string              `yaml:"solverIds"`
-	MaxLookupPages int                   `yaml:"maxLookupPages"`
+	HTTP           protocolio.HTTPConfig
+	Reactor        string
+	Protocol       string
+	TokenIn        string
+	TokenOut       string
+	AmountIn       string
+	MinAmountOut   string
+	Action         string
+	AmountInInput  *uint
+	AmountOutInput *uint
+	DeadlineInput  *uint
+	NonceInput     *uint
+	MaxLookupPages int
 }
 type chainReader interface {
 	provider.Reader
@@ -116,21 +114,11 @@ func New(c Config, deps provider.Deps) (*Provider, error) {
 	if c.AmountInInput != nil && c.AmountOutInput != nil && *c.AmountInInput == *c.AmountOutInput {
 		return nil, errors.New("RFQ input mappings must differ")
 	}
-	seen := map[string]bool{}
-	if len(c.SolverIDs) > 50 {
-		return nil, errors.New("RFQ solver count exceeds 50")
-	}
-	for _, id := range c.SolverIDs {
-		if strings.TrimSpace(id) != id || id == "" || seen[id] {
-			return nil, errors.New("RFQ solver IDs must be unique nonempty values")
-		}
-		seen[id] = true
-	}
 	var ok bool
 	if p.chain, ok = deps.Chain.(chainReader); !ok {
 		return nil, errors.New("RFQ requires contract, receipt and canonical header reads")
 	}
-	p.http, err = protocolio.NewHTTP(c.HTTP, deps.HTTP, deps.LookupSecret)
+	p.http, err = protocolio.NewHTTP(c.HTTP, deps.HTTP)
 	return p, err
 }
 func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.Output, error) {
@@ -166,7 +154,7 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 		return provider.Output{}, err
 	}
 	var response wire.RfqQuoteResponse
-	code, err := p.http.JSON(ctx, http.MethodPost, "/quote", wire.RfqQuoteRequest{TokenInChainID: s.ChainID.Int64(), TokenOutChainID: s.ChainID.Int64(), TokenIn: p.tokenIn.Hex(), TokenOut: p.tokenOut.Hex(), Type: "EXACT_INPUT", Amount: p.amount.String(), Swapper: s.Account.Hex(), RoutingPreference: "BEST_PRICE", SolverIDs: p.cfg.SolverIDs, Outputs: []wire.RfqQuoteOutput{{Token: p.tokenOut.Hex(), Recipient: s.Account.Hex()}}}, &response)
+	code, err := p.http.JSON(ctx, http.MethodPost, "/quote", wire.RfqQuoteRequest{TokenInChainID: s.ChainID.Int64(), TokenOutChainID: s.ChainID.Int64(), TokenIn: p.tokenIn.Hex(), TokenOut: p.tokenOut.Hex(), Type: "EXACT_INPUT", Amount: p.amount.String(), Swapper: s.Account.Hex(), RoutingPreference: "BEST_PRICE", Outputs: []wire.RfqQuoteOutput{{Token: p.tokenOut.Hex(), Recipient: s.Account.Hex()}}}, &response)
 	if err != nil {
 		if code == http.StatusNotFound {
 			return provider.Output{}, provider.ErrNotReady
@@ -182,13 +170,6 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 		}
 		if _, err := parse.Address(option.Solver.Filler); err != nil {
 			return provider.Output{}, errors.New("RFQ invalid solver filler")
-		}
-		allowed := len(p.cfg.SolverIDs) == 0
-		for _, id := range p.cfg.SolverIDs {
-			allowed = allowed || id == option.Solver.ID
-		}
-		if !allowed {
-			continue
 		}
 		request, quote, err := p.quote(option.Quote, s.Account)
 		if err != nil {

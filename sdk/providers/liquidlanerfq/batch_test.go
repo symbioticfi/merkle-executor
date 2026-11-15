@@ -131,7 +131,7 @@ func TestQuoteHTTPLimitsAndCancellation(t *testing.T) {
 			}))
 			defer srv.Close()
 			var err error
-			h.p.http, err = protocolio.NewHTTP(protocolio.HTTPConfig{URL: srv.URL, MaxResponseBytes: 128}, nil, nil)
+			h.p.http, err = protocolio.NewHTTP(protocolio.HTTPConfig{URL: srv.URL, MaxResponseBytes: 128}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

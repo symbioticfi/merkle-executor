@@ -91,7 +91,7 @@ func TestPrepareCumulativeSelfClaim(t *testing.T) {
 			if len(payload) != 452 {
 				t.Fatalf("claim ABI layout changed: %d", len(payload))
 			}
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "0:0", CalldataBytes: len(payload), AmountInputs: []uint{0}, ClaimableInputs: []uint{1}}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "0:0", CalldataBytes: len(payload), ClaimableInputs: []uint{1}}
 			if test == "proof-layout" {
 				cfg.ProofCapacities[0] = 2
 			}
@@ -109,15 +109,15 @@ func TestPrepareCumulativeSelfClaim(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if out.Inputs[0] != "100" || out.Inputs[1] != "20" || hexutil.Encode(out.Actions["0:0"]) != hexutil.Encode(payload) {
+			if out.Inputs[1] != "20" || hexutil.Encode(out.Actions["0:0"]) != hexutil.Encode(payload) {
 				t.Fatal("claim did not use cumulative amount/current claimed balance")
 			}
 		})
 	}
 }
 
-func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
-	for _, test := range []string{"no-chain", "no-token", "below-minimum", "bad-proof", "redirected", "rpc-error", "malformed-response", "idle-no-skip"} {
+func TestPrepareIdlesOnlyAfterValidEmptyWork(t *testing.T) {
+	for _, test := range []string{"no-chain", "no-token", "fully-claimed", "bad-proof", "redirected", "rpc-error", "malformed-response"} {
 		t.Run(test, func(t *testing.T) {
 			sibling := common.HexToHash("0x" + strings.Repeat("11", 32))
 			root := common.HexToHash("0xd98400418a73f31e4b681498ddc089b9c9b92f409942f76789590c1cae24f0ab")
@@ -134,15 +134,14 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(entries) }))
 			defer srv.Close()
 			rpcCalls := 0
-			a := binding.NewMerklDistributor()
-			abi := a.GetABI()
+			abi := binding.NewMerklDistributor().GetABI()
 			chain := reader(func(_ context.Context, m ethereum.CallMsg, b *big.Int) ([]byte, error) {
 				rpcCalls++
 				if test == "rpc-error" {
 					return nil, errors.New("local RPC unavailable")
 				}
 				if b.Int64() != 12 || *m.To != addr(4) {
-					t.Error("optional claim read not pinned")
+					t.Error("claim read not pinned")
 				}
 				method, e := abi.MethodById(m.Data[:4])
 				if e != nil {
@@ -155,7 +154,11 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 					}
 					return method.Outputs.Pack(root)
 				case "claimed":
-					return method.Outputs.Pack(big.NewInt(95), big.NewInt(900), root)
+					claimed := int64(95)
+					if test == "fully-claimed" {
+						claimed = 100
+					}
+					return method.Outputs.Pack(big.NewInt(claimed), big.NewInt(900), root)
 				case "claimRecipient":
 					if test == "redirected" {
 						return method.Outputs.Pack(addr(9))
@@ -165,11 +168,7 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 				t.Fatalf("unexpected method %s", method.Name)
 				return nil, nil
 			})
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "7:0", CalldataBytes: 452, MinClaimable: "10", AmountInputs: []uint{2}, ClaimableInputs: []uint{4}, SkipIfEmpty: true, DedicatedClaimGroup: true}
-			if test == "idle-no-skip" {
-				cfg.SkipIfEmpty = false
-				cfg.DedicatedClaimGroup = false
-			}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "7:0", CalldataBytes: 452, ClaimableInputs: []uint{4}}
 			p, e := New(cfg, provider.Deps{Chain: multicallReader(t, []common.Address{addr(1)}, chain), HTTP: srv.Client()})
 			if e != nil {
 				t.Fatal(e)
@@ -178,57 +177,15 @@ func TestOptionalClaimSkipsOnlyValidEmptyWork(t *testing.T) {
 			switch test {
 			case "bad-proof", "redirected", "rpc-error", "malformed-response":
 				if e == nil || errors.Is(e, provider.ErrNotReady) {
-					t.Fatalf("invalid response became skip/idle: %+v %v", out, e)
-				}
-				return
-			case "idle-no-skip":
-				if !errors.Is(e, provider.ErrNotReady) {
-					t.Fatalf("below minimum not normal idle: %v", e)
+					t.Fatalf("invalid response became idle: %+v %v", out, e)
 				}
 				return
 			}
-			if e != nil {
-				t.Fatal(e)
-			}
-			if len(out.SkipSteps) != 1 || out.SkipSteps[0] != 7 || len(out.Actions) != 0 || out.Inputs[2] != "0" || out.Inputs[4] != "0" {
-				t.Fatalf("optional claim did not zero gate and skip dedicated step: %+v", out)
-			}
-			var data struct {
-				Skipped bool `json:"skipped"`
-			}
-			if json.Unmarshal(out.Data, &data) != nil || !data.Skipped {
-				t.Fatal("skip output missing")
+			if !errors.Is(e, provider.ErrNotReady) || len(out.Actions) != 0 {
+				t.Fatalf("valid empty work was not idle: %+v %v", out, e)
 			}
 			if (test == "no-chain" || test == "no-token") && rpcCalls != 0 {
 				t.Fatal("empty rewards performed unnecessary claim reads")
-			}
-		})
-	}
-}
-
-func TestOptionalClaimRequiresDedicatedSingleActionLayout(t *testing.T) {
-	for _, test := range []string{"missing-ack", "batch", "nonzero-action", "wrong-layout", "step-overflow"} {
-		t.Run(test, func(t *testing.T) {
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: "https://example.invalid"}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "7:0", CalldataBytes: 452, SkipIfEmpty: true, DedicatedClaimGroup: true}
-			switch test {
-			case "missing-ack":
-				cfg.DedicatedClaimGroup = false
-			case "batch":
-				cfg.Tokens = append(cfg.Tokens, addr(2).Hex())
-				cfg.ProofCapacities = append(cfg.ProofCapacities, 1)
-			case "nonzero-action":
-				cfg.Action = "7:1"
-			case "wrong-layout":
-				cfg.CalldataBytes = 420
-			case "step-overflow":
-				cfg.Action = "999999999999999999999999999999:0"
-			}
-			_, e := New(cfg, provider.Deps{Chain: reader(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
-				t.Fatal("factory made RPC call")
-				return nil, nil
-			})})
-			if e == nil {
-				t.Fatal("unsafe optional claim configuration accepted")
 			}
 		})
 	}

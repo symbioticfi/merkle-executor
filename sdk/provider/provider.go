@@ -18,8 +18,6 @@ import (
 type Deps struct {
 	Chain Reader
 	HTTP  *http.Client
-	// LookupSecret resolves configured credential references without environment access in the SDK.
-	LookupSecret func(string) string
 }
 
 // Reader pins protocol reads to the same block used for recipe discovery.

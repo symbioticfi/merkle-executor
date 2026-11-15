@@ -1,8 +1,6 @@
 package merkl
 
 import (
-	"encoding/json"
-	"math/big"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -45,21 +43,13 @@ func (p *Automatic) prepareAll(s provider.Snapshot, claim recipeClaim, entries [
 	}
 	var outputs []provider.Output
 	for _, runtime := range runtimes {
-		prepared, err := runtime.prepareRewards(s, entries, func() ([]multicall.Multicall3Result, error) {
+		prepared, claimable, err := runtime.prepareRewards(s, entries, func() ([]multicall.Multicall3Result, error) {
 			return reads.forProvider(runtime)
 		})
 		if err != nil {
 			return nil, err
 		}
-		var info map[string]string
-		if err := json.Unmarshal(prepared.Data, &info); err != nil {
-			return nil, err
-		}
-		amount, ok := new(big.Int).SetString(info["claimable"], 10)
-		if !ok {
-			return nil, errors.New("invalid prepared Merkl amount")
-		}
-		if amount.Sign() == 0 {
+		if claimable.Sign() == 0 {
 			continue
 		}
 		payload := claim.layout.payload(claim.action.Leaf.Data, prepared.Actions[claim.cfg.Action])

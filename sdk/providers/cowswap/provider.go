@@ -24,21 +24,21 @@ import (
 )
 
 type Config struct {
-	HTTP            protocolio.HTTPConfig `yaml:"http"`
-	Settlement      string                `yaml:"settlement"`
-	SellToken       string                `yaml:"sellToken"`
-	BuyToken        string                `yaml:"buyToken"`
-	SellAmount      string                `yaml:"sellAmount"`
-	MinBuyAmount    string                `yaml:"minBuyAmount"`
-	ValiditySeconds uint64                `yaml:"validitySeconds"`
-	Action          string                `yaml:"action"`
-	SellAmountInput *uint                 `yaml:"sellAmountInput"`
-	BuyAmountInput  *uint                 `yaml:"buyAmountInput"`
+	HTTP            protocolio.HTTPConfig
+	Settlement      string
+	SellToken       string
+	BuyToken        string
+	SellAmount      string
+	MinBuyAmount    string
+	ValiditySeconds uint64
+	Action          string
+	SellAmountInput *uint
+	BuyAmountInput  *uint
 }
 type Client struct{ http *protocolio.Client }
 
-func NewClient(c protocolio.HTTPConfig, h *http.Client, lookup func(string) string) (*Client, error) {
-	v, e := protocolio.NewHTTP(c, h, lookup)
+func NewClient(c protocolio.HTTPConfig, h *http.Client) (*Client, error) {
+	v, e := protocolio.NewHTTP(c, h)
 	if e != nil {
 		return nil, e
 	}
@@ -131,14 +131,14 @@ func New(c Config, deps provider.Deps) (*Provider, error) {
 	if c.SellAmountInput != nil && c.BuyAmountInput != nil && *c.SellAmountInput == *c.BuyAmountInput {
 		return nil, errors.New("CoW duplicate input index")
 	}
-	p.client, e = NewClient(c.HTTP, deps.HTTP, deps.LookupSecret)
+	p.client, e = NewClient(c.HTTP, deps.HTTP)
 	if e != nil {
 		return nil, e
 	}
 	if deps.Chain == nil {
 		return nil, errors.New("CoW chain reader required")
 	}
-	bff, e := protocolio.NewHTTP(protocolio.HTTPConfig{URL: volatilityURL, TimeoutSeconds: 2, MaxResponseBytes: 4096}, deps.HTTP, nil)
+	bff, e := protocolio.NewHTTP(protocolio.HTTPConfig{URL: volatilityURL, TimeoutSeconds: 2, MaxResponseBytes: 4096}, deps.HTTP)
 	if e != nil {
 		return nil, e
 	}
