@@ -42,47 +42,38 @@ func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int, aggr
 			httpClient.CloseIdleConnections()
 		}
 	}()
-	read, err := dialHTTP(ctx, readURL, httpClient)
+	read, err := dialHTTP(ctx, readURL, httpClient, expected, "read")
 	if err != nil {
-		return nil, rpcFailure("connect read RPC", err)
-	}
-	got, err := read.ChainID(ctx)
-	if err != nil {
-		read.Close()
-		return nil, rpcFailure("read RPC chain identity", err)
-	}
-	if got == nil || got.Cmp(expected) != 0 {
-		read.Close()
-		return nil, errors.New("read RPC chain identity mismatch")
+		return nil, err
 	}
 	write := read
 	if writeURL != "" && writeURL != readURL {
-		write, err = dialHTTP(ctx, writeURL, httpClient)
-		if err != nil {
+		if write, err = dialHTTP(ctx, writeURL, httpClient, expected, "write"); err != nil {
 			read.Close()
-			return nil, rpcFailure("connect write RPC", err)
-		}
-		got, err = write.ChainID(ctx)
-		if err != nil {
-			read.Close()
-			write.Close()
-			return nil, rpcFailure("write RPC chain identity", err)
-		}
-		if got == nil || got.Cmp(expected) != 0 {
-			read.Close()
-			write.Close()
-			return nil, errors.New("write RPC chain identity mismatch")
+			return nil, err
 		}
 	}
 	connected = true
 	return &Client{Client: read, write: write, http: httpClient, readURL: readURL, multicall: multicall}, nil
 }
-func dialHTTP(ctx context.Context, endpoint string, client *http.Client) (*ethclient.Client, error) {
+
+// dialHTTP connects one endpoint and requires the expected chain identity.
+func dialHTTP(ctx context.Context, endpoint string, client *http.Client, expected *big.Int, role string) (*ethclient.Client, error) {
 	connection, err := rpc.DialOptions(ctx, endpoint, rpc.WithHTTPClient(client))
 	if err != nil {
-		return nil, err
+		return nil, rpcFailure("connect "+role+" RPC", err)
 	}
-	return ethclient.NewClient(connection), nil
+	c := ethclient.NewClient(connection)
+	got, err := c.ChainID(ctx)
+	if err != nil {
+		c.Close()
+		return nil, rpcFailure(role+" RPC chain identity", err)
+	}
+	if got == nil || got.Cmp(expected) != 0 {
+		c.Close()
+		return nil, errors.New(role + " RPC chain identity mismatch")
+	}
+	return c, nil
 }
 func (c *Client) Close() {
 	if c.http != nil {

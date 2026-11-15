@@ -19,12 +19,12 @@ func confirmReceipt(ctx context.Context, chain Backend, receipt *types.Receipt, 
 	}
 	reads, err := protocolio.ReadGroup(ctx, chain, protocolio.ReadRequest{Kind: protocolio.ReadHeader}, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: witnessNumber})
 	if err != nil {
-		return nil, failure("read confirmation headers", err)
+		return nil, protocolio.Failure("read confirmation headers", err)
 	}
 	headResult := reads.At(0)
 	head, err := headResult.Header, headResult.Err
 	if err != nil {
-		return nil, failure("read confirmation head", err)
+		return nil, protocolio.Failure("read confirmation head", err)
 	}
 	if head == nil || head.Number == nil || !head.Number.IsUint64() {
 		return nil, errors.New("invalid confirmation head")
@@ -38,21 +38,14 @@ func confirmReceipt(ctx context.Context, chain Backend, receipt *types.Receipt, 
 		return nil, nil
 	}
 	if err != nil {
-		return nil, failure("read confirmation witness", err)
+		return nil, protocolio.Failure("read confirmation witness", err)
 	}
 	if witness == nil || witness.Number == nil || witness.Number.Cmp(witnessNumber) != 0 {
 		return nil, errors.New("invalid confirmation witness")
 	}
-	ancestor := witness
-	for ancestor.Number.Cmp(receipt.BlockNumber) > 0 {
-		parent, err := chain.HeaderByHash(ctx, ancestor.ParentHash)
-		if err != nil {
-			return nil, failure("read confirmation ancestry", err)
-		}
-		if parent == nil || parent.Number == nil || parent.Hash() != ancestor.ParentHash || new(big.Int).Add(parent.Number, big.NewInt(1)).Cmp(ancestor.Number) != 0 {
-			return nil, errors.New("inconsistent receipt ancestry")
-		}
-		ancestor = parent
+	ancestor, err := protocolio.Ancestor(ctx, chain, witness, receipt.BlockNumber)
+	if err != nil {
+		return nil, err
 	}
 	if ancestor.Hash() != receipt.BlockHash {
 		return nil, nil
@@ -62,7 +55,7 @@ func confirmReceipt(ctx context.Context, chain Backend, receipt *types.Receipt, 
 		return nil, nil
 	}
 	if err != nil {
-		return nil, failure("recheck transaction receipt", err)
+		return nil, protocolio.Failure("recheck transaction receipt", err)
 	}
 	if _, err := executionFromReceipt(fresh, receipt.TxHash); err != nil {
 		return nil, err
@@ -72,7 +65,7 @@ func confirmReceipt(ctx context.Context, chain Backend, receipt *types.Receipt, 
 	}
 	stable, err := chain.HeaderByNumber(ctx, witnessNumber)
 	if err != nil {
-		return nil, failure("recheck confirmation witness", err)
+		return nil, protocolio.Failure("recheck confirmation witness", err)
 	}
 	if stable == nil || stable.Hash() != witness.Hash() {
 		return nil, nil

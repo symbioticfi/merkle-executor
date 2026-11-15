@@ -92,7 +92,7 @@ func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts 
 	if err != nil {
 		return nil, errors.Errorf("pin recipe batch: %w", err)
 	}
-	if err = validateHeader(header, nil); err != nil {
+	if err = protocolio.CheckHeader(header, nil); err != nil {
 		return nil, err
 	}
 	requests, indices := batchSnapshotRequests(snapshots, header.Number)
@@ -167,7 +167,7 @@ func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts 
 			}
 			eventHeader = result.Header
 		}
-		if err = validateHeader(eventHeader, new(big.Int).SetUint64(snapshot.RecipeBlock)); err != nil {
+		if err = protocolio.CheckHeader(eventHeader, new(big.Int).SetUint64(snapshot.RecipeBlock)); err != nil {
 			results[i].Err = err
 			continue
 		}
@@ -348,7 +348,7 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 	if err != nil {
 		return err
 	}
-	if err = validateHeader(current, nil); err != nil {
+	if err = protocolio.CheckHeader(current, nil); err != nil {
 		return err
 	}
 	gasLimit = min(gasLimit, current.GasLimit)
@@ -536,7 +536,7 @@ func verifyPins(pins []preparedPin, result func(int) protocolio.ReadResult) erro
 		if member.Err != nil {
 			return errors.Errorf("check prepared block: %w", member.Err)
 		}
-		if err := validateHeader(member.Header, new(big.Int).SetUint64(pin.number)); err != nil {
+		if err := protocolio.CheckHeader(member.Header, new(big.Int).SetUint64(pin.number)); err != nil {
 			return err
 		}
 		if member.Header.Hash() != pin.hash {

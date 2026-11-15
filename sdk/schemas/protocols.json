@@ -353,14 +353,6 @@
           "x-go-name": "RoutingPreference",
           "type": "string"
         },
-        "solverIds": {
-          "x-go-name": "SolverIDs",
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "x-go-omitempty": true
-        },
         "outputs": {
           "x-go-name": "Outputs",
           "type": "array",

@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"bytes"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
