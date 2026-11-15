@@ -123,8 +123,9 @@ func openEnvironment(ctx context.Context, path string, httpClient *http.Client) 
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Signer.Address != "" && common.HexToAddress(cfg.Signer.Address) != caller {
-		return nil, errors.New("signer.address assertion does not match executor caller")
+	sender := caller
+	if cfg.Signer.Address != "" {
+		sender = common.HexToAddress(cfg.Signer.Address)
 	}
 	strategies := make([]keeper.Strategy, 0, len(cfg.Strategies))
 	for _, sc := range cfg.Strategies {
@@ -150,7 +151,7 @@ func openEnvironment(ctx context.Context, path string, httpClient *http.Client) 
 		s.Providers = append(s.Providers, capacity, claims)
 		strategies = append(strategies, s)
 	}
-	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, MaxGas: cfg.TxManager.MaxGas, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}
+	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Sender: sender, MaxGas: cfg.TxManager.MaxGas, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}
 	return &environment{cfg: cfg, client: client, planner: planner, strategies: strategies, log: log,
 		close: func() { client.Close(); flush() }}, nil
 }
@@ -244,8 +245,12 @@ func newKeeper(env *environment) (*keeper.Keeper, *transaction.Manager, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		if txSigner.Address() != env.planner.Caller {
-			return nil, nil, errors.New("signer key does not match executor caller")
+		sender := env.planner.Sender
+		if sender == (common.Address{}) {
+			sender = env.planner.Caller
+		}
+		if txSigner.Address() != sender {
+			return nil, nil, errors.New("signer key does not match configured sender")
 		}
 		manager, err = transaction.New(env.client, txSigner, env.planner.ChainID, env.cfg.TxManager.SenderConfig(), env.log)
 		if err != nil {

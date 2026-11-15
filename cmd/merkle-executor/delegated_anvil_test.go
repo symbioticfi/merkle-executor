@@ -25,6 +25,16 @@ import (
 )
 
 func TestAnvilServiceDelegatedBatch(t *testing.T) {
+	testServiceCaller(t, "delegated")
+}
+
+func TestAnvilServiceAccessManager(t *testing.T) {
+	for _, mode := range []string{"immediate", "denied", "delayed"} {
+		t.Run(mode, func(t *testing.T) { testServiceCaller(t, mode) })
+	}
+}
+
+func testServiceCaller(t *testing.T, mode string) {
 	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
 		t.Skip("local Anvil only")
 	}
@@ -44,24 +54,39 @@ func TestAnvilServiceDelegatedBatch(t *testing.T) {
 	if err := client.Client().CallContext(ctx, nil, "anvil_setBalance", caller, "0xde0b6b3a7640000"); err != nil {
 		t.Fatal(err)
 	}
-	var runtime struct {
-		Address     common.Address
-		Runtime     hexutil.Bytes
-		RuntimeHash common.Hash
-	}
-	raw, err := os.ReadFile("../../sdk/recipes/testdata/anvil/MetaMaskDelegator.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = json.Unmarshal(raw, &runtime); err != nil {
-		t.Fatal(err)
-	}
-	if crypto.Keccak256Hash(runtime.Runtime) != runtime.RuntimeHash {
-		t.Fatal("invalid delegation fixture")
-	}
-	for address, code := range map[common.Address][]byte{runtime.Address: runtime.Runtime, caller: types.AddressToDelegation(runtime.Address)} {
-		if err := client.Client().CallContext(ctx, nil, "anvil_setCode", address, hexutil.Bytes(code)); err != nil {
+	if mode == "delegated" {
+		var runtime struct {
+			Address     common.Address
+			Runtime     hexutil.Bytes
+			RuntimeHash common.Hash
+		}
+		raw, err := os.ReadFile("../../sdk/recipes/testdata/anvil/MetaMaskDelegator.json")
+		if err != nil {
 			t.Fatal(err)
+		}
+		if err = json.Unmarshal(raw, &runtime); err != nil {
+			t.Fatal(err)
+		}
+		if crypto.Keccak256Hash(runtime.Runtime) != runtime.RuntimeHash {
+			t.Fatal("invalid delegation fixture")
+		}
+		for address, code := range map[common.Address][]byte{runtime.Address: runtime.Runtime, caller: types.AddressToDelegation(runtime.Address)} {
+			if err := client.Client().CallContext(ctx, nil, "anvil_setCode", address, hexutil.Bytes(code)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	authority := caller
+	var managerArtifact serviceArtifact
+	if mode != "delegated" {
+		managerArtifact = loadServiceArtifact(t, "AccessManager")
+		authority = serviceSeedTransaction(t, ctx, client, owner, nil, append(bytes.Clone(managerArtifact.Bytecode), servicePack(t, managerArtifact, "", owner)...)).ContractAddress
+		delay := uint32(0)
+		if mode == "delayed" {
+			delay = 60
+		}
+		if mode != "denied" {
+			serviceSeedTransaction(t, ctx, client, owner, &authority, servicePack(t, managerArtifact, "grantRole", uint64(3), caller, delay))
 		}
 	}
 	aa, ta, ea := loadServiceArtifact(t, "FixtureAccount"), loadServiceArtifact(t, "FixtureToken"), loadServiceArtifact(t, "RecipeExecutor")
@@ -98,8 +123,13 @@ func TestAnvilServiceDelegatedBatch(t *testing.T) {
 			issuerStep(t, recipes.Read, []string{"uint256"}, new(big.Int)),
 			issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, result, [][32]byte{leaf.Hash}, [][]*big.Int{{new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), result)}}),
 		}}
-		serviceSeedTransaction(t, ctx, client, owner, &address, executor.NewRecipeExecutor().PackSetCaller(caller))
+		serviceSeedTransaction(t, ctx, client, owner, &address, executor.NewRecipeExecutor().PackSetCaller(authority))
 		serviceSeedTransaction(t, ctx, client, owner, &address, executor.NewRecipeExecutor().PackSetRecipe(r.Queries, r.Steps))
+		if mode != "delegated" {
+			methods := executor.NewRecipeExecutor().GetABI().Methods
+			selectors := [][4]byte{[4]byte(methods["execute"].ID)}
+			serviceSeedTransaction(t, ctx, client, owner, &authority, servicePack(t, managerArtifact, "setTargetFunctionRole", address, selectors, uint64(3)))
+		}
 		permission, err := json.Marshal(map[string]any{"root": leaf.Hash.Hex(), "chainId": 31337, "adapter": recipient.Hex(), "vault": owner.Hex(), "actions": []any{}, "leaves": []any{map[string]any{"hash": leaf.Hash.Hex(), "target": token.Hex(), "value": "zero", "data": hexutil.Encode(data), "dataMask": hexutil.Encode(mask), "proof": []string{}}}})
 		if err != nil {
 			t.Fatal(err)
@@ -118,8 +148,18 @@ func TestAnvilServiceDelegatedBatch(t *testing.T) {
 	cfg.Curator.URL = server.URL + "/api/v1"
 	path := writeCLIConfig(t, t.TempDir(), cfg)
 	var output bytes.Buffer
-	if err := planBot(ctx, path, &output); err != nil {
-		t.Fatal(err)
+	planErr := planBot(ctx, path, &output)
+	if mode == "denied" || mode == "delayed" {
+		if planErr == nil || !strings.Contains(planErr.Error(), "immediate") {
+			t.Fatalf("accepted unavailable grant: %v", planErr)
+		}
+		if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 0 {
+			t.Fatal("denied planning sent a transaction")
+		}
+		return
+	}
+	if planErr != nil {
+		t.Fatal(planErr)
 	}
 	var plan struct {
 		To   common.Address
@@ -129,7 +169,11 @@ func TestAnvilServiceDelegatedBatch(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.To != caller || len(plan.Plan.Members) != 2 {
+	expectedMembers := 2
+	if mode != "delegated" {
+		expectedMembers = 1
+	}
+	if plan.To != authority || len(plan.Plan.Members) != expectedMembers {
 		t.Fatal("plan omitted idle executor activated by predecessor")
 	}
 	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 0 {
@@ -139,10 +183,14 @@ func TestAnvilServiceDelegatedBatch(t *testing.T) {
 	startServiceConfirmationMining(t, ctx, client, caller)
 	runService(t, ctx, path, "ok", 2)
 	transaction := serviceTransaction(t, ctx, client, caller, 0)
-	if transaction.To() == nil || *transaction.To() != caller || !bytes.Equal(transaction.Data(), plan.Data) {
+	if transaction.To() == nil || *transaction.To() != authority || !bytes.Equal(transaction.Data(), plan.Data) {
 		t.Fatal("not the planned self-transaction")
 	}
-	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != 1 {
+	expectedNonce := uint64(1)
+	if mode != "delegated" {
+		expectedNonce = 2
+	}
+	if nonce, err := client.NonceAt(ctx, caller, nil); err != nil || nonce != expectedNonce {
 		t.Fatalf("expected one transaction: nonce %d, %v", nonce, err)
 	}
 	amount, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: erc20.NewERC20().PackBalanceOf(recipient)}, nil)

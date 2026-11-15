@@ -185,6 +185,55 @@ func TestAnvilSingleThreeFClaimBatchesReadyRequests(t *testing.T) {
 			t.Fatal("split claims lost or repeated payout", err)
 		}
 	})
+	t.Run("AccessManager forwards same-executor claims atomically", func(t *testing.T) {
+		var checkpoint string
+		if err := client.Client().CallContext(ctx, &checkpoint, "evm_snapshot"); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			var restored bool
+			if err := client.Client().CallContext(ctx, &restored, "evm_revert", checkpoint); err != nil || !restored {
+				t.Fatal("restore forwarded claims", err)
+			}
+		}()
+		ma := loadServiceArtifact(t, "AccessManager")
+		authority := serviceSeedTransaction(t, ctx, client, owner, nil, append(bytes.Clone(ma.Bytecode), servicePack(t, ma, "", owner)...)).ContractAddress
+		call(authority, ma, "grantRole", uint64(3), owner, uint32(0))
+		selectors := [][4]byte{[4]byte(executor.GetABI().Methods["execute"].ID)}
+		call(authority, ma, "setTargetFunctionRole", target, selectors, uint64(3))
+		serviceSeedTransaction(t, ctx, client, owner, &target, executor.PackSetCaller(authority))
+		forwarded := planner
+		forwarded.Caller, forwarded.Sender = authority, owner
+		batch, err := forwarded.PrepareExecution(ctx, []keeper.Strategy{strategy})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(batch.Members) != 1 {
+			t.Fatal("expected one forwarded executor")
+		}
+		entries, err := recipes.Executions(batch.Members[0].Plan.Calldata)
+		if err != nil || len(entries) != 2 {
+			t.Fatal("forwarding lost same-executor claim batch", err)
+		}
+		to, data, err := batch.Transaction()
+		if err != nil || to != authority {
+			t.Fatal("wrong claim envelope", err)
+		}
+		call(requests[2], ra, "configure", fixture.Account, token, big.NewInt(3), false)
+		if _, err := client.CallContract(ctx, ethereum.CallMsg{From: owner, To: &to, Data: data}, nil); err == nil {
+			t.Fatal("forwarded batch accepted a newly unavailable claim")
+		}
+		before, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: tokenbinding.NewERC20().PackBalanceOf(fixture.Account)}, nil)
+		if err != nil || new(big.Int).SetBytes(before).Sign() != 0 {
+			t.Fatal("failed forwarded batch changed account balance", err)
+		}
+		call(requests[2], ra, "configure", fixture.Account, token, big.NewInt(3), true)
+		serviceSeedTransaction(t, ctx, client, owner, &to, data)
+		raw, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: tokenbinding.NewERC20().PackBalanceOf(fixture.Account)}, nil)
+		if err != nil || new(big.Int).SetBytes(raw).Cmp(big.NewInt(4)) != 0 {
+			t.Fatal("forwarded claims lost payout", err)
+		}
+	})
 	receipt := serviceSeedTransaction(t, ctx, client, owner, &target, plan.Calldata)
 	tb := tokenbinding.NewERC20()
 	balanceData := tb.PackBalanceOf(fixture.Account)

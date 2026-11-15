@@ -26,7 +26,7 @@ var (
 
 // AccessManagerMetaData contains all meta data concerning the AccessManager contract.
 var AccessManagerMetaData = bind.MetaData{
-	ABI: "[{\"type\":\"function\",\"name\":\"canCall\",\"inputs\":[{\"name\":\"caller\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"selector\",\"type\":\"bytes4\",\"internalType\":\"bytes4\"}],\"outputs\":[{\"name\":\"immediate\",\"type\":\"bool\",\"internalType\":\"bool\"},{\"name\":\"delay\",\"type\":\"uint32\",\"internalType\":\"uint32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"execute\",\"inputs\":[{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint32\",\"internalType\":\"uint32\"}],\"stateMutability\":\"payable\"}]",
+	ABI: "[{\"type\":\"function\",\"name\":\"canCall\",\"inputs\":[{\"name\":\"caller\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"selector\",\"type\":\"bytes4\",\"internalType\":\"bytes4\"}],\"outputs\":[{\"name\":\"immediate\",\"type\":\"bool\",\"internalType\":\"bool\"},{\"name\":\"delay\",\"type\":\"uint32\",\"internalType\":\"uint32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"execute\",\"inputs\":[{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint32\",\"internalType\":\"uint32\"}],\"stateMutability\":\"payable\"},{\"type\":\"function\",\"name\":\"multicall\",\"inputs\":[{\"name\":\"data\",\"type\":\"bytes[]\",\"internalType\":\"bytes[]\"}],\"outputs\":[{\"name\":\"results\",\"type\":\"bytes[]\",\"internalType\":\"bytes[]\"}],\"stateMutability\":\"nonpayable\"}]",
 	ID:  "AccessManager",
 }
 
@@ -131,5 +131,40 @@ func (accessManager *AccessManager) UnpackExecute(data []byte) (uint32, error) {
 		return *new(uint32), err
 	}
 	out0 := *abi.ConvertType(out[0], new(uint32)).(*uint32)
+	return out0, nil
+}
+
+// PackMulticall is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xac9650d8.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function multicall(bytes[] data) returns(bytes[] results)
+func (accessManager *AccessManager) PackMulticall(data [][]byte) []byte {
+	enc, err := accessManager.abi.Pack("multicall", data)
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackMulticall is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xac9650d8.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function multicall(bytes[] data) returns(bytes[] results)
+func (accessManager *AccessManager) TryPackMulticall(data [][]byte) ([]byte, error) {
+	return accessManager.abi.Pack("multicall", data)
+}
+
+// UnpackMulticall is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0xac9650d8.
+//
+// Solidity: function multicall(bytes[] data) returns(bytes[] results)
+func (accessManager *AccessManager) UnpackMulticall(data []byte) ([][]byte, error) {
+	out, err := accessManager.abi.Unpack("multicall", data)
+	if err != nil {
+		return *new([][]byte), err
+	}
+	out0 := *abi.ConvertType(out[0], new([][]byte)).(*[][]byte)
 	return out0, nil
 }

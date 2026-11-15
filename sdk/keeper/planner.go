@@ -49,6 +49,7 @@ type Planner struct {
 	Chain            Backend
 	ChainID          *big.Int
 	Caller           common.Address
+	Sender           common.Address // Zero uses Caller; otherwise route through its AccessManager.
 	Confirmations    uint64
 	MaxGas           uint64 // Zero uses the conservative 16,777,216 gas budget.
 	RecipeCache      *recipes.RecipeCache

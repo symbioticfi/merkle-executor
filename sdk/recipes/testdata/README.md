@@ -9,10 +9,12 @@ cover opcode-prefixed steps, packed input/result bindings, both call selectors
 and the SetRecipe event topic independently of the Go ABI codec.
 
 `anvil/RecipeExecutor.json` vendors the deployment bytecode and ABI from the
-current adapters Foundry artifact. `anvil/Fixture.sol` contains local-only account
+current adapters Foundry artifact. `anvil/AccessManager.json` compiles the real OpenZeppelin AccessManager from the
+pinned adapters dependency for local forwarding integration tests.
+`anvil/Fixture.sol` contains local-only account
 and token test doubles. The account fixture verifies leaf hashes, sorted proofs
 and executor roles. `anvil/sources-sha256.json` records the relevant source snapshot.
-Regenerate these artifacts with `python3 internal/recipes/testdata/anvil/generate.py`
+Regenerate these artifacts with `python3 sdk/recipes/testdata/anvil/generate.py`
 after rebuilding adapters; this requires cached Solidity 0.8.38 and Foundry.
 
 Run the independent local chain tests with:
