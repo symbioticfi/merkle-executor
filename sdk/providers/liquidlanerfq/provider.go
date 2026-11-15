@@ -19,6 +19,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/derived"
 )
 
 type Config struct {
@@ -238,7 +239,11 @@ func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared,
 	if err := protocolio.Execution(ctx, p.chain, s); err != nil {
 		return provider.Progress{}, err
 	}
-	if err := authorizingSign(s.Execution, d, domain); err != nil {
+	payload, _, err := authorization(domain, d.Request)
+	if err != nil {
+		return provider.Progress{}, err
+	}
+	if err = derived.AuthorizingSign(s.Execution, d.Account, d.Digest, payload); err != nil {
 		return provider.Progress{}, err
 	}
 	r := reactor.NewLiquidLaneReactor()

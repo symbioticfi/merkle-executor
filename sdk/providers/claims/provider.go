@@ -267,6 +267,48 @@ func (p *Provider) ready(ctx context.Context, s provider.Snapshot, c candidate) 
 		return nil, false, errors.Errorf("unsupported native claim %q", c.method)
 	}
 }
+
+// readAll batches one getter over argument lists at the pinned block.
+func (p *Provider) readAll(ctx context.Context, s provider.Snapshot, target common.Address, name string, args [][]any) ([][]any, error) {
+	requests := make([]protocolio.ReadRequest, len(args))
+	for i, values := range args {
+		data, err := contractABI.Pack(name, values...)
+		if err != nil {
+			return nil, err
+		}
+		requests[i] = protocolio.ContractRead(target, data, s.BlockNumber, true)
+	}
+	reads, err := protocolio.ReadGroup(ctx, p.chain, requests...)
+	if err != nil {
+		return nil, err
+	}
+	out := make([][]any, len(args))
+	for i := range args {
+		raw, err := reads.At(i).CallData()
+		if err != nil {
+			return nil, err
+		}
+		if out[i], err = contractABI.Unpack(name, raw); err != nil || len(out[i]) == 0 {
+			return nil, errors.Errorf("decode %s", name)
+		}
+	}
+	return out, nil
+}
+
+// pages yields [start, end) in bounded read-batch pages.
+func pages(end *big.Int, visit func([]*big.Int) error) error {
+	for start := new(big.Int); start.Cmp(end) < 0; {
+		var page []*big.Int
+		for ; start.Cmp(end) < 0 && len(page) < protocolio.MaxReadBatch; start.Add(start, big.NewInt(1)) {
+			page = append(page, new(big.Int).Set(start))
+		}
+		if err := visit(page); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *Provider) noon(ctx context.Context, s provider.Snapshot, c candidate) ([]*big.Int, bool, error) {
 	count, err := p.number(ctx, s, c.Target, "getUserNextRequestId", s.Account)
 	if err != nil {
@@ -277,21 +319,25 @@ func (p *Provider) noon(ctx context.Context, s provider.Snapshot, c candidate) (
 		return nil, false, err
 	}
 	var ids []*big.Int
-	for id := new(big.Int); id.Cmp(count) < 0; id.Add(id, big.NewInt(1)) {
-		if err := ctx.Err(); err != nil {
-			return nil, false, err
+	err = pages(count, func(page []*big.Int) error {
+		args := make([][]any, len(page))
+		for i, id := range page {
+			args[i] = []any{s.Account, id}
 		}
-		v, err := p.read(ctx, s, c.Target, "getWithdrawalRequest", s.Account, id)
+		values, err := p.readAll(ctx, s, c.Target, "getWithdrawalRequest", args)
 		if err != nil {
-			return nil, false, err
+			return err
 		}
-		request := *abi.ConvertType(v[0], new(nativeclaims.Struct0)).(*nativeclaims.Struct0)
-		deadline := new(big.Int).Add(request.Timestamp, period)
-		if request.Amount.Sign() > 0 && !request.Claimed && deadline.Cmp(new(big.Int).SetUint64(s.Timestamp)) <= 0 {
-			ids = append(ids, new(big.Int).Set(id))
+		for i, v := range values {
+			request := *abi.ConvertType(v[0], new(nativeclaims.Struct0)).(*nativeclaims.Struct0)
+			deadline := new(big.Int).Add(request.Timestamp, period)
+			if request.Amount.Sign() > 0 && !request.Claimed && deadline.Cmp(new(big.Int).SetUint64(s.Timestamp)) <= 0 {
+				ids = append(ids, page[i])
+			}
 		}
-	}
-	return ids, len(ids) > 0, nil
+		return nil
+	})
+	return ids, len(ids) > 0, err
 }
 func (p *Provider) paretoQueue(ctx context.Context, s provider.Snapshot, c candidate) ([]*big.Int, bool, error) {
 	strategy, err := p.read(ctx, s, c.Target, "strategy")
@@ -302,48 +348,39 @@ func (p *Provider) paretoQueue(ctx context.Context, s provider.Snapshot, c candi
 	if err != nil {
 		return nil, false, err
 	}
-	end := new(big.Int).Add(current, big.NewInt(2))
-	deposit := c.method == "claimDepositRequest"
-	owner, price, pending := "userWithdrawalsEpochs", "epochWithdrawPrice", "epochPendingClaims"
-	if deposit {
-		owner, price, pending = "userDepositsEpochs", "epochPrice", "epochPendingDeposits"
+	// An epoch is claimable when owned and priced, with no pending (or prefunded deposit) work.
+	type filter struct {
+		getter         string
+		owned, nonzero bool
+	}
+	filters := []filter{{"userWithdrawalsEpochs", true, true}, {"epochWithdrawPrice", false, true}, {"epochPendingClaims", false, false}}
+	if c.method == "claimDepositRequest" {
+		filters = []filter{{"userDepositsEpochs", true, true}, {"epochPrice", false, true}, {"epochPendingDeposits", false, false}, {"epochPrefundedDeposits", false, false}}
 	}
 	var ids []*big.Int
-	for id := new(big.Int); id.Cmp(end) < 0; id.Add(id, big.NewInt(1)) {
-		if err := ctx.Err(); err != nil {
-			return nil, false, err
-		}
-		amount, err := p.number(ctx, s, c.Target, owner, s.Account, id)
-		if err != nil {
-			return nil, false, err
-		}
-		if amount.Sign() == 0 {
-			continue
-		}
-		value, err := p.number(ctx, s, c.Target, price, id)
-		if err != nil {
-			return nil, false, err
-		}
-		if value.Sign() == 0 {
-			continue
-		}
-		wait, err := p.number(ctx, s, c.Target, pending, id)
-		if err != nil {
-			return nil, false, err
-		}
-		if wait.Sign() != 0 {
-			continue
-		}
-		if deposit {
-			wait, err = p.number(ctx, s, c.Target, "epochPrefundedDeposits", id)
+	err = pages(new(big.Int).Add(current, big.NewInt(2)), func(epochs []*big.Int) error {
+		for _, f := range filters {
+			args := make([][]any, len(epochs))
+			for i, id := range epochs {
+				args[i] = []any{id}
+				if f.owned {
+					args[i] = []any{s.Account, id}
+				}
+			}
+			values, err := p.readAll(ctx, s, c.Target, f.getter, args)
 			if err != nil {
-				return nil, false, err
+				return err
 			}
-			if wait.Sign() != 0 {
-				continue
+			kept := epochs[:0]
+			for i, v := range values {
+				if (v[0].(*big.Int).Sign() != 0) == f.nonzero {
+					kept = append(kept, epochs[i])
+				}
 			}
+			epochs = kept
 		}
-		ids = append(ids, new(big.Int).Set(id))
-	}
-	return ids, len(ids) > 0, nil
+		ids = append(ids, epochs...)
+		return nil
+	})
+	return ids, len(ids) > 0, err
 }

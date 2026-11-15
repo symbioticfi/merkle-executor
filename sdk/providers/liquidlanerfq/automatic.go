@@ -22,11 +22,8 @@ const ConsumerAPI = "https://swap.symbiotic.fi/api/v1"
 
 type Automatic struct{ deps provider.Deps }
 type recipeRequest struct {
-	template     derived.SignTemplate
-	cfg          Config
-	budget       recipes.EconomicValue
-	floors       []recipes.EconomicValue
-	requirements keeper.RecipeRequirements
+	trade derived.Trade
+	cfg   Config
 }
 
 func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
@@ -115,33 +112,11 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 		if err != nil || !bytes.Equal(expected, action.Leaf.Data) {
 			return nil, errors.New("RFQ recipe must pin canonical Request identity and array shape")
 		}
-		amount, err := sign.Field(2)
+		trade, minimum, err := derived.NewTrade(r, sign, 2, 9, map[int]bool{2: true, 4: true, 5: true, 9: true})
 		if err != nil {
 			return nil, err
 		}
-		budget, err := recipes.Budget(r, amount, action.Step)
-		if err != nil {
-			return nil, err
-		}
-		minimum, err := sign.Field(9)
-		if err != nil {
-			return nil, err
-		}
-		floors, err := recipes.Floor(r, minimum, action.Step)
-		if err != nil {
-			return nil, err
-		}
-		economics := append([]recipes.EconomicValue{budget}, floors...)
-		for _, binding := range action.Bindings {
-			if binding.Value.Source == recipes.Result {
-				economics = append(economics, recipes.EconomicValue{Expression: binding.Value, Exact: true})
-			}
-		}
-		requirements, err := derived.Requirements(sign, economics, map[int]bool{2: true, 4: true, 5: true, 9: true})
-		if err != nil {
-			return nil, err
-		}
-		result = &recipeRequest{template: sign, budget: budget, floors: floors, requirements: requirements, cfg: Config{HTTP: consumerHTTP(), Reactor: address.Hex(), Protocol: protocol.Hex(), TokenIn: input.Hex(), TokenOut: output.Hex(), Action: action.Key, MaxLookupPages: 10, AmountInInput: budget.Input}}
+		result = &recipeRequest{trade: trade, cfg: Config{HTTP: consumerHTTP(), Reactor: address.Hex(), Protocol: protocol.Hex(), TokenIn: input.Hex(), TokenOut: output.Hex(), Action: action.Key, MaxLookupPages: 10, AmountInInput: trade.Budget.Input}}
 		if minimum.Source == recipes.Input {
 			index := uint(minimum.Value.Uint64())
 			result.cfg.AmountOutInput = &index
@@ -179,7 +154,7 @@ func (p *Automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t 
 	if err != nil || request == nil {
 		return keeper.RecipeRequirements{}, err
 	}
-	return request.requirements, nil
+	return request.trade.Requirements, nil
 }
 func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) ([]provider.Output, error) {
 	request, err := p.derive(s, r, t)
@@ -189,22 +164,9 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if request == nil {
 		return []provider.Output{{}}, nil
 	}
-	amount, err := recipes.EconomicResult(request.budget, results)
+	amount, minimum, err := request.trade.Amounts(results)
 	if err != nil {
 		return nil, err
-	}
-	minimum := new(big.Int)
-	for _, floor := range request.floors {
-		value, err := recipes.EconomicResult(floor, results)
-		if err != nil {
-			return nil, err
-		}
-		if value.Cmp(minimum) > 0 {
-			minimum = value
-		}
-	}
-	if amount.Sign() == 0 || minimum.Sign() == 0 {
-		return nil, provider.ErrNotReady
 	}
 	request.cfg.AmountIn = amount.String()
 	request.cfg.MinAmountOut = minimum.String()
@@ -216,20 +178,7 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if err != nil {
 		return nil, err
 	}
-	payload := out.Actions[request.cfg.Action]
-	for _, floor := range request.floors {
-		if !floor.Exact {
-			continue
-		}
-		expected, err := recipes.EconomicResult(floor, results)
-		if err != nil {
-			return nil, err
-		}
-		if new(big.Int).SetBytes(payload[request.template.Offset+288:request.template.Offset+320]).Cmp(expected) != 0 {
-			return nil, errors.New("RFQ selected output conflicts with exact recipe result binding")
-		}
-	}
-	if err = derived.BindOutput(request.template, payload, results, &out); err != nil {
+	if err = request.trade.Bind(out.Actions[request.cfg.Action], 9, results, &out); err != nil {
 		return nil, err
 	}
 	return []provider.Output{out}, nil
