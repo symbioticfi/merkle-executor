@@ -141,6 +141,19 @@ func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts 
 	}
 	var fallback []protocolio.ReadRequest
 	fallbackIndices := map[int]int{}
+	eventHeaders := make([]*types.Header, len(snapshots))
+	fromLogs := func(i int, result protocolio.ReadResult) {
+		if result.Err != nil {
+			results[i].Err = errors.Errorf("read recipe events: %w", result.Err)
+			return
+		}
+		recipe, eventHash, e := recipeFromLogs(snapshots[i], eventHeaders[i], result.Logs)
+		if e != nil {
+			results[i].Err = e
+			return
+		}
+		setPreparedRecipe(&results[i].Prepared, recipe, eventHash, options.ChainID)
+	}
 	for i, snapshot := range snapshots {
 		if results[i].Err != nil {
 			continue
@@ -158,6 +171,7 @@ func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts 
 			results[i].Err = err
 			continue
 		}
+		eventHeaders[i] = eventHeader
 		if matched[i] && eventHeader.Hash() == hints[i].eventHash {
 			hash, hashErr := HashRecipe(hints[i].recipe)
 			_, inspectErr := Inspect(hints[i].recipe)
@@ -172,17 +186,7 @@ func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts 
 			fallback = append(fallback, recipeLogRead(snapshot))
 			continue
 		}
-		result := evidence.At(logIndices[i])
-		if result.Err != nil {
-			results[i].Err = errors.Errorf("read recipe events: %w", result.Err)
-			continue
-		}
-		recipe, eventHash, e := recipeFromLogs(snapshot, eventHeader, result.Logs)
-		if e != nil {
-			results[i].Err = e
-			continue
-		}
-		setPreparedRecipe(&results[i].Prepared, recipe, eventHash, options.ChainID)
+		fromLogs(i, evidence.At(logIndices[i]))
 	}
 	if len(fallback) != 0 {
 		logs, e := protocolio.ReadGroup(ctx, reader, fallback...)
@@ -190,26 +194,9 @@ func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts 
 			return nil, e
 		}
 		for i := range snapshots {
-			index, exists := fallbackIndices[i]
-			if !exists {
-				continue
+			if index, ok := fallbackIndices[i]; ok {
+				fromLogs(i, logs.At(index))
 			}
-			snapshot := snapshots[i]
-			eventHeader := header
-			if snapshot.RecipeBlock != snapshot.BlockNumber {
-				eventHeader = evidence.At(eventIndices[snapshot.RecipeBlock]).Header
-			}
-			result := logs.At(index)
-			if result.Err != nil {
-				results[i].Err = errors.Errorf("read recipe events: %w", result.Err)
-				continue
-			}
-			recipe, eventHash, e := recipeFromLogs(snapshot, eventHeader, result.Logs)
-			if e != nil {
-				results[i].Err = e
-				continue
-			}
-			setPreparedRecipe(&results[i].Prepared, recipe, eventHash, options.ChainID)
 		}
 	}
 	closing, err := protocolio.ReadGroup(ctx, reader, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).Set(header.Number)})
@@ -349,8 +336,8 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 			return err
 		}
 		for _, entry := range entries {
-			recipe, _, _ := decodeExecution(entry)
-			hash, _ := HashRecipe(recipe)
+			decoded, _ := decodeExecution(entry)
+			hash, _ := HashRecipe(decoded.recipe)
 			if hash != snapshot.RecipeHash {
 				return errors.New("execution differs from prepared recipe")
 			}

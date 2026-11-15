@@ -3,7 +3,6 @@ package recipes
 import (
 	"bytes"
 	"math/big"
-	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -64,7 +63,7 @@ func ManagedActions(recipe Recipe, tree *Tree) ([]ManagedAction, error) {
 			if err = validateBindings(slot.Bindings[i], len(leaf.Data), func(Value) error { return nil }); err != nil {
 				return nil, err
 			}
-			actions = append(actions, ManagedAction{Key: strconv.FormatUint(uint64(slot.StepIndex), 10) + ":" + strconv.Itoa(i), Step: slot.StepIndex, Slot: slot, Leaf: leaf, Bindings: slot.Bindings[i]})
+			actions = append(actions, ManagedAction{Key: actionKey(slot.StepIndex, i), Step: slot.StepIndex, Slot: slot, Leaf: leaf, Bindings: slot.Bindings[i]})
 		}
 	}
 	return actions, nil
@@ -122,15 +121,14 @@ func Budget(recipe Recipe, value Value, before uint) (EconomicValue, error) {
 	}
 	if value.Source == Input {
 		for i := uint(0); i < before && i < uint(len(recipe.Steps)); i++ {
-			step := recipe.Steps[i]
-			if step[0] != LessOrEqual {
+			if recipe.Steps[i][0] != LessOrEqual {
 				continue
 			}
-			args, e := binaryArgs.Unpack(step[1:])
+			operands, e := Operands(recipe, i)
 			if e != nil {
 				return EconomicValue{}, e
 			}
-			a, b := decodeValue(args[0].(*big.Int)), decodeValue(args[1].(*big.Int))
+			a, b := operands[0], operands[1]
 			var bounds *[]Value
 			if sameValue(a, value) {
 				bounds, a = &economic.Upper, b
@@ -174,16 +172,16 @@ func Floor(recipe Recipe, value Value, before uint) ([]EconomicValue, error) {
 	index := uint(value.Value.Uint64())
 	var floors []EconomicValue
 	for i := uint(0); i < before && i < uint(len(recipe.Steps)); i++ {
-		step := recipe.Steps[i]
-		if step[0] != LessOrEqual && step[0] != Equal {
+		op := recipe.Steps[i][0]
+		if op != LessOrEqual && op != Equal {
 			continue
 		}
-		args, err := binaryArgs.Unpack(step[1:])
+		operands, err := Operands(recipe, i)
 		if err != nil {
 			return nil, err
 		}
-		a, b := decodeValue(args[0].(*big.Int)), decodeValue(args[1].(*big.Int))
-		exact := step[0] == Equal
+		a, b := operands[0], operands[1]
+		exact := op == Equal
 		if exact && sameValue(a, value) {
 			a, b = b, a
 		}
@@ -219,11 +217,11 @@ func equalityAnchor(recipe Recipe, input Value, before uint) (Value, error) {
 		if recipe.Steps[i][0] != Equal {
 			continue
 		}
-		args, err := binaryArgs.Unpack(recipe.Steps[i][1:])
+		operands, err := Operands(recipe, i)
 		if err != nil {
 			return Value{}, err
 		}
-		a, b := decodeValue(args[0].(*big.Int)), decodeValue(args[1].(*big.Int))
+		a, b := operands[0], operands[1]
 		if sameValue(a, input) {
 			a, b = b, a
 		}
@@ -323,35 +321,9 @@ func dependencies(recipe Recipe, values []Value) (map[uint]bool, error) {
 			return errors.New("recipe result is not numeric")
 		}
 		needed[index] = true
-		var operands []Value
-		if step[0] == Read {
-			args, err := readArgs.Unpack(step[1:])
-			if err != nil {
-				return err
-			}
-			query := args[0].(*big.Int)
-			if !query.IsUint64() || query.Uint64() >= uint64(len(recipe.Queries)) {
-				return errors.New("query index exceeds program")
-			}
-			args, err = queryArgs.Unpack(recipe.Queries[query.Uint64()])
-			if err != nil {
-				return err
-			}
-			for _, binding := range decodeBindings(args[2].([]*big.Int)) {
-				operands = append(operands, binding.Value)
-			}
-		} else {
-			args := binaryArgs
-			if step[0] == MulDiv {
-				args = mulDivArgs
-			}
-			decoded, err := args.Unpack(step[1:])
-			if err != nil {
-				return err
-			}
-			for _, raw := range decoded {
-				operands = append(operands, decodeValue(raw.(*big.Int)))
-			}
+		operands, err := Operands(recipe, index)
+		if err != nil {
+			return err
 		}
 		for _, operand := range operands {
 			if err := visit(operand, index); err != nil {

@@ -3,6 +3,13 @@ package merkl
 import (
 	"context"
 	"encoding/json"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"testing"
+
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -13,12 +20,6 @@ import (
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"math/big"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"os"
-	"testing"
 )
 
 func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {

@@ -3,6 +3,7 @@ package liquidlanerfq
 import (
 	"bytes"
 	"context"
+	"maps"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -260,14 +261,8 @@ func (s progressState) clone() progressState {
 	copy := s
 	if s.Lookup != nil {
 		lookup := *s.Lookup
-		lookup.Cursors = make(map[string]bool, len(s.Lookup.Cursors))
-		for key, value := range s.Lookup.Cursors {
-			lookup.Cursors[key] = value
-		}
-		lookup.IDs = make(map[string]bool, len(s.Lookup.IDs))
-		for key, value := range s.Lookup.IDs {
-			lookup.IDs[key] = value
-		}
+		lookup.Cursors = maps.Clone(s.Lookup.Cursors)
+		lookup.IDs = maps.Clone(s.Lookup.IDs)
 		copy.Lookup = &lookup
 	}
 	return copy

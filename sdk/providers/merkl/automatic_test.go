@@ -243,7 +243,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 func TestAutomaticUsesCuratorClaimGuard(t *testing.T) {
 	s, r, tree := frontendClaims(t)
 	// The curator can choose another comparison without changing claim fields.
-	raw, _ := layoutArgs("uint256", "uint256").Pack(new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(18)), new(big.Int).Lsh(big.NewInt(2), 216))
+	raw, _ := recipes.Arguments("uint256", "uint256").Pack(new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(18)), new(big.Int).Lsh(big.NewInt(2), 216))
 	needle := append([]byte{recipes.Equal}, raw...)
 	actions, err := recipes.ManagedActions(r, tree)
 	if err != nil {

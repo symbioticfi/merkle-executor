@@ -19,6 +19,12 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
+var (
+	binaryArgs = recipes.Arguments("uint256", "uint256")
+	manageArgs = recipes.Arguments("uint256", "bytes32[]", "uint256[][]")
+	callArgs   = recipes.Arguments("address", "bytes", "uint256[]")
+)
+
 func pack(t *testing.T, args abi.Arguments, values ...any) []byte {
 	t.Helper()
 	b, err := args.Pack(values...)
@@ -79,7 +85,7 @@ func TestAuthenticatedCapacityPreflight(t *testing.T) {
 		{"wrong health pool", func(r *recipes.Recipe, _ *recipes.Tree) { r.Queries[0][31] ^= 1 }, true, false},
 		{"wrong health account", func(r *recipes.Recipe, _ *recipes.Tree) { r.Queries[0][195] ^= 1 }, true, false},
 		{"wrong health position", func(r *recipes.Recipe, _ *recipes.Tree) {
-			r.Queries[0] = pack(t, queryArgs, common.HexToAddress("0x11"), append(selector("getUserAccountData(address)"), pack(t, argTypes("address"), common.HexToAddress("0xa1"))...), []*big.Int{}, big.NewInt(128))
+			r.Queries[0] = pack(t, queryArgs, common.HexToAddress("0x11"), append(selector("getUserAccountData(address)"), pack(t, recipes.Arguments("address"), common.HexToAddress("0xa1"))...), []*big.Int{}, big.NewInt(128))
 		}, true, false},
 		{"unsafe floor", func(r *recipes.Recipe, _ *recipes.Tree) {
 			r.Steps[3] = instruction(t, recipes.LessOrEqual, binaryArgs, big.NewInt(999_999_999_999_999_999), value(recipes.Result, 2))
@@ -186,7 +192,7 @@ func TestCapacityProbeErrorsAndOutput(t *testing.T) {
 	if _, err := p.PrepareRecipe(t.Context(), s, r, tree, nil); err == nil {
 		t.Fatal("malformed probe reply accepted")
 	}
-	outer := argTypes("uint256[]", "bytes")
+	outer := recipes.Arguments("uint256[]", "bytes")
 	reader.raw = pack(t, outer, []*big.Int{big.NewInt(0)}, pack(t, uintArgs, big.NewInt(42)))
 	outputs, err := p.PrepareRecipe(t.Context(), s, r, tree, nil)
 	var out provider.Output

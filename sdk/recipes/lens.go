@@ -3,13 +3,11 @@ package recipes
 import (
 	"context"
 	_ "embed"
-	"encoding/json"
+	"maps"
 	"math/big"
-	"sort"
+	"slices"
 
 	ethereum "github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
@@ -18,10 +16,12 @@ import (
 
 //go:embed lens/bytecode.json
 var lensArtifact []byte
+var lensRuntime = artifactRuntime(lensArtifact)
+var resolveSelector = crypto.Keccak256([]byte("resolve(address,bytes[],bytes[],uint256[],bool[],bytes[],bytes[],uint256[])"))[:4]
 
-var lensArguments = abi.Arguments{{Type: mustType("address", nil)}, {Type: mustType("bytes[]", nil)}, {Type: mustType("bytes[]", nil)}, {Type: mustType("uint256[]", nil)}, {Type: mustType("bool[]", nil)}, {Type: mustType("bytes[]", nil)}, {Type: mustType("bytes[]", nil)}, {Type: mustType("uint256[]", nil)}}
-var lensAnchorArgs = abi.Arguments{{Type: mustType("uint256", nil)}}
-var lensResults = abi.Arguments{{Type: mustType("uint256[]", nil)}}
+var lensArguments = Arguments("address", "bytes[]", "bytes[]", "uint256[]", "bool[]", "bytes[]", "bytes[]", "uint256[]")
+var lensAnchorArgs = Arguments("uint256")
+var lensResults = Arguments("uint256[]")
 
 // ResolveValues resolves a pure numerical prefix. Hosts with authenticated prior
 // effects use ResolveValuesWithRuntime with the already prepared runtime data.
@@ -41,49 +41,15 @@ func ResolveValuesWithRuntime(ctx context.Context, reader provider.Reader, snaps
 	if len(program.needed) == 0 {
 		return result, nil
 	}
-	indices := make([]uint, 0, len(program.needed))
-	for index := range program.needed {
-		indices = append(indices, index)
-		if recipe.Steps[index][0] != Read {
-			continue
-		}
-		args, e := readArgs.Unpack(recipe.Steps[index][1:])
-		if e != nil {
-			return nil, e
-		}
-		args, e = queryArgs.Unpack(recipe.Queries[args[0].(*big.Int).Uint64()])
-		if e != nil {
-			return nil, e
-		}
-		if args[0] == snapshot.Executor {
-			return nil, errors.New("unsupported prefix: self-query cannot preserve original executor code")
-		}
+	indices, data, err := lensCall(snapshot, recipe, program, runtime.Inputs)
+	if err != nil {
+		return nil, err
 	}
-	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
 	override, ok := reader.(provider.CodeOverrideReader)
 	if !ok {
 		return nil, errors.New("recipe-derived amounts require RPC code-override support")
 	}
-	var artifact struct {
-		Runtime hexutil.Bytes `json:"runtime"`
-	}
-	if err = json.Unmarshal(lensArtifact, &artifact); err != nil || len(artifact.Runtime) == 0 {
-		return nil, errors.New("invalid recipe lens artifact")
-	}
-	packedIndices := make([]*big.Int, len(indices))
-	for i, index := range indices {
-		packedIndices[i] = new(big.Int).SetUint64(uint64(index))
-	}
-	values, known, anchors, err := prefixInputs(program, runtime.Inputs)
-	if err != nil {
-		return nil, err
-	}
-	args, err := lensArguments.Pack(snapshot.Account, recipe.Queries, recipe.Steps, values, known, anchors, program.runtime, packedIndices)
-	if err != nil {
-		return nil, errors.New("cannot encode recipe prefix")
-	}
-	data := append(crypto.Keccak256([]byte("resolve(address,bytes[],bytes[],uint256[],bool[],bytes[],bytes[],uint256[])"))[:4], args...)
-	raw, err := override.CallContractWithCode(ctx, ethereum.CallMsg{From: snapshot.Caller, To: &snapshot.Executor, Data: data, Gas: 30_000_000}, new(big.Int).SetUint64(snapshot.BlockNumber), artifact.Runtime)
+	raw, err := override.CallContractWithCode(ctx, ethereum.CallMsg{From: snapshot.Caller, To: &snapshot.Executor, Data: data, Gas: 30_000_000}, new(big.Int).SetUint64(snapshot.BlockNumber), lensRuntime)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -104,6 +70,38 @@ func ResolveValuesWithRuntime(ctx context.Context, reader provider.Reader, snaps
 	return result, nil
 }
 
+// lensCall encodes the shared prefix resolver for every needed index, in order.
+func lensCall(snapshot Snapshot, recipe Recipe, program prefixProgram, inputs map[uint]string) ([]uint, []byte, error) {
+	indices := slices.Sorted(maps.Keys(program.needed))
+	packed := make([]*big.Int, len(indices))
+	for i, index := range indices {
+		packed[i] = new(big.Int).SetUint64(uint64(index))
+		if recipe.Steps[index][0] != Read {
+			continue
+		}
+		args, err := readArgs.Unpack(recipe.Steps[index][1:])
+		if err != nil {
+			return nil, nil, err
+		}
+		args, err = queryArgs.Unpack(recipe.Queries[args[0].(*big.Int).Uint64()])
+		if err != nil {
+			return nil, nil, err
+		}
+		if args[0] == snapshot.Executor {
+			return nil, nil, errors.New("unsupported prefix: self-query cannot preserve original executor code")
+		}
+	}
+	values, known, anchors, err := prefixInputs(program, inputs)
+	if err != nil {
+		return nil, nil, err
+	}
+	args, err := lensArguments.Pack(snapshot.Account, recipe.Queries, recipe.Steps, values, known, anchors, program.runtime, packed)
+	if err != nil {
+		return nil, nil, errors.New("cannot encode recipe prefix")
+	}
+	return indices, append(slices.Clone(resolveSelector), args...), nil
+}
+
 func ResultsWitness(results map[uint]*big.Int) map[uint]string {
 	witness := make(map[uint]string, len(results))
 	for index, value := range results {
@@ -118,45 +116,26 @@ func VerifyResults(calldata, returned []byte, witness map[uint]string) error {
 	if len(witness) == 0 {
 		return nil
 	}
-	if isMulticall(calldata) {
-		calls, err := batchCalls(calldata)
+	calls, results, err := executionResults(calldata, returned)
+	if err != nil {
+		return err
+	}
+	for i, call := range calls {
+		decoded, err := decodeExecution(call)
 		if err != nil {
 			return err
 		}
-		values, err := batchArguments.Unpack(returned)
-		if err != nil {
-			return errors.New("invalid batch simulation result")
+		if err = verifyWitness(decoded.recipe.Steps, results[i], witness); err != nil {
+			return err
 		}
-		results := values[0].([][]byte)
-		if len(calls) != len(results) {
-			return errors.New("batch simulation result count mismatch")
-		}
-		for i, call := range calls {
-			if err := VerifyResults(call, results[i], witness); err != nil {
-				return err
-			}
-		}
-		return nil
 	}
-	method := executorABI.GetABI().Methods["execute"]
-	if len(calldata) < 4 || !equalBytes(calldata[:4], method.ID) {
-		return errors.New("recipe witness has invalid execution bytes")
-	}
-	args, err := method.Inputs.Unpack(calldata[4:])
+	return nil
+}
+
+func verifyWitness(steps [][]byte, returned []byte, witness map[uint]string) error {
+	values, err := stepResults(returned, len(steps))
 	if err != nil {
-		return errors.New("recipe witness cannot decode execution")
-	}
-	steps, ok := args[1].([][]byte)
-	if !ok {
-		return errors.New("recipe witness has invalid steps")
-	}
-	decoded, err := method.Outputs.Unpack(returned)
-	if err != nil || len(decoded) != 1 {
-		return errors.New("original recipe returned invalid numerical results")
-	}
-	values, ok := decoded[0].([]*big.Int)
-	if !ok || len(values) != len(steps) {
-		return errors.New("original recipe numerical result length mismatch")
+		return err
 	}
 	for index, text := range witness {
 		if index >= uint(len(steps)) || len(steps[index]) == 0 || steps[index][0] > MulDiv {
@@ -171,18 +150,6 @@ func VerifyResults(calldata, returned []byte, witness map[uint]string) error {
 		}
 	}
 	return nil
-}
-
-func equalBytes(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // AnchoredInputs fills deterministic non-provider inputs. A recipe comparison

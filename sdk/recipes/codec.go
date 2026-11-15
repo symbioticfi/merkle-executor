@@ -1,8 +1,9 @@
 package recipes
 
 import (
+	"maps"
 	"math/big"
-	"sort"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
@@ -16,17 +17,24 @@ var executorABI = executor.NewRecipeExecutor()
 var accountABI = account.NewMerkleAccount()
 
 // These are internal ABI payloads specified by IRecipes, not contract methods.
-var valueType = mustType("uint256", nil)
-var bindingsType = mustType("uint256[]", nil)
-var manageArgs = abi.Arguments{{Type: valueType}, {Type: mustType("bytes32[]", nil)}, {Type: mustType("uint256[][]", nil)}}
-var approveArgs = abi.Arguments{{Type: valueType}, {Type: mustType("address", nil)}, {Type: mustType("address", nil)}, {Type: mustType("bytes32", nil)}}
-var callArgs = abi.Arguments{{Type: mustType("address", nil)}, {Type: mustType("bytes", nil)}, {Type: bindingsType}}
-var queryArgs = append(append(abi.Arguments{}, callArgs...), abi.Argument{Type: mustType("uint256", nil)})
-var readArgs = abi.Arguments{{Type: mustType("uint256", nil)}}
-var binaryArgs = abi.Arguments{{Type: valueType}, {Type: valueType}}
-var mulDivArgs = append(append(abi.Arguments{}, binaryArgs...), abi.Argument{Type: valueType})
-var permissionArgs = abi.Arguments{{Type: mustType("bytes", nil)}, {Type: mustType("bytes32[]", nil)}}
-var leafArgs = abi.Arguments{{Type: mustType("address", nil)}, {Type: mustType("bytes1", nil)}, {Type: mustType("bytes32", nil)}, {Type: mustType("bytes32", nil)}}
+var manageArgs = Arguments("uint256", "bytes32[]", "uint256[][]")
+var approveArgs = Arguments("uint256", "address", "address", "bytes32")
+var callArgs = Arguments("address", "bytes", "uint256[]")
+var queryArgs = Arguments("address", "bytes", "uint256[]", "uint256")
+var readArgs = Arguments("uint256")
+var binaryArgs = Arguments("uint256", "uint256")
+var mulDivArgs = Arguments("uint256", "uint256", "uint256")
+var permissionArgs = Arguments("bytes", "bytes32[]")
+var leafArgs = Arguments("address", "bytes1", "bytes32", "bytes32")
+
+// Arguments builds an ABI argument list from fixed, internally reviewed type names.
+func Arguments(types ...string) abi.Arguments {
+	args := make(abi.Arguments, len(types))
+	for i, name := range types {
+		args[i].Type = mustType(name, nil)
+	}
+	return args
+}
 
 func mustType(name string, fields []abi.ArgumentMarshaling) abi.Type {
 	t, err := abi.NewType(name, "", fields)
@@ -211,12 +219,69 @@ func inspect(recipe Recipe, skipped map[uint]bool) (Inspection, []uint, error) {
 }
 
 func sortedInputs(inputs map[uint]struct{}) []uint {
-	result := make([]uint, 0, len(inputs))
-	for input := range inputs {
-		result = append(result, input)
+	return slices.Sorted(maps.Keys(inputs))
+}
+
+// Operands decodes every Value one instruction reads, in ABI order: binding values
+// for Read and Call, the gate then bindings for Manage, and the amount for Approve.
+func Operands(recipe Recipe, index uint) ([]Value, error) {
+	step := recipe.Steps[index]
+	var words []*big.Int
+	switch step[0] {
+	case Read:
+		args, err := readArgs.Unpack(step[1:])
+		if err != nil {
+			return nil, err
+		}
+		query := args[0].(*big.Int)
+		if !query.IsUint64() || query.Uint64() >= uint64(len(recipe.Queries)) {
+			return nil, errors.New("query index out of bounds")
+		}
+		if args, err = queryArgs.Unpack(recipe.Queries[query.Uint64()]); err != nil {
+			return nil, err
+		}
+		words = args[2].([]*big.Int)
+	case Call:
+		args, err := callArgs.Unpack(step[1:])
+		if err != nil {
+			return nil, err
+		}
+		words = args[2].([]*big.Int)
+	case Manage:
+		args, err := manageArgs.Unpack(step[1:])
+		if err != nil {
+			return nil, err
+		}
+		words = []*big.Int{args[0].(*big.Int)}
+		for _, bindings := range args[2].([][]*big.Int) {
+			words = append(words, bindings...)
+		}
+	case Approve:
+		args, err := approveArgs.Unpack(step[1:])
+		if err != nil {
+			return nil, err
+		}
+		words = []*big.Int{args[0].(*big.Int)}
+	case Add, Sub, SaturatingSub, Min, Max, MulDiv, Equal, LessOrEqual:
+		args := binaryArgs
+		if step[0] == MulDiv {
+			args = mulDivArgs
+		}
+		values, err := args.Unpack(step[1:])
+		if err != nil {
+			return nil, err
+		}
+		for _, value := range values {
+			words = append(words, value.(*big.Int))
+		}
+	default:
+		return nil, errors.Errorf("unknown operation %d", step[0])
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
-	return result
+	operands := make([]Value, len(words))
+	for i, word := range words {
+		operands[i] = decodeValue(word)
+	}
+	return operands, nil
 }
 
 // decodeValue matches Solidity's uint8(word >> 216) and uint216(word).

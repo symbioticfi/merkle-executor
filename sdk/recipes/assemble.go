@@ -3,7 +3,6 @@ package recipes
 import (
 	"bytes"
 	"math/big"
-	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -121,7 +120,7 @@ func assembleManage(slot RuntimeSlot, tree *Tree, replacements map[string]hexuti
 			return nil, err
 		}
 		data := bytes.Clone(leaf.Data)
-		key := strconv.FormatUint(uint64(slot.StepIndex), 10) + ":" + strconv.Itoa(i)
+		key := actionKey(slot.StepIndex, i)
 		if replacement, ok := replacements[key]; ok {
 			if len(replacement) != len(data) {
 				return nil, errors.Errorf("replacement %s changes calldata length", key)
