@@ -287,7 +287,15 @@ func decodeBatchSnapshots(snapshots []Snapshot, header *types.Header, reads *pro
 // The optional maxGas budget defaults to 16,777,216 when omitted or zero and is
 // bounded by the fresh block gas limit. More than one budget is invalid.
 func ValidatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller common.Address, maxGas ...uint64) error {
-	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, nil, maxGas)
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, common.Address{}, nil, maxGas)
+}
+
+// ValidatePreparedBatchForSender retains result and work validation, then checks
+// immediate AccessManager authorization and simulates the exact outer call at
+// the same fresh block. Forwarded plans contain one executor (which may batch
+// several executions); independent executors are admitted on subsequent ticks.
+func ValidatePreparedBatchForSender(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller, sender common.Address, maxGas ...uint64) error {
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, sender, nil, maxGas)
 }
 
 // PreparedBatchSimulationRequest contains independent copies of authenticated
@@ -312,10 +320,10 @@ func ValidatePreparedBatchWithSimulation(ctx context.Context, reader Reader, pre
 	if simulate == nil {
 		return errors.New("external prepared batch simulation required")
 	}
-	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, nil, caller, simulate, maxGas)
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, nil, caller, common.Address{}, simulate, maxGas)
 }
 
-func validatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller common.Address, simulate PreparedBatchSimulation, maxGas []uint64) error {
+func validatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller, sender common.Address, simulate PreparedBatchSimulation, maxGas []uint64) error {
 	if len(maxGas) > 1 {
 		return errors.New("one transaction gas budget allowed")
 	}
@@ -473,6 +481,20 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 			if !work {
 				inactive = append(inactive, i)
 			}
+		}
+	}
+	if sender != (common.Address{}) && sender != caller {
+		if len(calls) != 1 {
+			return errors.New("AccessManager execution requires one executor")
+		}
+		snapshot := snapshots[0]
+		snapshot.BlockNumber = current.Number.Uint64()
+		route, routeErr := RouteExecution(ctx, reader, snapshot, sender, calls[0].Data)
+		if routeErr != nil {
+			return &MemberError{Index: 0, Err: routeErr}
+		}
+		if _, routeErr = reader.CallContract(ctx, ethereum.CallMsg{From: sender, To: &route.Executor, Data: route.Data, Gas: gasLimit}, current.Number); routeErr != nil {
+			return simulationFailure(ctx, routeErr)
 		}
 	}
 	closing, err := protocolio.ReadGroup(ctx, reader, pinReads(pins)...)

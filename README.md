@@ -27,7 +27,9 @@ Simulation is the default and needs no key. Send mode requires a finite positive
 `MERKLE_EXECUTOR_PRIVATE_KEY`). YAML contains environment variable names, never
 secret values. Read and write RPC endpoints must be HTTP(S) on the configured
 chain. Redirects are refused. Executor accounts and their common caller are
-validated at startup; the signing key must match that caller.
+validated at startup. `signer.address` defaults to that caller; set it to the
+keeper EOA when the caller is an AccessManager. The signing key must match this
+address, and forwarding requires an immediate grant for the selected function.
 
 `strategies` is an ordered list of executor addresses. Accounts come from the
 contracts, and active permission artifacts come from `curator.url`. Duplicate
@@ -50,7 +52,8 @@ reads; numerical dependencies use caller-correct RPC-only lenses. Stateful recip
 effects always execute in order.
 
 The planner packs same-executor multicalls and, when the caller already supports
-it, delegated cross-executor atomic batches. It verifies numerical witnesses,
+it, delegated cross-executor atomic batches. AccessManager forwarding admits one
+executor per transaction, preserving same-executor multicalls. It verifies numerical witnesses,
 permissions and the exact final unchanged-code transaction. Oversized execution
 lists are packed into a verified prefix; remaining work stays eligible for later
 cycles. Native repetition uses bounded growth probes rather than scanning every
