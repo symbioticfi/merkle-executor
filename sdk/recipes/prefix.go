@@ -2,7 +2,6 @@ package recipes
 
 import (
 	"math/big"
-	"strconv"
 
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
@@ -101,23 +100,12 @@ func buildPrefix(recipe Recipe, expressions []Value, runtime PrefixRuntime) (pre
 	// Every effect executes in order, including its exact gate and binding values.
 	// Comparisons before those reads execute as well, and cannot use dummy inputs.
 	for i := uint(0); i < end; i++ {
-		op := recipe.Steps[i][0]
-		var operands []Value
-		switch op {
-		case Equal, LessOrEqual:
-			args, e := binaryArgs.Unpack(recipe.Steps[i][1:])
-			if e != nil {
-				return p, e
-			}
-			operands = []Value{decodeValue(args[0].(*big.Int)), decodeValue(args[1].(*big.Int))}
-		case Call:
-			args, e := callArgs.Unpack(recipe.Steps[i][1:])
-			if e != nil {
-				return p, e
-			}
-			for _, b := range decodeBindings(args[2].([]*big.Int)) {
-				operands = append(operands, b.Value)
-			}
+		if op := recipe.Steps[i][0]; op != Equal && op != LessOrEqual && op != Call {
+			continue
+		}
+		operands, err := Operands(recipe, i)
+		if err != nil {
+			return p, err
 		}
 		for _, operand := range operands {
 			if err = add(operand, i); err != nil {
@@ -147,8 +135,7 @@ func buildPrefix(recipe Recipe, expressions []Value, runtime PrefixRuntime) (pre
 		}
 		if slot.Operation == Manage {
 			for i := range slot.Leaves {
-				key := strconv.FormatUint(uint64(slot.StepIndex), 10) + ":" + strconv.Itoa(i)
-				if runtime.BlockedActions[key] {
+				if runtime.BlockedActions[actionKey(slot.StepIndex, i)] {
 					return p, errors.New("unsupported prefix: earlier action depends on an unresolved provider result")
 				}
 				for _, b := range slot.Bindings[i] {
@@ -187,32 +174,9 @@ func buildPrefix(recipe Recipe, expressions []Value, runtime PrefixRuntime) (pre
 			return p, errors.New("invalid numeric dependency closure")
 		}
 		visited[index] = true
-		step := recipe.Steps[index]
-		var operands []Value
-		if step[0] == Read {
-			args, e := readArgs.Unpack(step[1:])
-			if e != nil {
-				return p, e
-			}
-			q, e := queryArgs.Unpack(recipe.Queries[args[0].(*big.Int).Uint64()])
-			if e != nil {
-				return p, e
-			}
-			for _, b := range decodeBindings(q[2].([]*big.Int)) {
-				operands = append(operands, b.Value)
-			}
-		} else {
-			args := binaryArgs
-			if step[0] == MulDiv {
-				args = mulDivArgs
-			}
-			decoded, e := args.Unpack(step[1:])
-			if e != nil {
-				return p, e
-			}
-			for _, v := range decoded {
-				operands = append(operands, decodeValue(v.(*big.Int)))
-			}
+		operands, err := Operands(recipe, index)
+		if err != nil {
+			return p, err
 		}
 		for _, v := range operands {
 			if v.Source == Input {

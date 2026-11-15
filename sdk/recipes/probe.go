@@ -3,17 +3,15 @@ package recipes
 import (
 	"context"
 	"math/big"
-	"sort"
 
 	ethereum "github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-var probeArgs = abi.Arguments{{Type: mustType("bytes", nil)}, {Type: mustType("bytes", nil)}}
-var probeResults = abi.Arguments{{Type: mustType("uint256[]", nil)}, {Type: mustType("bytes", nil)}}
+var probeArgs = Arguments("bytes", "bytes")
+var probeResults = Arguments("uint256[]", "bytes")
 
 // ProbePrefix replays an authenticated prefix at the original executor and probes
 // its resulting state with host-owned eth_call-only code. Numerical witnesses must
@@ -31,32 +29,11 @@ func ProbePrefix(ctx context.Context, reader provider.Reader, snapshot Snapshot,
 	if !ok {
 		return nil, nil, errors.New("recipe probe requires RPC code-override support")
 	}
-	indices := make([]uint, 0, len(program.needed))
-	for index := range program.needed {
-		indices = append(indices, index)
-	}
-	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
-	packed := make([]*big.Int, len(indices))
-	for i, index := range indices {
-		packed[i] = new(big.Int).SetUint64(uint64(index))
-		if prefix.Steps[index][0] == Read {
-			q, _ := readArgs.Unpack(prefix.Steps[index][1:])
-			decoded, _ := queryArgs.Unpack(prefix.Queries[q[0].(*big.Int).Uint64()])
-			if decoded[0] == snapshot.Executor {
-				return nil, nil, errors.New("unsupported prefix: self-query cannot preserve original executor code")
-			}
-		}
-	}
-	values, known, anchors, err := prefixInputs(program, runtime.Inputs)
+	indices, resolve, err := lensCall(snapshot, prefix, program, runtime.Inputs)
 	if err != nil {
 		return nil, nil, err
 	}
-	args, err := lensArguments.Pack(snapshot.Account, prefix.Queries, prefix.Steps, values, known, anchors, program.runtime, packed)
-	if err != nil {
-		return nil, nil, errors.New("cannot encode recipe probe prefix")
-	}
-	resolve := append(crypto.Keccak256([]byte("resolve(address,bytes[],bytes[],uint256[],bool[],bytes[],bytes[],uint256[])"))[:4], args...)
-	args, err = probeArgs.Pack(resolve, query)
+	args, err := probeArgs.Pack(resolve, query)
 	if err != nil {
 		return nil, nil, err
 	}

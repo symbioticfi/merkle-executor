@@ -18,6 +18,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/signer"
 )
 
@@ -173,7 +174,7 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	defer cancel()
 	_, err := m.backend.NonceAt(ctx, m.signer.Address(), nil)
 	if err != nil {
-		return failure("initialize sending nonce", err)
+		return protocolio.Failure("initialize sending nonce", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -360,7 +361,7 @@ func (m *Manager) initial(ctx context.Context, w *work) {
 	}
 	nonce, err := m.backend.NonceAt(ctx, m.signer.Address(), nil)
 	if err != nil {
-		m.finish(w, failure("read mined nonce", err), nil)
+		m.finish(w, protocolio.Failure("read mined nonce", err), nil)
 		return
 	}
 	if nonce < m.nonceFloor || nonce == math.MaxUint64 {
@@ -373,7 +374,7 @@ func (m *Manager) initial(ctx context.Context, w *work) {
 	}
 	remote, err := m.backend.PendingNonceAt(ctx, m.signer.Address())
 	if err != nil {
-		m.finish(w, failure("read pending nonce", err), nil)
+		m.finish(w, protocolio.Failure("read pending nonce", err), nil)
 		return
 	}
 	if m.pending == nil && remote != nonce || m.pending != nil && (remote < nonce || remote > nonce+1) {
@@ -419,7 +420,7 @@ func (m *Manager) invalid(ctx context.Context, w *work) error {
 	if w.req.Obsolete != nil {
 		obsolete, err := w.req.Obsolete(ctx)
 		if err != nil {
-			return failure("check request validity", err)
+			return protocolio.Failure("check request validity", err)
 		}
 		if obsolete {
 			return ErrRequestObsolete
@@ -441,7 +442,7 @@ func (m *Manager) prepare(ctx context.Context, w *work, nonce uint64, floor fees
 	}
 	fresh, err := m.backend.NonceAt(ctx, m.signer.Address(), nil)
 	if err != nil {
-		return nil, failure("recheck mined nonce before signing", err)
+		return nil, protocolio.Failure("recheck mined nonce before signing", err)
 	}
 	if fresh != nonce || fresh < m.nonceFloor {
 		return nil, ErrNonceConsumed
@@ -449,7 +450,7 @@ func (m *Manager) prepare(ctx context.Context, w *work, nonce uint64, floor fees
 	if m.pending == nil {
 		pending, err := m.backend.PendingNonceAt(ctx, m.signer.Address())
 		if err != nil {
-			return nil, failure("recheck pending nonce before signing", err)
+			return nil, protocolio.Failure("recheck pending nonce before signing", err)
 		}
 		if pending != fresh {
 			return nil, errors.New("signer has unknown pending work")
@@ -465,7 +466,7 @@ func (m *Manager) prepare(ctx context.Context, w *work, nonce uint64, floor fees
 	}
 	signed, err := m.signer.SignTx(ctx, unsigned, new(big.Int).Set(m.chainID))
 	if err != nil {
-		return nil, failure("sign transaction", err)
+		return nil, protocolio.Failure("sign transaction", err)
 	}
 	txSigner := types.LatestSignerForChainID(m.chainID)
 	if signed == nil {
@@ -576,7 +577,7 @@ func (m *Manager) step(ctx context.Context, replace bool) {
 		m.pending.lastReplacement = time.Now()
 		header, err := m.backend.HeaderByNumber(ctx, nil)
 		if err != nil {
-			m.report(w, failure("read replacement head", err))
+			m.report(w, protocolio.Failure("read replacement head", err))
 		} else if header == nil || header.Number == nil || !header.Number.IsUint64() {
 			m.report(w, errors.New("invalid replacement head"))
 		} else if header.Number.Uint64() > w.signedHead {
@@ -648,7 +649,7 @@ func (m *Manager) observe(ctx context.Context) bool {
 		}
 		if err != nil {
 			if m.current != nil {
-				m.report(m.current, failure("read transaction receipt", err))
+				m.report(m.current, protocolio.Failure("read transaction receipt", err))
 			}
 			continue
 		}
@@ -693,7 +694,7 @@ func (m *Manager) observe(ctx context.Context) bool {
 	nonce, err := m.backend.NonceAt(ctx, m.signer.Address(), nil)
 	if m.current != nil {
 		if err != nil {
-			m.report(m.current, failure("read active nonce", err))
+			m.report(m.current, protocolio.Failure("read active nonce", err))
 		} else if nonce > m.pending.nonce {
 			m.report(m.current, ErrNonceConsumed)
 			return true
@@ -711,7 +712,7 @@ func (m *Manager) checkFunding(ctx context.Context, tx *types.Transaction) error
 	defer cancel()
 	balance, err := m.backend.TransactionSenderBalanceAt(ctx, m.signer.Address(), nil)
 	if err != nil {
-		return failure("read transaction sender balance", err)
+		return protocolio.Failure("read transaction sender balance", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -736,14 +737,14 @@ func bump(n *big.Int) *big.Int {
 func (m *Manager) price(ctx context.Context, req Request, floor fees) (fees, *types.Header, error) {
 	header, err := m.backend.HeaderByNumber(ctx, nil)
 	if err != nil {
-		return fees{}, nil, failure("read fee header", err)
+		return fees{}, nil, protocolio.Failure("read fee header", err)
 	}
 	if header == nil || header.Number == nil || !header.Number.IsUint64() || !uint256(header.BaseFee) || header.GasLimit == 0 {
 		return fees{}, nil, errors.New("invalid EIP-1559 fee header")
 	}
 	history, err := m.backend.FeeHistory(ctx, 1, header.Number, []float64{50})
 	if err != nil {
-		return fees{}, nil, failure("read transaction fee", err)
+		return fees{}, nil, protocolio.Failure("read transaction fee", err)
 	}
 	if history == nil || len(history.Reward) != 1 || len(history.Reward[0]) != 1 || !uint256(history.Reward[0][0]) {
 		return fees{}, nil, errors.New("invalid transaction fee reward")
@@ -801,7 +802,7 @@ func (m *Manager) quote(ctx context.Context, req Request, floor fees) (uint64, f
 	limit := min(m.cfg.MaxGas, header.GasLimit)
 	gas, err := m.backend.EstimateGas(ctx, ethereum.CallMsg{From: m.signer.Address(), To: &req.To, Data: req.Data, Gas: limit, GasFeeCap: priced.cap, GasTipCap: priced.tip})
 	if err != nil {
-		return 0, fees{}, 0, failure("estimate transaction gas", err)
+		return 0, fees{}, 0, protocolio.Failure("estimate transaction gas", err)
 	}
 	if gas == 0 || gas > limit {
 		return 0, fees{}, 0, errors.New("transaction gas exceeds budget or block limit")
@@ -826,7 +827,7 @@ func (m *Manager) broadcast(ctx context.Context, tx *types.Transaction, req Requ
 	if err != nil {
 		message := strings.ToLower(err.Error())
 		if !strings.Contains(message, "already known") && !strings.Contains(message, "already imported") {
-			return failure("broadcast transaction; ownership retained", err)
+			return protocolio.Failure("broadcast transaction; ownership retained", err)
 		}
 	}
 	return nil
@@ -838,27 +839,14 @@ func definiteRejection(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return false
 	}
-	var operation *operationError
-	if errors.As(err, &operation) {
-		err = operation.cause
-	}
-	message := strings.ToLower(err.Error())
-	for _, text := range []string{"nonce too low", "nonce is too low", "nonce has already been used", "underpriced", "insufficient funds", "intrinsic gas", "exceeds block gas", "invalid sender"} {
-		if strings.Contains(message, text) {
-			return true
+	// Operation wrappers render no provider text; classify their causes.
+	for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+		message := strings.ToLower(cause.Error())
+		for _, text := range []string{"nonce too low", "nonce is too low", "nonce has already been used", "underpriced", "insufficient funds", "intrinsic gas", "exceeds block gas", "invalid sender"} {
+			if strings.Contains(message, text) {
+				return true
+			}
 		}
 	}
 	return false
-}
-
-// Keep endpoint text out of host logs while preserving cancellation and RPC error data.
-type operationError struct {
-	operation string
-	cause     error
-}
-
-func (e *operationError) Error() string { return e.operation + " failed" }
-func (e *operationError) Unwrap() error { return e.cause }
-func failure(operation string, err error) error {
-	return &operationError{operation: operation, cause: err}
 }

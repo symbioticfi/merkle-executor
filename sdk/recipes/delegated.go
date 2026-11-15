@@ -3,7 +3,6 @@ package recipes
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"math/big"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -61,7 +60,7 @@ func Executions(data []byte) ([][]byte, error) {
 	if isMulticall(data) {
 		return batchCalls(data)
 	}
-	if _, _, err := decodeExecution(data); err != nil {
+	if _, err := decodeExecution(data); err != nil {
 		return nil, err
 	}
 	return [][]byte{bytes.Clone(data)}, nil
@@ -122,12 +121,6 @@ func SimulateExecutors(ctx context.Context, reader BatchReader, caller common.Ad
 			flat = append(flat, ExecutorCall{Executor: call.Executor, Data: data})
 		}
 	}
-	var artifact struct {
-		Runtime hexutil.Bytes `json:"runtime"`
-	}
-	if err := json.Unmarshal(batchArtifact, &artifact); err != nil {
-		return nil, err
-	}
 	probeCalls := make([]struct {
 		Executor common.Address
 		Data     []byte
@@ -140,7 +133,7 @@ func SimulateExecutors(ctx context.Context, reader BatchReader, caller common.Ad
 		return nil, err
 	}
 	data := append(crypto.Keccak256([]byte("simulateCalls((address,bytes)[])"))[:4], args...)
-	raw, err := reader.CallContractWithCode(ctx, ethereum.CallMsg{From: caller, To: &caller, Data: data, Gas: gas}, block, artifact.Runtime)
+	raw, err := reader.CallContractWithCode(ctx, ethereum.CallMsg{From: caller, To: &caller, Data: data, Gas: gas}, block, batchRuntime)
 	if err != nil {
 		return nil, simulationFailure(ctx, err)
 	}

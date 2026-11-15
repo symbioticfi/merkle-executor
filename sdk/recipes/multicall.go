@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	ethereum "github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -19,14 +18,19 @@ import (
 
 //go:embed lens/BatchSimulation.json
 var batchArtifact []byte
+var batchRuntime = artifactRuntime(batchArtifact)
 
-var batchArguments = abiArguments("bytes[]")
+var batchArguments = Arguments("bytes[]")
 
-func abiArguments(types ...string) (args abi.Arguments) {
-	for _, name := range types {
-		args = append(args, abi.Argument{Type: mustType(name, nil)})
+// artifactRuntime decodes an embedded eth_call-only runtime checked by verify-lens.
+func artifactRuntime(raw []byte) []byte {
+	var artifact struct {
+		Runtime hexutil.Bytes `json:"runtime"`
 	}
-	return args
+	if err := json.Unmarshal(raw, &artifact); err != nil || len(artifact.Runtime) == 0 {
+		panic("invalid embedded runtime artifact")
+	}
+	return artifact.Runtime
 }
 
 // BatchReader adds original bytecode and eth_call-only code overrides to the
@@ -72,11 +76,11 @@ func Multicall(calls [][]byte) ([]byte, error) {
 	}
 	var hash common.Hash
 	for i, call := range calls {
-		recipe, _, err := decodeExecution(call)
+		decoded, err := decodeExecution(call)
 		if err != nil {
 			return nil, err
 		}
-		h, err := HashRecipe(recipe)
+		h, err := HashRecipe(decoded.recipe)
 		if err != nil {
 			return nil, err
 		}
@@ -88,24 +92,60 @@ func Multicall(calls [][]byte) ([]byte, error) {
 	return executorABI.GetABI().Pack("multicall", calls)
 }
 
-func decodeExecution(call []byte) (Recipe, []*big.Int, error) {
+// execution is one structurally valid executor execute call.
+type execution struct {
+	recipe     Recipe
+	inputs     []*big.Int
+	runtime    [][]byte
+	inspection Inspection
+}
+
+func decodeExecution(call []byte) (execution, error) {
 	method := executorABI.GetABI().Methods["execute"]
 	if len(call) < 4 || !bytes.Equal(call[:4], method.ID) {
-		return Recipe{}, nil, errors.New("expected executor execute calldata")
+		return execution{}, errors.New("expected executor execute calldata")
 	}
 	values, err := method.Inputs.Unpack(call[4:])
 	if err != nil {
-		return Recipe{}, nil, errors.New("invalid executor execute calldata")
+		return execution{}, errors.New("invalid executor execute calldata")
 	}
-	r := Recipe{Queries: values[0].([][]byte), Steps: values[1].([][]byte)}
-	inspection, err := Inspect(r)
+	e := execution{recipe: Recipe{Queries: values[0].([][]byte), Steps: values[1].([][]byte)}, inputs: values[2].([]*big.Int), runtime: values[3].([][]byte)}
+	if e.inspection, err = Inspect(e.recipe); err != nil {
+		return execution{}, err
+	}
+	if len(e.runtime) != len(e.inspection.Slots) {
+		return execution{}, errors.New("execution runtime slot count mismatch")
+	}
+	return e, nil
+}
+
+// stepResults decodes execute's per-step numerical results.
+func stepResults(returned []byte, steps int) ([]*big.Int, error) {
+	values, err := executorABI.UnpackExecute(returned)
+	if err != nil || len(values) != steps {
+		return nil, errors.New("invalid full execution result")
+	}
+	return values, nil
+}
+
+// executionResults pairs every execute in calldata with its simulated return bytes.
+func executionResults(calldata, returned []byte) ([][]byte, [][]byte, error) {
+	if !isMulticall(calldata) {
+		return [][]byte{calldata}, [][]byte{returned}, nil
+	}
+	calls, err := batchCalls(calldata)
 	if err != nil {
-		return Recipe{}, nil, err
+		return nil, nil, err
 	}
-	if len(values[3].([][]byte)) != len(inspection.Slots) {
-		return Recipe{}, nil, errors.New("execution runtime slot count mismatch")
+	values, err := batchArguments.Unpack(returned)
+	if err != nil {
+		return nil, nil, errors.New("invalid batch simulation result")
 	}
-	return r, values[2].([]*big.Int), nil
+	results := values[0].([][]byte)
+	if len(calls) != len(results) {
+		return nil, nil, errors.New("batch simulation result count mismatch")
+	}
+	return calls, results, nil
 }
 
 func isMulticall(call []byte) bool {
@@ -151,8 +191,8 @@ func simulateBatch(ctx context.Context, reader BatchReader, snapshot Snapshot, c
 		return nil, errors.New("batch simulation requires a transaction gas budget")
 	}
 	for _, call := range calls {
-		recipe, _, _ := decodeExecution(call)
-		hash, _ := HashRecipe(recipe)
+		decoded, _ := decodeExecution(call)
+		hash, _ := HashRecipe(decoded.recipe)
 		if hash != snapshot.RecipeHash {
 			return nil, errors.New("batch recipe differs from authenticated snapshot")
 		}
@@ -164,13 +204,7 @@ func simulateBatch(ctx context.Context, reader BatchReader, snapshot Snapshot, c
 			return nil, err
 		}
 	}
-	var artifact struct {
-		Runtime hexutil.Bytes `json:"runtime"`
-	}
-	if err := json.Unmarshal(batchArtifact, &artifact); err != nil {
-		return nil, err
-	}
-	args, err := abiArguments("bytes", "bytes[]").Pack(code, calls)
+	args, err := Arguments("bytes", "bytes[]").Pack(code, calls)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +215,7 @@ func simulateBatch(ctx context.Context, reader BatchReader, snapshot Snapshot, c
 	if gas > ^uint64(0)-overhead {
 		return nil, errors.New("batch gas budget overflows probe allowance")
 	}
-	raw, err := reader.CallContractWithCode(ctx, ethereum.CallMsg{From: snapshot.Caller, To: &snapshot.Executor, Data: data, Gas: gas + overhead}, block, artifact.Runtime)
+	raw, err := reader.CallContractWithCode(ctx, ethereum.CallMsg{From: snapshot.Caller, To: &snapshot.Executor, Data: data, Gas: gas + overhead}, block, batchRuntime)
 	if err != nil {
 		return nil, simulationFailure(ctx, err)
 	}
@@ -211,12 +245,11 @@ func simulateBatch(ctx context.Context, reader BatchReader, snapshot Snapshot, c
 // A reverted extension, gas limit or idle gate ends the batch; RPC failures fail
 // preparation. The final selected bytes always receive an exact simulation.
 func BatchExecution(ctx context.Context, reader BatchReader, snapshot Snapshot, call []byte, gas uint64) ([]byte, error) {
-	recipe, inputs, err := decodeExecution(call)
+	decoded, err := decodeExecution(call)
 	if err != nil {
 		return nil, err
 	}
-	inspection, _ := Inspect(recipe)
-	if len(inputs) != 0 || len(inspection.Inputs) != 0 {
+	if len(decoded.inputs) != 0 || len(decoded.inspection.Inputs) != 0 {
 		return bytes.Clone(call), nil
 	}
 	code, err := originalExecutorRuntime(ctx, reader, snapshot)

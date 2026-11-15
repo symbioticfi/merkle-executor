@@ -35,9 +35,9 @@ fee-on-transfer, rebasing and native-output assets are excluded.
 
 The configured base includes `/api/v1`. `POST /quote` requests `EXACT_INPUT`, fixed
 `amount`, same-chain token pair, authenticated account as swapper, and one output
-to that account. `routingPreference` is `BEST_PRICE`; optional `solverIds` are sent
-unchanged. The response is `quotes: [{solver, quote, signatureData}]`. Backend rank
-is retained among allowed options satisfying explicit minimum proceeds and a live
+to that account. `routingPreference` is `BEST_PRICE`.
+The response is `quotes: [{solver, quote, signatureData}]`. Backend rank
+is retained among options satisfying explicit minimum proceeds and a live
 deadline. Duration constraints belong to the committed recipe; the original full
 execution simulation enforces them before signing. The SDK does not impose a
 separate duration window or choose a replacement deadline.

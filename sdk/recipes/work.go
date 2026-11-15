@@ -1,9 +1,6 @@
 package recipes
 
 import (
-	"bytes"
-	"math/big"
-
 	"github.com/go-errors/errors"
 )
 
@@ -17,57 +14,34 @@ func HasWork(calldata, returned []byte) (bool, error) {
 }
 
 func hasWork(calldata, returned []byte, includeApprovals bool) (bool, error) {
-	if isMulticall(calldata) {
-		calls, err := batchCalls(calldata)
-		if err != nil {
-			return false, err
-		}
-		decoded, err := batchArguments.Unpack(returned)
-		if err != nil {
-			return false, errors.New("invalid batch simulation result")
-		}
-		results := decoded[0].([][]byte)
-		if len(calls) != len(results) {
-			return false, errors.New("batch simulation result count mismatch")
-		}
-		work := false
-		for i, call := range calls {
-			active, err := hasWork(call, results[i], includeApprovals)
-			if err != nil {
-				return false, err
-			}
-			work = work || active
-		}
-		return work, nil
-	}
-	method := executorABI.GetABI().Methods["execute"]
-	if len(calldata) < 4 || !bytes.Equal(calldata[:4], method.ID) {
-		return false, errors.New("expected executor execute calldata")
-	}
-	decoded, err := method.Inputs.Unpack(calldata[4:])
-	if err != nil {
-		return false, errors.New("invalid executor execute calldata")
-	}
-	recipe := Recipe{Queries: decoded[0].([][]byte), Steps: decoded[1].([][]byte)}
-	inspection, err := Inspect(recipe)
+	calls, results, err := executionResults(calldata, returned)
 	if err != nil {
 		return false, err
 	}
-	inputs := decoded[2].([]*big.Int)
-	if len(decoded[3].([][]byte)) != len(inspection.Slots) {
-		return false, errors.New("execution runtime slot count mismatch")
+	work := false
+	for i, call := range calls {
+		active, err := executionWork(call, results[i], includeApprovals)
+		if err != nil {
+			return false, err
+		}
+		work = work || active
 	}
-	output, err := method.Outputs.Unpack(returned)
-	if err != nil || len(output) != 1 {
-		return false, errors.New("invalid full execution result")
+	return work, nil
+}
+
+func executionWork(call, returned []byte, includeApprovals bool) (bool, error) {
+	decoded, err := decodeExecution(call)
+	if err != nil {
+		return false, err
 	}
-	values := output[0].([]*big.Int)
-	if len(values) != len(recipe.Steps) {
-		return false, errors.New("full execution result count mismatch")
+	recipe, inputs := decoded.recipe, decoded.inputs
+	values, err := stepResults(returned, len(recipe.Steps))
+	if err != nil {
+		return false, err
 	}
 	skipped := make(map[uint]bool)
 	work := false
-	for _, slot := range inspection.Slots {
+	for _, slot := range decoded.inspection.Slots {
 		if slot.Operation == Approve {
 			work = work || includeApprovals
 			continue

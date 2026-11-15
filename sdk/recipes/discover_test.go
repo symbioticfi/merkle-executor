@@ -79,10 +79,11 @@ func (reader *fakeReader) CallContract(_ context.Context, msg ethereum.CallMsg, 
 		if msg.To == nil || *msg.To != reader.executor || msg.From != common.HexToAddress("0x3333") || block.Uint64() != reader.head {
 			reader.t.Fatal("full execution lost current pin or caller")
 		}
-		recipe, _, err := decodeExecution(msg.Data)
+		decoded, err := decodeExecution(msg.Data)
 		if err != nil {
 			return nil, err
 		}
+		recipe := decoded.recipe
 		values := make([]*big.Int, len(recipe.Steps))
 		for i := range values {
 			values[i] = new(big.Int)

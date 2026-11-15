@@ -154,3 +154,112 @@ func BindOutput(template SignTemplate, payload []byte, results map[uint]*big.Int
 	}
 	return nil
 }
+
+// Trade is the recipe-selected amount and minimum of one signed protocol request.
+type Trade struct {
+	Template     SignTemplate
+	Budget       recipes.EconomicValue
+	Floors       []recipes.EconomicValue
+	Requirements keeper.RecipeRequirements
+}
+
+// NewTrade binds the template's amount and minimum words to their recipe sources.
+// Extra values and result bindings are proved with them before external requests.
+func NewTrade(r recipes.Recipe, sign SignTemplate, amountWord, minimumWord int, mutable map[int]bool, extra ...recipes.EconomicValue) (Trade, recipes.Value, error) {
+	amount, err := sign.Field(amountWord)
+	if err != nil {
+		return Trade{}, recipes.Value{}, err
+	}
+	budget, err := recipes.Budget(r, amount, sign.Action.Step)
+	if err != nil {
+		return Trade{}, recipes.Value{}, err
+	}
+	minimum, err := sign.Field(minimumWord)
+	if err != nil {
+		return Trade{}, recipes.Value{}, err
+	}
+	floors, err := recipes.Floor(r, minimum, sign.Action.Step)
+	if err != nil {
+		return Trade{}, recipes.Value{}, err
+	}
+	economics := append(append([]recipes.EconomicValue{budget}, floors...), extra...)
+	for _, binding := range sign.Action.Bindings {
+		if binding.Value.Source == recipes.Result {
+			economics = append(economics, recipes.EconomicValue{Expression: binding.Value, Exact: true})
+		}
+	}
+	requirements, err := Requirements(sign, economics, mutable)
+	if err != nil {
+		return Trade{}, recipes.Value{}, err
+	}
+	return Trade{Template: sign, Budget: budget, Floors: floors, Requirements: requirements}, minimum, nil
+}
+
+// Amounts resolves the exact amount and the strongest floor; either zero is idle.
+func (t Trade) Amounts(results map[uint]*big.Int) (*big.Int, *big.Int, error) {
+	amount, err := recipes.EconomicResult(t.Budget, results)
+	if err != nil {
+		return nil, nil, err
+	}
+	minimum := new(big.Int)
+	for _, floor := range t.Floors {
+		value, err := recipes.EconomicResult(floor, results)
+		if err != nil {
+			return nil, nil, err
+		}
+		if value.Cmp(minimum) > 0 {
+			minimum = value
+		}
+	}
+	if amount.Sign() == 0 || minimum.Sign() == 0 {
+		return nil, nil, provider.ErrNotReady
+	}
+	return amount, minimum, nil
+}
+
+// Bind requires exact floors at the selected minimum word, then binds the payload.
+func (t Trade) Bind(payload []byte, minimumWord int, results map[uint]*big.Int, out *provider.Output) error {
+	at := t.Template.Offset + 32*minimumWord
+	for _, floor := range t.Floors {
+		if !floor.Exact {
+			continue
+		}
+		expected, err := recipes.EconomicResult(floor, results)
+		if err != nil {
+			return err
+		}
+		if new(big.Int).SetBytes(payload[at:at+32]).Cmp(expected) != 0 {
+			return errors.New("selected minimum conflicts with exact recipe result binding")
+		}
+	}
+	return BindOutput(t.Template, payload, results, out)
+}
+
+// AuthorizingSign requires exactly one confirmed account Sign event for digest,
+// carrying the exact prepared authorization payload.
+func AuthorizingSign(e *provider.Execution, owner common.Address, digest common.Hash, authorization []byte) error {
+	a := account.NewMerkleAccount()
+	id := a.GetABI().Events["Sign"].ID
+	count := 0
+	for _, log := range e.Logs {
+		if log.Address != owner || len(log.Topics) == 0 || log.Topics[0] != id {
+			continue
+		}
+		event, err := a.UnpackSignEvent(&log)
+		if err != nil {
+			return errors.New("malformed confirmed Sign event")
+		}
+		if common.Hash(event.Digest) != digest {
+			continue
+		}
+		payload, err := a.TryPackSign(event.DomainSeparator, event.Buffer, event.Plan)
+		if err != nil || !bytes.Equal(payload, authorization) {
+			return errors.New("confirmed Sign differs from prepared authorization")
+		}
+		count++
+	}
+	if count != 1 {
+		return errors.New("exact confirmed authorizing Sign event is required")
+	}
+	return nil
+}

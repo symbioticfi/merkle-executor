@@ -8,12 +8,9 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	reactor "github.com/symbioticfi/merkle-executor/sdk/bindings/liquidlanereactor"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
-
-func validHeader(h *types.Header, n uint64) bool {
-	return h != nil && h.Number != nil && h.Number.IsUint64() && h.Number.Uint64() == n
-}
 
 // The orders API locates the transaction; only its canonical receipt proves a fill.
 func (p *Provider) fillReceipt(ctx context.Context, s provider.Snapshot, d prepared, hash common.Hash) error {
@@ -25,7 +22,7 @@ func (p *Provider) fillReceipt(ctx context.Context, s provider.Snapshot, d prepa
 		return errors.New("RFQ fill lacks successful pinned receipt")
 	}
 	header, err := p.chain.HeaderByNumber(ctx, receipt.BlockNumber)
-	if err != nil || !validHeader(header, receipt.BlockNumber.Uint64()) || header.Hash() != receipt.BlockHash {
+	if err != nil || protocolio.CheckHeader(header, receipt.BlockNumber) != nil || header.Hash() != receipt.BlockHash {
 		return errors.New("RFQ fill receipt is noncanonical")
 	}
 	r := reactor.NewLiquidLaneReactor()
@@ -58,7 +55,7 @@ func (p *Provider) fillReceipt(ctx context.Context, s provider.Snapshot, d prepa
 		return errors.New("RFQ matching Fill absent from order receipt")
 	}
 	closing, err := p.chain.HeaderByNumber(ctx, new(big.Int).Set(receipt.BlockNumber))
-	if err != nil || !validHeader(closing, receipt.BlockNumber.Uint64()) || closing.Hash() != receipt.BlockHash {
+	if err != nil || protocolio.CheckHeader(closing, receipt.BlockNumber) != nil || closing.Hash() != receipt.BlockHash {
 		return errors.New("RFQ fill receipt reorganized")
 	}
 	return nil

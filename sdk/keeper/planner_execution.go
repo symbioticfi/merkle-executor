@@ -2,13 +2,15 @@ package keeper
 
 import (
 	"context"
+	"math/big"
+	"slices"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"math/big"
-	"slices"
 )
 
 // PrepareExecution authenticates candidates together and validates one selected
@@ -70,7 +72,7 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 	if err != nil {
 		return batch, err
 	}
-	if err = validHeader(header, block); err != nil {
+	if err = protocolio.CheckHeader(header, block); err != nil {
 		return batch, err
 	}
 	gasLimit := p.MaxGas

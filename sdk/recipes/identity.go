@@ -5,7 +5,6 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
@@ -24,8 +23,7 @@ func DiscoverExecutors(ctx context.Context, reader Reader, executors []common.Ad
 	if err != nil {
 		return nil, errors.New("pin executor discovery failed")
 	}
-	valid := func(h *types.Header) bool { return h != nil && h.Number != nil && h.Number.IsUint64() }
-	if !valid(header) {
+	if protocolio.CheckHeader(header, nil) != nil {
 		return nil, errors.New("invalid executor discovery block")
 	}
 	pin := new(big.Int).Set(header.Number)
@@ -72,7 +70,7 @@ func DiscoverExecutors(ctx context.Context, reader Reader, executors []common.Ad
 		identities[target] = ExecutorIdentity{Account: account, Caller: caller}
 	}
 	closing, err := reader.HeaderByNumber(ctx, pin)
-	if err != nil || !valid(closing) || closing.Number.Cmp(pin) != 0 || closing.Hash() != header.Hash() {
+	if err != nil || protocolio.CheckHeader(closing, pin) != nil || closing.Hash() != header.Hash() {
 		return nil, errors.New("executor discovery block changed")
 	}
 	return identities, nil

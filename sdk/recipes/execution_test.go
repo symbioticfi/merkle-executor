@@ -85,10 +85,11 @@ func (r *executionReader) CallContract(ctx context.Context, msg ethereum.CallMsg
 		if strings.Contains(r.mode, "simulation error") {
 			return nil, errors.New("speculative simulation failure")
 		}
-		recipe, _, err := decodeExecution(msg.Data)
+		decoded, err := decodeExecution(msg.Data)
 		if err != nil {
 			return nil, err
 		}
+		recipe := decoded.recipe
 		values := make([]*big.Int, len(recipe.Steps))
 		for i := range values {
 			values[i] = new(big.Int)

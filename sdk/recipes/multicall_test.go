@@ -67,7 +67,7 @@ func (r *repeatedProbeReader) CallContractWithCode(_ context.Context, call ether
 	if r.transportFailure {
 		return nil, errors.New("transport unavailable")
 	}
-	args, err := abiArguments("bytes", "bytes[]").Unpack(call.Data[4:])
+	args, err := Arguments("bytes", "bytes[]").Unpack(call.Data[4:])
 	if err != nil {
 		return nil, err
 	}

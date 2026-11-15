@@ -105,7 +105,6 @@ type RfqQuoteRequest struct {
 	Amount            string           `json:"amount"`
 	Swapper           string           `json:"swapper"`
 	RoutingPreference string           `json:"routingPreference"`
-	SolverIDs         []string         `json:"solverIds,omitempty"`
 	Outputs           []RfqQuoteOutput `json:"outputs"`
 }
 

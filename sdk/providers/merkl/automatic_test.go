@@ -106,7 +106,7 @@ func TestAutomaticPreparesAllFrontendClaimsWithOneRewardsFetch(t *testing.T) {
 		{name: "idle A and positive B", claimedA: 100},
 		{name: "positive A and idle B", claimedB: 200},
 		{name: "all idle optional gates", claimedA: 100, claimedB: 200},
-		{name: "all idle nonoptional claims", claimedA: 100, claimedB: 200, literalGate: true, want: "rewards below minClaimable"},
+		{name: "all idle nonoptional claims", claimedA: 100, claimedB: 200, literalGate: true, want: "no unclaimed Merkl rewards"},
 		{name: "idle first cannot hide invalid second proof", claimedB: 200, corrupt: true, want: "proof does not match"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -243,7 +243,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 func TestAutomaticUsesCuratorClaimGuard(t *testing.T) {
 	s, r, tree := frontendClaims(t)
 	// The curator can choose another comparison without changing claim fields.
-	raw, _ := layoutArgs("uint256", "uint256").Pack(new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(18)), new(big.Int).Lsh(big.NewInt(2), 216))
+	raw, _ := recipes.Arguments("uint256", "uint256").Pack(new(big.Int).Or(new(big.Int).Lsh(big.NewInt(2), 216), big.NewInt(18)), new(big.Int).Lsh(big.NewInt(2), 216))
 	needle := append([]byte{recipes.Equal}, raw...)
 	actions, err := recipes.ManagedActions(r, tree)
 	if err != nil {

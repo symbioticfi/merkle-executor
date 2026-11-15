@@ -13,19 +13,11 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-func arguments(names ...string) abi.Arguments {
-	args := make(abi.Arguments, len(names))
-	for i, name := range names {
-		args[i].Type, _ = abi.NewType(name, "", nil)
-	}
-	return args
-}
-
-var queryArgs = arguments("address", "bytes", "uint256[]", "uint256")
-var callArgs = arguments("address", "bytes", "uint256[]")
-var dynamicCallArgs = arguments("uint256", "bytes", "uint256[]")
-var pairArgs = arguments("uint256", "uint256")
-var indexArgs = arguments("uint256")
+var queryArgs = recipes.Arguments("address", "bytes", "uint256[]", "uint256")
+var callArgs = recipes.Arguments("address", "bytes", "uint256[]")
+var dynamicCallArgs = recipes.Arguments("uint256", "bytes", "uint256[]")
+var pairArgs = recipes.Arguments("uint256", "uint256")
+var indexArgs = recipes.Arguments("uint256")
 
 func packed(args abi.Arguments, values ...any) []byte {
 	data, err := args.Pack(values...)

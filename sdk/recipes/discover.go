@@ -134,16 +134,6 @@ func decodeSnapshotRoot(snapshot Snapshot, raw []byte, err error) (Snapshot, err
 	snapshot.Root = root
 	return snapshot, nil
 }
-func validateHeader(header *types.Header, expected *big.Int) error {
-	if header == nil || header.Number == nil || !header.Number.IsUint64() {
-		return errors.New("invalid block header")
-	}
-	if expected != nil && header.Number.Cmp(expected) != 0 {
-		return errors.New("RPC returned another block")
-	}
-	return nil
-}
-
 func verifyRoleResults(leaves []common.Hash, result func(int) protocolio.ReadResult) error {
 	for i, leaf := range leaves {
 		member := result(i)

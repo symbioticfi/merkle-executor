@@ -4,6 +4,7 @@ package recipes
 
 import (
 	"math/big"
+	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
@@ -32,6 +33,11 @@ const (
 
 // MaxInputIndex bounds host memory used by a recipe's sparse input vector.
 const MaxInputIndex = parse.MaxInputIndex
+
+// actionKey names one managed action as "stepIndex:actionIndex".
+func actionKey(step uint, action int) string {
+	return strconv.FormatUint(uint64(step), 10) + ":" + strconv.Itoa(action)
+}
 
 type Recipe struct {
 	Queries [][]byte

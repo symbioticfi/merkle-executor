@@ -281,8 +281,9 @@ masks, proofs and recipe instructions stay fixed. Native contracts enforce claim
 validity, and final admission simulates the complete original execution.
 
 Unavailable claims are idle; required getter failures, malformed responses and
-transport errors fail preparation. Scans honor the host operation deadline without
-silently truncating. Ordinary synchronous vault operations are excluded; richer
+transport errors fail preparation. Noon request and Pareto epoch scans read each
+filter stage as one bounded read group (up to 256 members, Multicall3-aggregated
+by the daemon client) and honor the host operation deadline without silently truncating. Ordinary synchronous vault operations are excluded; richer
 native recipes resolve their own reads and amounts through the generic planner.
 The [ABI subset](../sdk/schemas/NATIVE_CLAIMS.md) records exact source pins and
 deliberate limits. It contains no native deployment catalogue.
