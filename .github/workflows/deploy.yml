@@ -63,9 +63,6 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
   dispatch:
-    # shortcut: main only publishes the image; dispatch deploy_executor_prod.yml here once
-    # vault-solver-deploy has a prod executor profile (own executors and caller key).
-    if: github.ref_name == 'stage'
     needs: image
     runs-on: ubuntu-latest
     environment: deploy
@@ -75,7 +72,8 @@ jobs:
           GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
           IMAGE_TAG: ${{ github.sha }}
           DIGEST: ${{ needs.image.outputs.digest }}
+          WORKFLOW: ${{ github.ref_name == 'main' && 'deploy_executor_prod.yml' || 'deploy_executor_stage.yml' }}
         run: |
-          gh workflow run deploy_executor_stage.yml \
+          gh workflow run "$WORKFLOW" \
             --repo symbioticfi/vault-solver-deploy --ref main \
             -f image_tag="$IMAGE_TAG" -f digest="$DIGEST"
