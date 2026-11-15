@@ -31,7 +31,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 )
 
 func loadRFQArtifact(t *testing.T, name string) serviceArtifact {
@@ -54,7 +53,16 @@ func loadRFQArtifact(t *testing.T, name string) serviceArtifact {
 	return serviceArtifact{ABI: parsed, Bytecode: v.Bytecode}
 }
 
-func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
+func TestAnvilLiquidLaneRFQConsumerAmbiguityAndFill(t *testing.T) {
+	testAnvilLiquidLaneRFQConsumer(t, false)
+}
+
+func TestAnvilLiquidLaneRFQConsumerAmbiguityAndCancel(t *testing.T) {
+	testAnvilLiquidLaneRFQConsumer(t, true)
+}
+
+func testAnvilLiquidLaneRFQConsumer(t *testing.T, cancelOrder bool) {
+	t.Helper()
 	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
 		t.Skip("set MERKLE_ANVIL_TEST=1 for local RFQ consumer lifecycle")
 	}
@@ -148,6 +156,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
 	var curatorCalls, quotes, gets, posts atomic.Int32
 	var accepted atomic.Bool
+	var settlementHash atomic.Pointer[string]
 	permission := []any{}
 	for _, leaf := range leaves {
 		permission = append(permission, map[string]any{"hash": leaf.Hash.Hex(), "target": leaf.Target.Hex(), "value": "zero", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": []string{leaf.Proof[0].Hex()}})
@@ -190,7 +199,11 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 			}
 			orders := []wire.RfqOrder{}
 			if accepted.Load() {
-				orders = append(orders, wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: "filled", QuoteID: quoteID, Swapper: account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: tokenIn.Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: tokenOut.Hex(), Amount: "950", Recipient: account.Hex()}}})
+				status := "filled"
+				if cancelOrder {
+					status = "cancelled"
+				}
+				orders = append(orders, wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: status, TxHash: settlementHash.Load(), QuoteID: quoteID, Swapper: account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: tokenIn.Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: tokenOut.Hex(), Amount: "950", Recipient: account.Hex()}}})
 			}
 			_ = json.NewEncoder(w).Encode(wire.RfqOrdersResponse{Orders: orders, Cursor: json.RawMessage("null")})
 		case "/api/v1/order":
@@ -218,15 +231,17 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	apiHTTP := &http.Client{Transport: serviceRewriteTransport{host: "swap.symbiotic.fi", target: fixtureURL}, Timeout: 15 * time.Second}
 	path := writeCLIConfig(t, directory, cfg)
 	var planOutput bytes.Buffer
-	if err = runBotWithHTTP(ctx, path, true, true, &planOutput, apiHTTP); err != nil {
+	if err = planBotWithHTTP(ctx, path, &planOutput, apiHTTP); err != nil {
 		t.Fatal(err)
 	}
-	var plans map[string]keeper.Plan
-	if err = json.Unmarshal(planOutput.Bytes(), &plans); err != nil {
+	var response struct {
+		Plan keeper.ExecutionPlan `json:"plan"`
+	}
+	if err = json.Unmarshal(planOutput.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	plan := plans[cfg.Strategies[0]]
-	if len(plan.Outputs) != 5 || !bytes.Equal(plan.Outputs[2].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
+	plan := response.Plan.Members[0].Plan
+	if len(plan.Outputs) != 6 || !bytes.Equal(plan.Outputs[2][0].Actions["4:0"], signData) || plan.Results[0] != "1000" || plan.Results[1] != "900" || len(signData) != 804 || posts.Load() != 0 || quotes.Load() != 1 {
 		t.Fatal("plan did not preserve exact sign or published early")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 {
@@ -235,7 +250,7 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	deadlineGuard := recipe.Steps[len(recipe.Steps)-1]
 	recipe.Steps[len(recipe.Steps)-1] = issuerStep(t, recipes.LessOrEqual, []string{"uint256", "uint256"}, inputOperand(1), new(big.Int).SetUint64(deadline-1))
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
-	if e := runBotWithHTTP(ctx, path, true, true, new(bytes.Buffer), apiHTTP); e == nil || !strings.Contains(e.Error(), "full recipe simulation failed") {
+	if e := planBotWithHTTP(ctx, path, new(bytes.Buffer), apiHTTP); !recipes.BatchRejected(e) {
 		t.Fatal("recipe deadline cap was not enforced", e)
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 0 || posts.Load() != 0 || quotes.Load() != 2 {
@@ -245,32 +260,30 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	serviceSeedTransaction(t, ctx, client, owner, &executorAddress, binding.PackSetRecipe(recipe.Queries, recipe.Steps))
 	t.Setenv(cfg.Signer.KeyEnv, hex.EncodeToString(crypto.FromECDSA(key)))
 	startServiceConfirmationMining(t, ctx, client, caller)
+	worker := serviceKeeper(t, ctx, path, apiHTTP)
 	run := func() {
-		if e := runBotWithHTTP(ctx, path, true, false, new(bytes.Buffer), apiHTTP); e != nil {
+		if e := worker.Tick(ctx); e != nil {
 			t.Fatal(e)
 		}
 	}
-	load := func() keeper.Job {
-		var job keeper.Job
-		if found, e := state.Read(cfg.StateDir, "strategy."+cfg.Strategies[0]+".v1", &job); e != nil || !found {
-			t.Fatal("job absent", e)
+	for posts.Load() == 0 {
+		run()
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(20 * time.Millisecond):
 		}
-		return job
 	}
-	run()
-	job := load()
-	if job.Phase != "authorized" || len(job.Progress) != 5 || job.Progress[2].Outcome != "publication-uncertain" || job.Result.Execution == nil || posts.Load() != 1 || quotes.Load() != 3 {
-		t.Fatalf("ambiguous publication lost ownership: phase=%s progress=%+v posts=%d quotes=%d", job.Phase, job.Progress, posts.Load(), quotes.Load())
+	if !worker.Pending() || posts.Load() != 1 || quotes.Load() != 3 {
+		t.Fatalf("ambiguous publication lost ownership: pending=%v posts=%d quotes=%d", worker.Pending(), posts.Load(), quotes.Load())
 	}
-	originalData := bytes.Clone(job.Plan.Outputs[2].Data)
 	treeCalls := curatorCalls.Load()
 	run()
-	job = load()
-	if job.Phase != "authorized" || job.Progress[2].Done || job.Progress[2].Reference != orderID || posts.Load() != 1 || quotes.Load() != 3 || curatorCalls.Load() != treeCalls || !bytes.Equal(originalData, job.Plan.Outputs[2].Data) {
-		t.Fatal("API-only fill released work or restart changed identity")
+	if !worker.Pending() || posts.Load() != 1 || quotes.Load() != 3 || curatorCalls.Load() != treeCalls {
+		t.Fatal("API-only fill released work or changed quote identity")
 	}
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 {
-		t.Fatal("restart duplicated authorization", nonce, e)
+		t.Fatal("reconciliation duplicated authorization", nonce, e)
 	}
 	for token, want := range map[common.Address]int64{tokenIn: 1000, tokenOut: 0} {
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: erc20.NewERC20().PackBalanceOf(account)}, nil)
@@ -282,19 +295,42 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	if e != nil || new(big.Int).SetBytes(rawAllowance).Int64() != 1000 {
 		t.Fatal("recipe did not authorize exact Reactor allowance", e)
 	}
-	order := reactor.IReactorOrder{Request: request, Swapper: account, SwapperSignature: []byte{0}, Filler: owner, Outputs: []reactor.IReactorOutput{{Token: tokenOut, Amount: big.NewInt(950), Recipient: account}}}
-	serviceSeedTransaction(t, ctx, client, owner, &reactorAddress, servicePack(t, reactorArtifact, "fill", order))
+	if cancelOrder {
+		if err = client.Client().CallContext(ctx, nil, "anvil_setBalance", account.Hex(), "0xde0b6b3a7640000"); err != nil {
+			t.Fatal(err)
+		}
+		if err = client.Client().CallContext(ctx, nil, "anvil_impersonateAccount", account.Hex()); err != nil {
+			t.Fatal(err)
+		}
+		receipt := serviceSeedTransaction(t, ctx, client, account, &reactorAddress, servicePack(t, reactorArtifact, "invalidateNonce", request.Nonce))
+		hash := receipt.TxHash.Hex()
+		settlementHash.Store(&hash)
+		if err = client.Client().CallContext(ctx, nil, "anvil_stopImpersonatingAccount", account.Hex()); err != nil {
+			t.Fatal(err)
+		}
+		if err = client.Client().CallContext(ctx, nil, "evm_setNextBlockTimestamp", deadline+1); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		order := reactor.IReactorOrder{Request: request, Swapper: account, SwapperSignature: []byte{0}, Filler: owner, Outputs: []reactor.IReactorOutput{{Token: tokenOut, Amount: big.NewInt(950), Recipient: account}}}
+		fill := serviceSeedTransaction(t, ctx, client, owner, &reactorAddress, servicePack(t, reactorArtifact, "fill", order))
+		hash := fill.TxHash.Hex()
+		settlementHash.Store(&hash)
+	}
 	for range 3 {
 		if err = client.Client().CallContext(ctx, nil, "evm_mine"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	run()
-	job = load()
-	if job.Phase != "settled" || !job.Progress[2].Done || job.Progress[2].Outcome != "settled" {
-		t.Fatal("canonical fill did not settle", job.Phase, job.Progress)
+	wantBalances := map[common.Address]int64{tokenIn: 0, tokenOut: 950}
+	if cancelOrder {
+		wantBalances = map[common.Address]int64{tokenIn: 1000, tokenOut: 0}
 	}
-	for token, want := range map[common.Address]int64{tokenIn: 0, tokenOut: 950} {
+	if worker.Pending() {
+		t.Fatal("canonical outcome did not complete external work")
+	}
+	for token, want := range wantBalances {
 		raw, e := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: erc20.NewERC20().PackBalanceOf(account)}, nil)
 		if e != nil || new(big.Int).SetBytes(raw).Int64() != want {
 			t.Fatal("wrong settled balance", token, want, e)
@@ -303,11 +339,9 @@ func TestAnvilLiquidLaneRFQConsumerRestartAndFill(t *testing.T) {
 	lookupCalls := gets.Load()
 	run()
 	if nonce, e := client.NonceAt(ctx, caller, nil); e != nil || nonce != 1 || posts.Load() != 1 || quotes.Load() != 3 || gets.Load() != lookupCalls || curatorCalls.Load() != treeCalls {
-		t.Fatal("settled restart repeated network mutation", nonce, e)
+		t.Fatal("settled runtime repeated network mutation", nonce, e)
 	}
-	if found, e := state.Read(cfg.StateDir, "txmanager.active.v1", new(any)); e != nil || found {
-		t.Fatal("settled transaction retained nonce journal", e)
-	}
+
 }
 
 // serviceRewriteTransport redirects one official provider hostname to a local

@@ -3,22 +3,19 @@ package config
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 )
 
 type Config struct {
@@ -27,19 +24,13 @@ type Config struct {
 	Chain         Chain         `yaml:"chain"`
 	Signer        Signer        `yaml:"signer"`
 	TxManager     TxManager     `yaml:"txManager"`
-	StateDir      string        `yaml:"stateDir"`
 	Observability Observability `yaml:"observability"`
 	Strategies    []string      `yaml:"strategies"`
 }
 
 // Curator contains the operator-supplied permission service settings.
 type Curator struct {
-	URL       string `yaml:"url"`
-	APIKeyEnv string `yaml:"apiKeyEnv,omitempty"`
-}
-
-func (c Curator) HTTPConfig() protocolio.HTTPConfig {
-	return protocolio.HTTPConfig{URL: c.URL, APIKeyEnv: c.APIKeyEnv, TimeoutSeconds: permissions.HostTimeoutSeconds, MaxResponseBytes: permissions.HostMaxResponseBytes}
+	URL string `yaml:"url"`
 }
 
 type Chain struct {
@@ -57,8 +48,6 @@ type Observability struct {
 }
 
 const (
-	// RuntimePolicyVersion changes when built-in preparation or timing semantics change.
-	RuntimePolicyVersion                  = "1"
 	DefaultKeyEnv                         = "MERKLE_EXECUTOR_PRIVATE_KEY"
 	DefaultRecipeCacheBytes        int64  = 16 << 20
 	DefaultPollInterval                   = 15 * time.Second
@@ -94,15 +83,8 @@ func Load(path string) (*Config, error) {
 	if cfg.Signer.KeyEnv == "" {
 		cfg.Signer.KeyEnv = DefaultKeyEnv
 	}
-	base, err := filepath.Abs(filepath.Dir(path))
-	if err != nil {
-		return nil, err
-	}
-	if cfg.StateDir == "" {
-		cfg.StateDir = "state"
-	}
-	if !filepath.IsAbs(cfg.StateDir) {
-		cfg.StateDir = filepath.Join(base, cfg.StateDir)
+	if cfg.TxManager.MaxGas == 0 {
+		cfg.TxManager.MaxGas = transaction.DefaultMaxGas
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -111,7 +93,7 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
-	if err := permissions.ValidateConfig(c.Curator.HTTPConfig()); err != nil {
+	if err := permissions.ValidateURL(c.Curator.URL); err != nil {
 		return err
 	}
 	if c.Mode != "simulate" && c.Mode != "send" {
@@ -162,19 +144,4 @@ func (c *Config) Validate() error {
 		c.Strategies[i] = canonical
 	}
 	return nil
-}
-
-// StrategyFingerprint binds the canonical executor, derived deployment identity
-// and effective runtime policy to durable work.
-func (c *Config) StrategyFingerprint(executor string, account, caller common.Address) string {
-	raw, _ := json.Marshal(struct {
-		Policy    string
-		Executor  common.Address
-		Account   common.Address
-		Caller    common.Address
-		ChainID   uint64
-		Curator   Curator
-		TxManager TxManager
-	}{RuntimePolicyVersion, common.HexToAddress(executor), account, caller, c.Chain.ChainID, c.Curator, c.TxManager})
-	return crypto.Keccak256Hash(raw).Hex()
 }

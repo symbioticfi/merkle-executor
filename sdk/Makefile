@@ -1,9 +1,9 @@
 SHELL := bash
-export GOTOOLCHAIN := go1.27.1
+export GOTOOLCHAIN := go1.27.4
 export GOWORK := off
-GOLANGCI_LINT_VERSION := v2.13.2
-ABIGEN_VERSION := v1.17.5
-ABIGEN_TOOLCHAIN := go1.26.8
+GOLANGCI_LINT_VERSION := v2.15.0
+ABIGEN_VERSION := v1.17.10
+ABIGEN_TOOLCHAIN := go1.27.4
 ABIGEN := $(CURDIR)/.tools/abigen
 .PHONY: check test integration generate verify-lens tools
 generate: tools
@@ -22,8 +22,8 @@ check: verify-lens
 test:
 	go test -race -cover ./...
 integration:
-	MERKLE_ANVIL_TEST=1 go test -tags=integration ./recipes ./txengine -run TestAnvil -count=1 -v
+	MERKLE_ANVIL_TEST=1 go test -tags=integration ./recipes ./transaction ./providers/cowswap -run TestAnvil -count=1 -v
 
 tools: $(ABIGEN)
-$(ABIGEN):
+$(ABIGEN): Makefile
 	GOTOOLCHAIN=$(ABIGEN_TOOLCHAIN) GOBIN='$(CURDIR)/.tools' go install github.com/ethereum/go-ethereum/cmd/abigen@$(ABIGEN_VERSION)

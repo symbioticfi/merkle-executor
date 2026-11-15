@@ -26,10 +26,6 @@ type exclusiveRecipeProvider struct {
 	results map[uint]string
 }
 
-func (p *exclusiveRecipeProvider) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	p.calls++
-	return provider.Output{}, nil
-}
 func (p *exclusiveRecipeProvider) RecipeRequirements(provider.Snapshot, recipes.Recipe, *recipes.Tree) (RecipeRequirements, error) {
 	req := RecipeRequirements{Actions: []string{"0:0"}, Values: p.values, ExclusiveTargets: map[string]common.Address{"0:0": p.target}}
 	if len(p.values) > 0 {
@@ -37,12 +33,9 @@ func (p *exclusiveRecipeProvider) RecipeRequirements(provider.Snapshot, recipes.
 	}
 	return req, nil
 }
-func (p *exclusiveRecipeProvider) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) (provider.Output, error) {
+func (p *exclusiveRecipeProvider) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) ([]provider.Output, error) {
 	p.calls++
-	return provider.Output{Results: p.results}, nil
-}
-func (*exclusiveRecipeProvider) Advance(context.Context, provider.Snapshot, provider.Output, json.RawMessage) (provider.Progress, error) {
-	return provider.Progress{Done: true}, nil
+	return []provider.Output{{Results: p.results}}, nil
 }
 func (p *exclusiveRecipeProvider) ExclusiveOutputTargets(provider.Output) (map[string]common.Address, error) {
 	return map[string]common.Address{"0:0": p.target}, nil
@@ -81,7 +74,7 @@ func TestPlannerExclusiveRecipePreflightBeforeProviderIO(t *testing.T) {
 	}
 	for _, mode := range []string{"valid", "unowned target", "direct Call", "early witness", "late witness", "conflicting witness", "invalid witness index", "wrong witness value"} {
 		t.Run(mode, func(t *testing.T) {
-			header := &types.Header{Number: big.NewInt(12)}
+			header := &types.Header{Number: big.NewInt(12), GasLimit: 30_000_000}
 			leaf := recipes.Leaf{Target: target, Value: new(big.Int), Data: []byte{1, 2, 3, 4}, DataMask: make([]byte, 4)}
 			var err error
 			leaf.Hash, err = recipes.HashLeaf(leaf)
@@ -137,7 +130,7 @@ func TestPlannerExclusiveRecipePreflightBeforeProviderIO(t *testing.T) {
 			if mode == "invalid witness index" {
 				pr.results = map[uint]string{2: "42"}
 			}
-			plan, err := planner.Prepare(t.Context(), Strategy{Config: Config{Account: snapshot.Account.Hex(), Executor: snapshot.Executor.Hex()}, Providers: []provider.Provider{pr}})
+			plan, err := planner.Prepare(t.Context(), Strategy{Config: Config{Account: snapshot.Account.Hex(), Executor: snapshot.Executor.Hex()}, Providers: []Provider{pr}})
 			if mode == "valid" || mode == "early witness" || mode == "late witness" {
 				if err != nil || pr.calls != 1 {
 					t.Fatalf("valid claimed action failed: %v calls=%d", err, pr.calls)

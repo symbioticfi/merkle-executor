@@ -161,6 +161,7 @@ type RfqOrder struct {
 	OrderStatus string      `json:"orderStatus"`
 	QuoteID     string      `json:"quoteId"`
 	Swapper     string      `json:"swapper"`
+	TxHash      *string     `json:"txHash"`
 	Nonce       string      `json:"nonce"`
 	Input       RfqAmount   `json:"input"`
 	Outputs     []RfqOutput `json:"outputs"`

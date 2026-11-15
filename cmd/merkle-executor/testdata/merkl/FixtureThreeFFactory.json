@@ -1,0 +1,40 @@
+{
+  "abi": [
+    {
+      "type": "function",
+      "name": "isRequest",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "setRequest",
+      "inputs": [
+        {
+          "name": "request",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    }
+  ],
+  "bytecode": "0x6080806040523460135760b5908160188239f35b5f80fdfe608060405260033611600f575f80fd5b5f3560e01c80632c6704cf14606c5763e9adfc2014602b575f80fd5b3460685760203660031901126068576004356001600160a01b038116908190036068575f525f602052602060ff60405f2054166040519015158152f35b5f80fd5b3460685760203660031901126068576004356001600160a01b038116908190036068575f525f60205260405f20600160ff198254161790555f80f3fea164736f6c6343000826000a",
+  "source": "FixtureThreeF.sol",
+  "sourceSha256": "bed81b912eb582669eabd505125228ba868d954798aeaab459dbaf92e6bb4628",
+  "compiler": "0.8.38+commit.1835d247"
+}

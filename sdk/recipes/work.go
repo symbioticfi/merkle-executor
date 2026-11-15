@@ -13,6 +13,33 @@ import (
 // approvals and calls with zero-valued arguments. Every instruction and the
 // complete result vector are checked before returning a work decision.
 func HasWork(calldata, returned []byte) (bool, error) {
+	return hasWork(calldata, returned, true)
+}
+
+func hasWork(calldata, returned []byte, includeApprovals bool) (bool, error) {
+	if isMulticall(calldata) {
+		calls, err := batchCalls(calldata)
+		if err != nil {
+			return false, err
+		}
+		decoded, err := batchArguments.Unpack(returned)
+		if err != nil {
+			return false, errors.New("invalid batch simulation result")
+		}
+		results := decoded[0].([][]byte)
+		if len(calls) != len(results) {
+			return false, errors.New("batch simulation result count mismatch")
+		}
+		work := false
+		for i, call := range calls {
+			active, err := hasWork(call, results[i], includeApprovals)
+			if err != nil {
+				return false, err
+			}
+			work = work || active
+		}
+		return work, nil
+	}
 	method := executorABI.GetABI().Methods["execute"]
 	if len(calldata) < 4 || !bytes.Equal(calldata[:4], method.ID) {
 		return false, errors.New("expected executor execute calldata")
@@ -42,7 +69,7 @@ func HasWork(calldata, returned []byte) (bool, error) {
 	work := false
 	for _, slot := range inspection.Slots {
 		if slot.Operation == Approve {
-			work = true
+			work = work || includeApprovals
 			continue
 		}
 		gate := slot.Gate.Value

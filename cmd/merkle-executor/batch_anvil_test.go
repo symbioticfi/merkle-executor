@@ -28,6 +28,12 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/chain"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/aave"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/cowswap"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/liquidlanerfq"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/merkl"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/threef"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
@@ -66,7 +72,7 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 	root := crypto.Keccak256Hash(first[:], second[:])
 	hashes := [][32]byte{leaves[0].Hash, leaves[1].Hash}
 	serviceSeedTransaction(t, ctx, client, owner, &account, servicePack(t, aa, "configure", root, hashes, target))
-	serviceSeedTransaction(t, ctx, client, owner, &token, servicePack(t, ta, "mint", account, big.NewInt(100)))
+	serviceSeedTransaction(t, ctx, client, owner, &token, servicePack(t, ta, "mint", account, big.NewInt(6)))
 	serviceSeedTransaction(t, ctx, client, owner, &target, executorABI.PackSetCaller(owner))
 	recipe := recipes.Recipe{Steps: [][]byte{issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, big.NewInt(1), hashes, [][]*big.Int{{}, {}})}}
 	serviceSeedTransaction(t, ctx, client, owner, &target, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
@@ -89,6 +95,8 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 	var aggregateSizes []int
 	advanceOnValidation := false
 	latestReads := 0
+	var simulationBlock string
+	var simulationGas uint64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var raw json.RawMessage
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
@@ -124,9 +132,16 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 			}
 			var call struct {
 				To    common.Address
+				From  common.Address
 				Input hexutil.Bytes
+				Gas   hexutil.Uint64
 			}
 			_ = json.Unmarshal(q.Params[0], &call)
+			if simulationBlock != "" && call.To == target && bytes.Equal(call.Input[:4], executorABI.GetABI().Methods["execute"].ID) {
+				if call.From != owner || string(q.Params[1]) != simulationBlock || uint64(call.Gas) != min(simulationGas, uint64(16_777_216)) {
+					t.Errorf("simulation context changed caller=%s block=%s gas=%d", call.From, q.Params[1], call.Gas)
+				}
+			}
 			if call.To == aggregate {
 				method := multicall.NewMulticall3().GetABI().Methods["aggregate3"]
 				args, err := method.Inputs.Unpack(call.Input[4:])
@@ -186,15 +201,15 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 			if !bytes.Equal(current.Calldata, plan.Calldata) || !reflect.DeepEqual(current.Leaves, plan.Leaves) {
 				t.Fatal("warm cache/head advance changed authorized bytes or leaves")
 			}
-			wantRequests, wantArrays, wantMethods := 6, 5, 9
+			wantRequests, wantArrays, wantMethods := 8, 2, 11
 			wantAggregates := []int{5, 7}
 			if advanced {
-				wantMethods, wantAggregates = 11, []int{5, 5, 2}
+				wantMethods = 13
+				wantArrays++
 			}
 			if warm {
-				wantRequests--
-				wantArrays--
 				wantMethods--
+				wantArrays--
 			}
 			mu.Lock()
 			if requests != wantRequests || arrays != wantArrays || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, wantAggregates) {
@@ -202,16 +217,30 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 			}
 			mu.Unlock()
 			reset()
-			// This phase must simulate nil/latest and retain both closing pins.
-			if err := planner.Validate(ctx, current); err != nil {
+			// Revalidation uses the same grouped admission as the planner, including
+			// current roles, a fresh simulation pin, the caller and the gas budget.
+			header, err := client.HeaderByNumber(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			simulationBlock, simulationGas = `"`+hexutil.EncodeBig(header.Number)+`"`, header.GasLimit
+			mu.Unlock()
+			if err := recipes.ValidatePreparedBatch(ctx, planner.Chain,
+				[]recipes.PreparedRecipe{{Snapshot: current.Recipe, Recipe: recipe}},
+				[]recipes.ExecutorCall{{Executor: target, Data: current.Calldata}},
+				[][]common.Hash{current.Leaves}, []map[uint]string{current.Results}, planner.Caller); err != nil {
 				t.Fatal(err)
 			}
 			wantMethods = 5
+			wantArrays = 1
 			if advanced {
-				wantMethods = 6
+				wantMethods = 7
+				wantArrays = 2
 			}
 			mu.Lock()
-			if requests != 3 || arrays != 3 || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, []int{5}) {
+			simulationBlock = ""
+			if requests != 3 || arrays != wantArrays || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, []int{7}) {
 				t.Errorf("Validate warm=%t advanced=%t requests=%d arrays=%d methods=%d aggregates=%v", warm, advanced, requests, arrays, methods, aggregateSizes)
 			}
 			mu.Unlock()
@@ -237,17 +266,66 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 		}
 	}
 	mu.Lock()
-	if requests != 1 || arrays != 1 || methods != 3 || len(aggregateSizes) != 0 {
+	if requests != 3 || arrays != 0 || methods != 3 || len(aggregateSizes) != 0 {
 		t.Errorf("isolated calls requests=%d arrays=%d methods=%d aggregates=%v", requests, arrays, methods, aggregateSizes)
 	}
 	mu.Unlock()
 	for _, check := range []struct {
 		data []byte
 		want int64
-	}{{tokenABI.PackBalanceOf(account), 100}, {tokenABI.PackAllowance(account, owners[1]), 0}} {
+	}{{tokenABI.PackBalanceOf(account), 6}, {tokenABI.PackAllowance(account, owners[1]), 0}} {
 		raw, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: check.data}, nil)
 		if err != nil || new(big.Int).SetBytes(raw).Int64() != check.want {
 			t.Fatalf("read mutated chain: %x %v", raw, err)
 		}
+	}
+
+	// The daemon's installed providers must not prevent a native recipe from
+	// batching when the installed providers have no matching runtime work.
+	query := issuerStep(t, 0, []string{"address", "bytes", "uint256[]", "uint256"}, token, tokenABI.PackBalanceOf(account), []*big.Int{}, new(big.Int))[1:]
+	result := new(big.Int).Lsh(big.NewInt(int64(recipes.Result)), 216)
+	dynamic := recipes.Recipe{Queries: [][]byte{query}, Steps: [][]byte{
+		issuerStep(t, recipes.Read, []string{"uint256"}, new(big.Int)),
+		issuerStep(t, recipes.Manage, []string{"uint256", "bytes32[]", "uint256[][]"}, result, hashes, [][]*big.Int{{}, {}}),
+	}}
+	serviceSeedTransaction(t, ctx, client, owner, &target, executorABI.PackSetRecipe(dynamic.Queries, dynamic.Steps))
+	strategy := keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: treePath}}
+	for _, newProvider := range []func(provider.Deps) (keeper.Provider, error){cowswap.NewAutomatic, merkl.NewAutomatic, liquidlanerfq.NewAutomatic, threef.NewAutomatic} {
+		p, err := newProvider(provider.Deps{Chain: batched})
+		if err != nil {
+			t.Fatal(err)
+		}
+		strategy.Providers = append(strategy.Providers, p)
+	}
+	capacity, err := aave.New(batched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategy.Providers = append(strategy.Providers, capacity)
+	current, err := planner.Prepare(ctx, strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	method := executorABI.GetABI().Methods["multicall"]
+	if !bytes.Equal(current.Calldata[:4], method.ID) {
+		t.Fatal("native recipe was not automatically batched")
+	}
+	args, err := method.Inputs.Unpack(current.Calldata[4:])
+	if err != nil || len(args[0].([][]byte)) != 2 {
+		t.Fatalf("expected two complete executions: %v", err)
+	}
+	if len(current.Outputs) != len(strategy.Providers) {
+		t.Fatal("provider output groups were lost")
+	}
+	for _, group := range current.Outputs {
+		for _, out := range group {
+			if len(out.Actions)+len(out.Inputs)+len(out.SkipSteps) != 0 || out.Task != nil {
+				t.Fatal("unmatched provider acquired runtime ownership")
+			}
+		}
+	}
+	serviceSeedTransaction(t, ctx, client, owner, &target, current.Calldata)
+	if raw, err := client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: tokenABI.PackBalanceOf(account)}, nil); err != nil || new(big.Int).SetBytes(raw).Sign() != 0 {
+		t.Fatalf("batch did not consume both cycles: %x %v", raw, err)
 	}
 }

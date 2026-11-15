@@ -544,6 +544,10 @@
           "x-go-name": "Swapper",
           "type": "string"
         },
+        "txHash": {
+          "x-go-name": "TxHash",
+          "type": ["string", "null"]
+        },
         "nonce": {
           "x-go-name": "Nonce",
           "type": "string"

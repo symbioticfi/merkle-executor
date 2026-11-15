@@ -24,18 +24,11 @@ import (
 const HostTimeoutSeconds = 10
 const HostMaxResponseBytes int64 = 2 << 20
 
-// ValidateConfig performs no network or environment access. Construction with
-// New resolves credentials through the host only when a run/plan actually starts.
-func ValidateConfig(c protocolio.HTTPConfig) error {
-	u, err := url.Parse(c.URL)
+// ValidateURL checks the Curator service address without network access.
+func ValidateURL(baseURL string) error {
+	u, err := url.Parse(baseURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("curator.url must be an HTTP(S) base URL without credentials, query or fragment")
-	}
-	if c.TimeoutSeconds < 0 || c.TimeoutSeconds > 120 {
-		return errors.New("curator.timeoutSeconds must be 0..120")
-	}
-	if c.MaxResponseBytes < 0 || c.MaxResponseBytes > 16<<20 {
-		return errors.New("curator.maxResponseBytes must be 0..16777216")
 	}
 	return nil
 }
@@ -45,11 +38,11 @@ type Source struct {
 	chain  provider.Reader
 }
 
-func New(c protocolio.HTTPConfig, h *http.Client, chain provider.Reader, lookup func(string) string) (*Source, error) {
-	if err := ValidateConfig(c); err != nil {
+func New(baseURL string, h *http.Client, chain provider.Reader) (*Source, error) {
+	if err := ValidateURL(baseURL); err != nil {
 		return nil, err
 	}
-	client, err := protocolio.NewHTTP(c, h, lookup)
+	client, err := protocolio.NewHTTP(protocolio.HTTPConfig{URL: baseURL, TimeoutSeconds: HostTimeoutSeconds, MaxResponseBytes: HostMaxResponseBytes}, h, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/go-errors/errors"
 )
 
 type fakeReader struct {
@@ -33,7 +34,7 @@ func fakeChain(t *testing.T, recipe Recipe) *fakeReader {
 	}
 	reader := &fakeReader{t: t, executor: common.HexToAddress("0x1111"), account: common.HexToAddress("0x2222"), caller: common.HexToAddress("0x3333"), recipeHash: hash, root: common.HexToHash("0x1234"), recipeBlock: 8, head: 10, allowed: true, headers: map[uint64]*types.Header{}}
 	for _, number := range []uint64{8, 10, 11} {
-		reader.headers[number] = &types.Header{Number: new(big.Int).SetUint64(number), Time: number * 12}
+		reader.headers[number] = &types.Header{Number: new(big.Int).SetUint64(number), Time: number * 12, GasLimit: 30_000_000}
 	}
 	reader.logs = []types.Log{reader.recipeLog(t, recipe, 4)}
 	return reader
@@ -73,6 +74,20 @@ func (reader *fakeReader) CallContract(_ context.Context, msg ethereum.CallMsg, 
 	reader.t.Helper()
 	if block == nil || (block.Uint64() != 10 && block.Uint64() != 11) {
 		reader.t.Fatal("contract read is not pinned")
+	}
+	if isExecutionCall(msg.Data) {
+		if msg.To == nil || *msg.To != reader.executor || msg.From != common.HexToAddress("0x3333") || block.Uint64() != reader.head {
+			reader.t.Fatal("full execution lost current pin or caller")
+		}
+		recipe, _, err := decodeExecution(msg.Data)
+		if err != nil {
+			return nil, err
+		}
+		values := make([]*big.Int, len(recipe.Steps))
+		for i := range values {
+			values[i] = new(big.Int)
+		}
+		return executorABI.GetABI().Methods["execute"].Outputs.Pack(values)
 	}
 	var method *abi.Method
 	var value any
@@ -121,7 +136,7 @@ func (reader *fakeReader) CallContract(_ context.Context, msg ethereum.CallMsg, 
 			reader.t.Fatalf("unexpected account method %s", method.Name)
 		}
 	default:
-		reader.t.Fatal("unexpected call target")
+		return nil, errors.New("unknown speculative call target")
 	}
 	return method.Outputs.Pack(value)
 }
@@ -131,21 +146,23 @@ func TestDiscoverPinsAndChoosesLatestEvent(t *testing.T) {
 	reader := fakeChain(t, current)
 	// RPC delivery order is deliberately reversed; ordering is by global log index.
 	reader.logs = append(reader.logs, reader.recipeLog(t, Recipe{}, 2))
-	snapshot, recipe, err := Discover(context.Background(), reader, reader.executor, nil)
+	prepared, err := DiscoverBatch(t.Context(), reader, []common.Address{reader.executor}, []common.Address{reader.account}, reader.caller, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshot, recipe := prepared[0].Snapshot, prepared[0].Recipe
 	if snapshot.BlockNumber != 10 || snapshot.BlockHash != reader.headers[10].Hash() || snapshot.RecipeBlock != 8 || snapshot.Caller != reader.caller || snapshot.Root != reader.root {
 		t.Fatalf("wrong snapshot: %+v", snapshot)
 	}
 	if len(recipe.Steps) != 1 || !bytes.Equal(recipe.Steps[0], current.Steps[0]) {
 		t.Fatal("wrong committed event body")
 	}
-	if err = ValidateSnapshot(context.Background(), reader, snapshot, reader.caller); err != nil {
+	call := assembledCall(t, prepared[0])
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{nil}, []map[uint]string{nil}, reader.caller); err != nil {
 		t.Fatal(err)
 	}
 	reader.head = 11
-	if err = ValidateSnapshot(context.Background(), reader, snapshot, reader.caller); err != nil {
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{nil}, []map[uint]string{nil}, reader.caller); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -173,7 +190,7 @@ func TestDiscoverRejectsWrongEventEvidence(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			reader := fakeChain(t, Recipe{})
 			mutate(reader)
-			if _, _, err := Discover(context.Background(), reader, reader.executor, nil); err == nil {
+			if _, err := DiscoverBatch(t.Context(), reader, []common.Address{reader.executor}, []common.Address{reader.account}, reader.caller, PreparationOptions{}); err == nil {
 				t.Fatal("invalid evidence accepted")
 			}
 		})
@@ -192,40 +209,91 @@ func TestSnapshotDriftAndRoleChecks(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			reader := fakeChain(t, Recipe{})
-			snapshot, _, err := Discover(context.Background(), reader, reader.executor, nil)
+			reader := fakeChain(t, admissionRecipe(t))
+			prepared, err := DiscoverBatch(t.Context(), reader, []common.Address{reader.executor}, []common.Address{reader.account}, reader.caller, PreparationOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			caller := reader.caller
+			call, caller := assembledCall(t, prepared[0]), reader.caller
 			mutate(reader)
-			if err = ValidateSnapshot(context.Background(), reader, snapshot, caller); err == nil {
+			if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{nil}, []map[uint]string{nil}, caller); err == nil {
 				t.Fatal("changed configuration accepted")
 			}
 		})
 	}
-	reader := fakeChain(t, Recipe{})
-	snapshot, _, err := Discover(context.Background(), reader, reader.executor, big.NewInt(10))
+	reader := fakeChain(t, admissionRecipe(t))
+	prepared, err := DiscoverBatch(t.Context(), reader, []common.Address{reader.executor}, []common.Address{reader.account}, reader.caller, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = ValidateSnapshot(context.Background(), reader, snapshot, common.HexToAddress("0x9999")); err == nil {
+	call := assembledCall(t, prepared[0])
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{nil}, []map[uint]string{nil}, common.HexToAddress("0x9999")); err == nil {
 		t.Fatal("foreign sender accepted")
 	}
 	leaf := common.HexToHash("0xabcd")
 	reader.head = 11
-	if err = VerifyRoles(context.Background(), reader, snapshot, []common.Hash{leaf, leaf}); err != nil {
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{{leaf, leaf}}, []map[uint]string{nil}, reader.caller); err != nil {
 		t.Fatal(err)
 	}
-	if reader.roleCalls != 1 || reader.roleBlock != snapshot.BlockNumber {
+	if reader.roleCalls != 1 || reader.roleBlock != reader.head {
 		t.Fatal("role reads are not pinned and deduplicated")
 	}
 	reader.allowed = false
-	if err = VerifyRoles(context.Background(), reader, snapshot, []common.Hash{leaf}); err == nil {
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{{leaf}}, []map[uint]string{nil}, reader.caller); err == nil {
 		t.Fatal("missing role accepted")
 	}
 	checked := reader.roleCalls
-	if err = VerifyRoles(context.Background(), reader, snapshot, nil); err != nil || reader.roleCalls != checked {
-		t.Fatalf("all-skipped recipe performed a role check: %v", err)
+	if err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{nil}, []map[uint]string{nil}, reader.caller); err != nil || reader.roleCalls != checked {
+		t.Fatalf("empty role set performed a role check: %v", err)
+	}
+}
+
+type headerFaultReader struct {
+	Reader
+	fault func(*big.Int, *types.Header) *types.Header
+}
+
+func (r headerFaultReader) HeaderByNumber(ctx context.Context, block *big.Int) (*types.Header, error) {
+	header, err := r.Reader.HeaderByNumber(ctx, block)
+	if err == nil {
+		header = r.fault(block, header)
+	}
+	return header, err
+}
+
+func TestSharedDiscoveryRejectsMalformedHeaders(t *testing.T) {
+	for _, phase := range []string{"head", "event", "closing"} {
+		for _, fault := range []string{"null", "missing number", "negative", "overflow", "wrong height"} {
+			if phase == "head" && fault == "wrong height" {
+				continue // A latest head has no externally requested height.
+			}
+			t.Run(phase+"/"+fault, func(t *testing.T) {
+				base := fakeChain(t, admissionRecipe(t))
+				reader := headerFaultReader{Reader: base, fault: func(block *big.Int, header *types.Header) *types.Header {
+					selected := phase == "head" && block == nil || phase == "event" && block != nil && block.Uint64() == 8 || phase == "closing" && block != nil && block.Uint64() == 10
+					if !selected {
+						return header
+					}
+					if fault == "null" {
+						return nil
+					}
+					header = types.CopyHeader(header)
+					switch fault {
+					case "missing number":
+						header.Number = nil
+					case "negative":
+						header.Number = big.NewInt(-1)
+					case "overflow":
+						header.Number = new(big.Int).Lsh(big.NewInt(1), 65)
+					case "wrong height":
+						header.Number = new(big.Int).Add(header.Number, big.NewInt(1))
+					}
+					return header
+				}}
+				if _, err := DiscoverBatch(t.Context(), reader, []common.Address{base.executor}, []common.Address{base.account}, base.caller, PreparationOptions{}); err == nil {
+					t.Fatal("malformed shared discovery header accepted")
+				}
+			})
+		}
 	}
 }

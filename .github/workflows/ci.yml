@@ -1,23 +1,24 @@
 name: checks
-on: [push, pull_request]
+on:
+  push:
+    branches-ignore: [stage, main] # build & deploy runs these checks via workflow_call
+  pull_request:
+  workflow_call:
 permissions:
   contents: read
 jobs:
   go:
     runs-on: ubuntu-latest
-    env:
-      GOPRIVATE: github.com/symbioticfi/merkle-executor
-      MERKLE_SDK_READ_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-      - run: bash hack/configure-private-go-modules.sh
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # pin@v7.0.0
         with:
-          go-version: '1.27.1'
+          go-version-file: go.mod
           cache: true
-      - uses: foundry-rs/foundry-toolchain@v1
+          cache-dependency-path: '**/go.sum'
+      - uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # pin@v1.9.2
         with:
-          version: v1.8.1
+          version: v1.9.0
       - run: make check
       - run: make generate && git diff --exit-code -- sdk/bindings sdk/protocoltypes sdk/recipes/lens sdk/providers/aave/lens
       - run: make integration
@@ -26,7 +27,6 @@ jobs:
           DOCKER_BUILDKIT: '1'
         run: |
           build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          docker build --secret id=merkle_sdk_read_token,env=MERKLE_SDK_READ_TOKEN \
-            --build-arg VERSION=ci --build-arg COMMIT="$GITHUB_SHA" --build-arg DATE="$build_date" \
+          docker build --build-arg VERSION=ci --build-arg COMMIT="$GITHUB_SHA" --build-arg DATE="$build_date" \
             -f deploy/Dockerfile -t merkle-executor:ci .
           test "$(docker run --rm merkle-executor:ci version)" = "ci ($GITHUB_SHA, $build_date)"

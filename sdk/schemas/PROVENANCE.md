@@ -15,23 +15,19 @@ No schema or endpoint is fetched automatically during a normal build.
 - Merkl response subset: sibling `curator-frontend` Merkl V4 parser and
   <https://api.merkl.xyz/docs>, inspected 2026-09-27. Distributor ABI subset was
   transcribed from <https://github.com/AngleProtocol/merkl-contracts/blob/main/contracts/Distributor.sol>:
-  `claim`, `claimWithRecipient`, `claimed`, `getMerkleRoot`, `claimRecipient`. Its current implementation
+  `claim`, `claimed`, `getMerkleRoot`, `claimRecipient`. Its current implementation
   requires self/operator authorization and supports recipient overrides. Operators
   must verify the actual configured proxy implementation matches this subset.
-  The automatic provider also accepts the frontend's canonical guarded account
-  `execute(bytes[],bytes[],uint256[])` claim, including its checked-operation outer
-  wrapper. It follows pinned CALL input bindings and fills only cumulative/proof
-  words. The live nonzero root must remain unchanged through the claim; that check,
-  recipient guards, claimed-ledger and exact cash-delta checks remain pinned.
-  The recipient-override shape requires recipients equal the authenticated account
-  and empty callback data.
-  `sdk/providers/merkl/testdata/generate-frontend.mjs` regenerates the two-token
-  permission fixture from a supplied frontend checkout; the JSON records revision
-  and source hashes. `cmd/merkle-executor/testdata/merkl/RecipeCapability.sol` is
+  The provider accepts plain `claim`, including a nested account-capability call,
+  and fills authorized token, amount, proof-length and proof words only. It checks
+  the proof and recipient against pinned distributor state. Recipe guards remain
+  unchanged. `sdk/providers/merkl/testdata/generate-frontend.mjs` exports the current
+  lending-claim permission and recipe, recording its source hash and revision.
+  `cmd/merkle-executor/testdata/merkl/RecipeCapability.sol` is
   `forge flatten` output of adapters `0427c657375512a87158010c323556739fe96d1b`
   `src/contracts/merkle-adapter/capabilities/RecipeCapability.sol`, including its
   unmodified dependency closure. The adjacent `generate.py` compiles it offline
-  with solc 0.8.37, Osaka, via-IR, optimizer 200, metadata hash disabled. The
+  with solc 0.8.38, Osaka, via-IR, optimizer 200, metadata hash disabled. The
   account/distributor scaffolding and tokens are local fixtures. These tests
   establish execution of current frontend wire and atomic guards on Anvil;
   they do not establish a live distributor deployment or API availability.
@@ -63,7 +59,7 @@ No schema or endpoint is fetched automatically during a normal build.
   invalidation sentinel is not success.
 
 Run `make generate` from the SDK or repository directory. The SDK's
-`hack/generate-bindings.sh` uses `abigen --v2` from go-ethereum 1.17.5 for both
+`hack/generate-bindings.sh` uses `abigen --v2` from go-ethereum 1.17.10 for both
 core and protocol bindings.
 
 EIP712 and Merkl golden vectors in provider tests were independently computed with
@@ -76,8 +72,18 @@ wire subset. [LIQUID_LANE_RFQ.md](LIQUID_LANE_RFQ.md) records exact contract/bac
 revisions, ABI source hash, account interface, EIP712 layout, cursor semantics and
 unsupported boundaries.
 
-Native issuer contracts are test fixtures only. Source-pinned Noon artifacts and
-compiler settings live under `cmd/merkle-executor/testdata/issuers/noon`, outside
-production ABI generation. [Native validation](../../docs/NATIVE-ISSUER-TESTING.md)
-explains the evidence boundary. Production Go code has no native issuer ABI,
-deployment catalogue or protocol-specific execution provider.
+The native issuer claim subset, source revisions and deliberate limitations are
+recorded in [NATIVE_CLAIMS.md](NATIVE_CLAIMS.md).
+[Native validation](../../docs/NATIVE-ISSUER-TESTING.md) records the separate local
+fixture sources and deployment evidence boundary.
+
+
+- `abi/RecipeCapability.json`, `abi/ThreeFRequestsFactory.json` and
+  `abi/ThreeFRequest.json` contain the used functions of `IRecipeCapability`,
+  `IThreeFRequestFactory` and `IThreeFVaultController` from adapters main commit
+  `e8b5f82486eb32cf0b12bc7a93da2fdbbe6ce94c`. The 3F request getter/burn return
+  values are uint256. The frontend claim fixture is generated from
+  `threeFGuardedClaim`: the factory check and dynamic burn target share one
+  masked input, while owner and receiver are pinned to the account.
+  `cmd/merkle-executor/testdata/merkl/FixtureThreeF.sol` supplies local test
+  contracts only. Its ABI and bytecode are built by the adjacent `generate.py`.

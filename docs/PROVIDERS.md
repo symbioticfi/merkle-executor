@@ -4,21 +4,18 @@ Normal daemon `strategies` entries are full nonzero executor addresses, directly
 used as lowercase state, log and metric identifiers. Duplicate normalized addresses
 fail; order does not affect identity. Strategy objects, custom labels, recipe-hash
 assertions and provider mappings are rejected before network access.
-The recovery fingerprint includes runtime policy version `1`, executor, account,
-caller, chain ID, curator configuration and transaction-manager fee policy. The
-daemon installs automatic CoW, Merkl, Liquid Lane RFQ and Aave V3 capacity providers,
-then `keeper.NewRecipeInputs()`, in a fixed order. Typed provider settings are internal
-recipe and recovery data.
+The daemon installs automatic CoW, Merkl, Liquid Lane RFQ, native issuer claim,
+Aave capacity and 3F claim providers. Typed settings derive from authenticated
+recipes and remain process-local.
 Token pairs, amounts, minimum proceeds, action/input mappings, deployment targets
 and authorization shapes come from the
 authenticated recipe and its permission tree; they are not operator parameters.
-Unmatched adapters produce an empty durable output and finish normally.
+Unmatched adapters produce an empty output and finish normally.
 
 The operator supplies the chain RPC endpoint, curator-backend endpoint, executor
 addresses and, for send mode, the environment variable containing one private key.
 Startup derives each executor's account and common caller at a pinned block and
-checks its canonical header. The send key must match that caller before durable
-state is opened. Plan mode reads no private key and creates no signing journal.
+checks its canonical header. The send key must match that caller before sending. Plan mode reads no private key and creates no runtime files.
 Optional identity assertions must match discovery. Operational policy, standard
 Multicall3, bounded HTTP resources, cache capacity and protocol endpoints are built-in
 constants. [Minimal configuration](../config/example.yaml).
@@ -44,22 +41,23 @@ Unchanged masked preimages are trusted curator data and do not require an automa
 provider owner. Actual replacements still preserve the permission's pinned bytes,
 targets, masks and proofs. Merkl preparation locates claim amount/proof fields
 without proving one canonical guard program. Complete original execution simulation
-checks the committed contract behavior before sending. Inputs remain bounded to
+checks the committed contract behavior during preparation. Inputs remain bounded to
 0..4095, and unknown runtime values still require a source.
 
 ## Aave V3 capacity
 
 The default [Aave provider](../sdk/providers/aave/README.md) owns Input 0 for
-one authenticated guarded borrow. It computes capacity after replaying the supply
-prefix at the pinned block using eth_call-only code. The committed recipe still
+one authenticated direct pool borrow with a committed post-borrow health floor.
+It computes capacity after replaying the supply prefix at the pinned block using
+eth_call-only code. The committed recipe still
 chooses the borrow amount, caps total debt and verifies health. No manual amount
 configuration, deployment catalogue or signing credential is required. Other
 native Inputs retain the exact-source rules below.
 
 ## Native on-chain recipes
 
-Other native protocol execution has no Go provider, selector catalogue or
-deployment admission list. The committed recipe owns protocol calls and reads, eligibility
+Outside the isolated native claim and Aave capacity providers, the committed
+recipe owns native protocol calls and reads, eligibility
 and pause checks, account/recipient identity, approvals, amount selection, request
 IDs, claims and proceeds guards. The permission tree authorizes each managed call;
 the generic planner preserves its targets, masks, proofs and bindings. The shared
@@ -67,17 +65,18 @@ lens resolves dependencies, and the original executor simulates the exact comple
 transaction before signing.
 
 Use Result bindings directly for values computed by the recipe. When a runtime
-Input is needed, give it an exact deterministic recipe constraint that generic
-`keeper.NewRecipeInputs()` can resolve. Financial Inputs must equal a deterministic
+Input is needed, give it an exact deterministic recipe constraint that
+the planner can resolve. Financial Inputs must equal a deterministic
 expression; an upper/lower bound does not select a value. A request ID must be a
-committed value or be derived exactly from recipe reads/results. The keeper does
-not enumerate an issuer ledger or choose a request from an allowed range.
+committed value or be derived exactly from recipe reads/results, except for
+authorized calldata filled by the standalone [native claim provider](#native-issuer-claims).
+The generic keeper does not enumerate issuer ledgers or branch on claim selectors.
 
-Recipes that relied on issuer-provider-created Inputs, request discovery or
-readiness checks must commit those sources and checks before execution. Express an
+Outside that supported standalone claim shape, recipes must commit their native
+input sources, request selection and readiness checks before execution. Express an
 Input through a generic exact constraint or replace it with a Result binding.
 Unknown, unresolved, future or circular dependencies fail closed. There is no
-issuer-specific fallback or automatic recipe rewrite.
+implicit issuer fallback or automatic recipe rewrite.
 
 Canonical confirmation settles generic execution only. The keeper does not label a
 native action `requested`, `claimed` or `redeemed`, infer payout from issuer events,
@@ -101,12 +100,11 @@ reads. Packed uint216 operands, checked arithmetic, division by zero and caller
 context follow the pinned Recipes implementation.
 
 The full original executor then simulates the complete immutable transaction. Its
-returned numeric values must equal the persisted witness for every dependency used
+returned numeric values must equal the prepared witness for every dependency used
 by signed economics or the supporting prefix. This detects override-code
-introspection or other divergence. Preparation and presend verify this witness.
-Recovery of an already signed attempt keeps the exact saved bytes and reconciles
-canonical receipt/execution evidence; it does not rerun economic preparation,
-acquire a fresh quote or rewrite signed values. The lens targets Cancun and is reproducibly generated with pinned solc 0.8.37.
+introspection or other divergence. Preparation verifies this witness against the complete transaction.
+A signed attempt retains its exact bytes in RAM until canonical confirmation.
+The lens targets Cancun and is reproducibly generated with pinned solc 0.8.38.
 `make generate` regenerates it; `make -C sdk verify-lens` checks exact artifacts.
 
 Some valid compositions are explicitly unsupported: a needed READ following an
@@ -127,19 +125,22 @@ simulations remain isolated while independent calls may share an HTTP array.
 Failed/malformed aggregates never fall back to individual calls.
 [Getter provenance and compatibility limits](../sdk/schemas/READ_BATCHING.md).
 
-Each Merkl claim action performs one dedicated strict aggregate of effective root, default recipient,
-and claimed/recipient getters for each token: `2 + 2N` inner reads, at most 66 for
-32 tokens. The automatic adapter learns the distributor from authenticated recipe
-bytes after metadata discovery, so this aggregate is a later stage. A recipe with
-numeric economics adds exactly one shared lens call regardless of field/provider
-count. Opening/canonical headers, recipe event evidence, current metadata/roles and
+Merkl shares pinned effective-root, default-recipient and token claimed/recipient
+getters across claim actions, deduplicating identical reads. Fixed tokens and
+standalone all-reward inventories use aggregates of at most 256 getters. Composed
+runtime-token claims read only candidates visited in address order: the first
+candidate needs four getters, and each later candidate adds two. Getter failures
+are checked when their claim consumes them, so an unused later failure cannot mask
+an earlier claim's validation. The automatic adapter learns the distributor from
+authenticated recipe bytes after metadata discovery, so these aggregates are a
+later stage. A recipe with numeric economics adds exactly one shared lens call
+regardless of field/provider count. Opening/canonical headers, recipe event evidence, current metadata/roles and
 original full simulation remain necessary separate stages. The 16 MiB recipe cache
 retains only canonical event bodies, never balances, roots, roles or quotes.
 
-SDK fixture counts in `batch_count_test.go` and `batch_anvil_test.go` measure
-explicitly configured providers: 6 cold / 5 warm preparation requests and 3 presend
-requests for their small recipes. They are not counts for the normal automatic
-daemon. `TestAnvilAutomaticMerklClaimFeedsRecipeBalance` verifies the normal daemon
+`TestMerklPlannerNetworkRequestCounts` measures the automatic Merkl provider:
+7 cold / 6 warm preparation requests and 3 explicit revalidation requests for
+its small recipe. `TestAnvilAutomaticMerklClaimFeedsRecipeBalance` verifies the normal daemon
 uses one shared lens and one rewards HTTP fetch for a claim followed by balance
 READ and a derived transfer. RPC counts are local fixture evidence, not latency or
 deployment guarantees.
@@ -163,35 +164,30 @@ accepts one RFQ authorization and rejects multiple authorizations before HTTP,
 even when an extra authorization is inactive. Connector acquisition and issuer
 redemption remain in vault-solver, bound to the configured asset recipe.
 
-Confirmed account authorization precedes idempotent consumer submission. Durable
-request/quote identity, signatures, usage/settlement progress and cursors survive
-restart. Completion requires canonical matching input/output transfers and Reactor
-usage evidence. Paginated lookup and bounded event scanning fail closed on missing,
-ambiguous or overly dense evidence. Lookup checkpoints after 10 API pages per tick
-and resumes across restarts, preserving duplicate checks and withholding publication
+Confirmed account authorization precedes idempotent consumer submission. Request/quote
+identity, signatures, settlement progress and cursors remain in private RAM tasks. Fills require canonical matching input/output transfers and Reactor usage
+evidence. Cancelled orders use the backend's `/orders` status and pinned used nonce.
+No cancellation receipt or event scan is needed. Paginated lookup fails closed on
+missing or ambiguous evidence. Lookup pauses after 10 API pages per tick
+and resumes across in-process ticks, preserving duplicate checks and withholding publication
 until the scan completes. No new quote is obtained for an existing job.
 [Consumer wire schema and evidence](../sdk/schemas/LIQUID_LANE_RFQ.md).
 
 ## Merkl cumulative account rewards
 
-The automatic adapter recognizes canonical committed `claim` and
-`claimWithRecipient` actions and the frontend's guarded account execute wrappers.
-It requires the authenticated account as every user, pinned token addresses, equal
-arrays of 1..32 entries, committed proof depths and a pinned distributor. Wrapped
-claims capture a nonzero live distributor root and require it to remain unchanged
-through the claim, alongside recipient, cumulative-ledger and exact cash-delta
-checks. It follows committed CALL input bindings through at most eight account
-capability wrappers; all instructions, queries and framing stay pinned. Explicit
-recipient overrides must pin this account with empty callback data.
+The automatic adapter recognizes committed `claim` calls, including calls inside
+account capability wrappers. Users are pinned to the authenticated account. Reward
+tokens may be fixed or supplied through an authorized runtime word. A runtime token
+selects the first currently unclaimed API reward in address order, one token per
+claim action; following executions can claim the remaining tokens.
 
-One rewards HTTP request supplies witnesses for every claim action in the recipe.
-Every configured token must have a unique API row with an exact approved proof
-shape, a proof matching the pinned-block effective root, and a cumulative amount
-at least the pinned-block claimed ledger. Each action uses one strict distributor
-aggregate. A later valid effective root can use the same permissions while its
-tokens and proof layout still fit. Proof length growth and recipient guard changes
-require refreshed permissions; the provider never expands arrays, edits instructions or adds claims
-from unused permission leaves.
+One rewards HTTP request supplies witnesses for all claim actions. Each selected
+token's proof is checked against the pinned-block effective root and claimed ledger,
+and recipient settings must send funds to the account. The proof's actual length is
+encoded within its reserved capacity (up to 64 words); unused words are zeroed and
+the overall calldata size is unchanged. Capacity overflow fails. The provider never
+expands permission data or changes instructions, masks, targets or permission proofs.
+Existing recipe bindings and full transaction simulation remain authoritative.
 
 All claim actions are prepared together. A raw multi-token claim can contain idle
 members when another member is positive. For a dedicated single-token Manage,
@@ -201,11 +197,10 @@ or a different gate expression retains its committed recipe policy. The provider
 fills the existing cumulative/proof fields and their declared Inputs; it does not
 replace gates or skip steps. When all these optional claims are idle, their zero gates remain usable alongside
 other ready actions; the engine classifies idle work across the whole recipe.
-All-idle Merkl claims without dedicated optional gates remain not ready. The normal daemon
-Anvil fixture `TestAnvilFrontendGuardedMerklMixedRewards` executes two freshly
-frontend-generated guarded claims, checks the idle/positive combination, executes
-a later valid root without permission changes, and rejects wrong proofs, root
-changes during the claim and underpayment through the original guards.
+All-idle Merkl claims without dedicated optional gates remain not ready. The daemon Anvil fixture `TestAnvilCurrentFrontendMerklVariableProof` executes
+the current frontend claim with a runtime token and a 20-element proof inside
+the 64-element reservation. Separate nested-claim fixtures cover idle/positive
+combinations, changing roots, wrong proofs and original recipe cash-delta guards.
 
 ## CoW asynchronous ERC-1271 sell order
 
@@ -214,18 +209,21 @@ settlement domain, sell-kind/full-fill/ERC20-balance identity and action mapping
 from the canonical sign template. Official network API/settlement/relayer constants
 are chain-specific; an unsupported chain fails explicitly. One CoW sign action per
 executor is currently supported. Budget includes the complete net sell plus fee.
-Order validity is 1800 seconds.
+Order validity is at most 1800 seconds, shortened by authenticated relative expiry
+limits in the committed recipe.
 
 Quotes use CoW's AUTO dynamic slippage policy and volume suggestions, with its
 protocol fallback when suggestions are unavailable. There is no operator slippage
-parameter. Deterministic full appData and its signed hash are persisted with the
-selected gross amount, minimum proceeds, quote/order identity and exact sign bytes.
+parameter. When the permission allows appData to vary, deterministic full appData
+and its signed hash are retained in RAM. A pinned appData hash is preserved and
+sent using CoW's hash-only API form. The selected gross amount, minimum proceeds,
+quote/order identity and exact sign bytes are retained with either form.
 The recipe's derived minimum remains binding even when AUTO proposes a lower value.
 [CoW AUTO policy and pinned provenance](../sdk/schemas/COW_AUTO.md).
 
 Advance verifies the exact confirmed account sign call before order POST. Idempotent
-lookup/POST preserves the UID through ambiguity and restart; recovery uses only
-persisted config/order and canonical execution evidence. Partial fills stay owned,
+lookup/POST preserves the UID through in-process ambiguity using the original
+prepared order and canonical execution evidence. Partial fills stay owned,
 and terminal completion requires on-chain settlement evidence as well as API state.
 
 ## Liquid Lane connector host boundary
@@ -237,28 +235,54 @@ connector swaps or verify their signatures. SDK hosts retain generic permission 
 runtime validation, complete execution simulation and canonical receipt checks.
 [Recipe compatibility](RECIPE-COMPATIBILITY.md) describes the authoring boundary.
 
-## Recovery and provider interfaces
+## Provider interfaces
 
-Automatic output envelopes persist the fully derived internal configuration, wire
-output and policy version, even for unmatched adapters. Startup adapter ordering and
-the runtime-policy fingerprint are durable identity. Recovery requires that
-identity to match; it never rewrites a fingerprint, UID, nonce or provider index. Recovery validates envelopes, bounds and target ownership before
-network mutation. Already signed attempts retain their exact saved bytes and use canonical receipt
-and execution reconciliation; they do not repeat preparation/presend numerical
-simulation. Recovery fetches neither curator permissions nor new quotes for
-existing work.
+Providers implement authenticated `RecipeRequirements` and `PrepareRecipe`.
+Outputs contain authorized data and an optional `provider.Task`. Stateless
+providers have no settlement step. CoW/RFQ tasks own typed process-local progress
+and run only after canonical authorization. Unmatched providers return an empty
+output; there is no replay envelope or configuration serialization.
 
-Direct typed provider constructors serve recipe derivation, saved output
-validation and focused tests. They are not daemon configuration inputs. Generic static/http/rpc data providers are not included in the daemon; deterministic
-recipe-constrained Inputs use `keeper.NewRecipeInputs()` and the shared lens.
+Direct typed constructors support isolated integrations and focused tests; they
+are not daemon configuration inputs. Deterministic recipe-constrained inputs
+resolve through the shared lens. Restart discards all task/order tracking while
+external transactions and orders may remain live.
 
 ## Evidence and generation
 
 `make check` covers host and SDK race tests, vet and lint. `make integration` uses
 only ephemeral local Anvil, generated fixture credentials and HTTP fixtures.
-Normal automatic fixtures cover Read-derived transfer plan/send/restart, RFQ
-consumer restart/fill, and Merkl claim effects feeding later recipe balances. SDK
+Normal automatic fixtures cover Read-derived transfer plan/send, RFQ
+consumer authorization/fill, and Merkl claim effects feeding later recipe balances. SDK
 lens fixtures verify caller/origin, constrained preview Inputs, stateful effects,
 allowance reset/zero short-circuit, overflow/division errors and original-code
 introspection divergence. These are local/API-fixture results; no deployment,
 external chain, hosted quote/order or live signing verification is implied.
+
+## Native issuer claims
+
+Hosts register the stateless `sdk/providers/claims.NewAutomatic` provider for
+one unconditional managed claim with no recipe queries or bindings.
+
+| Claim shape | Discovery and selection |
+| --- | --- |
+| Noon `claimWithdrawal(uint256)` | Ready owner request IDs, including zero; requests must be positive, mature and unclaimed. |
+| Pareto epoch deposit/withdrawal claim | Owner epochs with entitlement, fixed price and completed pending/prefund processing. |
+| Direct Pareto normal/instant withdrawal | Positive native owner entitlement. |
+| OpenEden escrow refund | Matching owner/asset escrow ledger. |
+| ERC-7540 deposit/mint/withdraw/redeem claim | Positive entitlement for request ID zero; amount from the matching `maxDeposit`, `maxMint`, `maxWithdraw` or `maxRedeem` getter. |
+| ERC-7540 cancellation claim | Positive entitlement for the fixed request ID and account controller. |
+
+Reads and account-context preflight use the pinned snapshot. The provider returns
+one authorized action output per ready claim, with no task or replay envelope;
+the SDK admits and batches those executions. Only permission-authorized calldata
+bits may change. Fixed IDs and amounts, targets, selectors, recipients/controllers,
+masks, proofs and recipe instructions stay fixed. Native contracts enforce claim
+validity, and final admission simulates the complete original execution.
+
+Unavailable claims are idle; required getter failures, malformed responses and
+transport errors fail preparation. Scans honor the host operation deadline without
+silently truncating. Ordinary synchronous vault operations are excluded; richer
+native recipes resolve their own reads and amounts through the generic planner.
+The [ABI subset](../sdk/schemas/NATIVE_CLAIMS.md) records exact source pins and
+deliberate limits. It contains no native deployment catalogue.

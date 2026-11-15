@@ -32,10 +32,26 @@ with tempfile.TemporaryDirectory(prefix="merkle-keeper-fixtures-") as temporary:
     project = Path(temporary)
     (project / "src").mkdir()
     (project / "src/Fixture.sol").write_bytes((HERE / "Fixture.sol").read_bytes())
-    (project / "foundry.toml").write_text('[profile.default]\nsolc = "0.8.37"\nevm_version = "osaka"\noptimizer = true\noptimizer_runs = 200\nbytecode_hash = "none"\n')
+    (project / "foundry.toml").write_text('[profile.default]\nsolc = "0.8.38"\nevm_version = "osaka"\noptimizer = true\noptimizer_runs = 200\nbytecode_hash = "none"\n')
     subprocess.run(["forge", "build", "--offline", "--root", temporary], check=True)
     for contract in ("FixtureAccount", "FixtureToken"):
         artifact("Fixture.sol", project / f"out/Fixture.sol/{contract}.json", f"{contract}.json")
+
+# Compile the real OpenZeppelin manager against the same pinned dependency used
+# by the adapters contracts, rather than emulating its authorization behavior.
+with tempfile.TemporaryDirectory(prefix="merkle-access-manager-") as temporary:
+    project = Path(temporary)
+    (project / "src").mkdir()
+    (project / "src/AccessManager.sol").write_text(
+        '// SPDX-License-Identifier: MIT\npragma solidity 0.8.38;\n'
+        'import {AccessManager} from "@openzeppelin/contracts/access/manager/AccessManager.sol";\n')
+    (project / "foundry.toml").write_text(
+        '[profile.default]\nsolc = "0.8.38"\nevm_version = "osaka"\n'
+        'optimizer = true\noptimizer_runs = 200\nbytecode_hash = "none"\n'
+        f'remappings = ["@openzeppelin/contracts/={ADAPTERS}/lib/openzeppelin-contracts/contracts/"]\n')
+    subprocess.run(["forge", "build", "--offline", "--root", temporary], check=True)
+    artifact("lib/openzeppelin-contracts/contracts/access/manager/AccessManager.sol",
+             project / "out/AccessManager.sol/AccessManager.json", "AccessManager.json")
 
 source = "src/contracts/merkle-adapter/automations/RecipeExecutor.sol"
 executor_artifact = json.loads((ADAPTERS / "out/RecipeExecutor.sol/RecipeExecutor.json").read_text())

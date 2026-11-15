@@ -3,10 +3,10 @@ set -eu
 cd "$(dirname "$0")/.."
 ABIGEN=${ABIGEN:-abigen}
 case "$("$ABIGEN" --version)" in
-    "abigen version 1.17.5"*) ;;
-    *) echo "abigen 1.17.5 is required" >&2; exit 1 ;;
+    "abigen version 1.17.10"*) ;;
+    *) echo "abigen 1.17.10 is required" >&2; exit 1 ;;
 esac
-for spec in RecipeExecutor:recipeexecutor MerkleAccount:merkleaccount ERC20:erc20 LiquidLaneReactor:liquidlanereactor MerklDistributor:merkldistributor Multicall3:multicall3 CowSettlement:cowsettlement; do
+for spec in AccessManager:accessmanager RecipeExecutor:recipeexecutor MerkleAccount:merkleaccount ERC20:erc20 LiquidLaneReactor:liquidlanereactor MerklDistributor:merkldistributor Multicall3:multicall3 CowSettlement:cowsettlement DelegatedAccount:delegatedaccount RecipeCapability:recipecapability ThreeFRequest:threefrequest ThreeFRequestsFactory:threefrequestsfactory NativeClaims:nativeclaims; do
     contract=${spec%:*}
     package=${spec#*:}
     mkdir -p "bindings/$package"

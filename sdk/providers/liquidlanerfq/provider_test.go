@@ -103,37 +103,10 @@ func (c *testChain) CallContract(ctx context.Context, m ethereum.CallMsg, n *big
 	c.t.Fatal("unexpected getter", method.Name)
 	return nil, nil
 }
-func (c *testChain) FilterLogs(ctx context.Context, q ethereum.FilterQuery) ([]types.Log, error) {
+func (c *testChain) FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
 	c.logReads++
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if c.fail == "logs" {
-		return nil, errors.New("private")
-	}
-	if len(q.Addresses) != 1 || q.Addresses[0] != addr(0x11) || q.FromBlock == nil || q.ToBlock == nil {
-		c.t.Fatal("unbounded event query")
-	}
-	var out []types.Log
-	for _, l := range c.logs {
-		if l.BlockNumber < q.FromBlock.Uint64() || l.BlockNumber > q.ToBlock.Uint64() {
-			continue
-		}
-		matches := true
-		for i, options := range q.Topics {
-			found := len(options) == 0
-			for _, topic := range options {
-				if i < len(l.Topics) && l.Topics[i] == topic {
-					found = true
-				}
-			}
-			matches = matches && found
-		}
-		if matches {
-			out = append(out, l)
-		}
-	}
-	return out, nil
+	c.t.Fatal("Liquid Lane must locate fills through /orders and receipts")
+	return nil, nil
 }
 func (c *testChain) TransactionReceipt(ctx context.Context, h common.Hash) (*types.Receipt, error) {
 	c.receiptReads++
@@ -218,7 +191,7 @@ func newHarness(t *testing.T) *harness {
 		}
 	}))
 	t.Cleanup(h.server.Close)
-	h.cfg = Config{HTTP: protocolio.HTTPConfig{URL: h.server.URL + "/api/v1"}, Reactor: addr(0x11).Hex(), Protocol: addr(0x55).Hex(), TokenIn: addr(0x33).Hex(), TokenOut: addr(0x44).Hex(), AmountIn: "1000", MinAmountOut: "900", Action: "0:0", MaxLookupPages: 3, EventRangeBlocks: 2000}
+	h.cfg = Config{HTTP: protocolio.HTTPConfig{URL: h.server.URL + "/api/v1"}, Reactor: addr(0x11).Hex(), Protocol: addr(0x55).Hex(), TokenIn: addr(0x33).Hex(), TokenOut: addr(0x44).Hex(), AmountIn: "1000", MinAmountOut: "900", Action: "0:0", MaxLookupPages: 3}
 	pr, err := New(h.cfg, provider.Deps{Chain: h.c, HTTP: h.server.Client()})
 	if err != nil {
 		t.Fatal(err)
@@ -283,8 +256,18 @@ func (h *harness) addEvent(t *testing.T, d prepared, n uint64, cancel bool) {
 	} else {
 		h.c.receipts[l.TxHash] = &types.Receipt{Status: 1, TxHash: l.TxHash, BlockNumber: new(big.Int).SetUint64(n), BlockHash: l.BlockHash, Logs: []*types.Log{&copyLog}}
 	}
+	h.order(l.TxHash)
 	h.c.used = true
 }
+func (h *harness) order(hash common.Hash) {
+	o := wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: "filled", QuoteID: quoteID, Swapper: h.s.Account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: addr(0x33).Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: addr(0x44).Hex(), Amount: "950", Recipient: h.s.Account.Hex()}}}
+	if hash != (common.Hash{}) {
+		tx := hash.Hex()
+		o.TxHash = &tx
+	}
+	h.pages = []wire.RfqOrdersResponse{{Orders: []wire.RfqOrder{o}, Cursor: json.RawMessage("null")}}
+}
+
 func TestRequestMatchesIndependentCastVector(t *testing.T) {
 	h := newHarness(t)
 	out, err := h.p.Prepare(t.Context(), h.s)
@@ -364,12 +347,10 @@ func TestPrepareRejectsUntrustedQuoteAuthority(t *testing.T) {
 	}
 }
 func TestAdvanceRequiresExactAuthorizationAndImmutableOutput(t *testing.T) {
-	for _, mode := range []string{"missing sign", "sign digest", "sign data", "action", "digest", "request", "chain", "signature", "inputs", "minimum", "reorg", "unapproved", "balance", "allowance"} {
+	for _, mode := range []string{"missing sign", "sign digest", "sign data", "reorg", "unapproved", "balance", "allowance"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
-			var d prepared
-			_ = json.Unmarshal(out.Data, &d)
 			switch mode {
 			case "missing sign":
 				s.Execution.Logs = nil
@@ -377,20 +358,6 @@ func TestAdvanceRequiresExactAuthorizationAndImmutableOutput(t *testing.T) {
 				s.Execution.Logs[0].Topics[1] = common.Hash{}
 			case "sign data":
 				s.Execution.Logs[0].Data = []byte{1}
-			case "action":
-				out.Actions["0:0"][10] ^= 1
-			case "digest":
-				d.Digest = common.Hash{}
-			case "request":
-				d.Request.AmountIn = big.NewInt(9)
-			case "chain":
-				d.ChainID = "2"
-			case "signature":
-				d.Signature = "0x"
-			case "inputs":
-				out.Inputs = map[uint]string{1: "9"}
-			case "minimum":
-				h.p.minimum = big.NewInt(901)
 			case "reorg":
 				h.c.reorg[11] = true
 			case "unapproved":
@@ -400,8 +367,7 @@ func TestAdvanceRequiresExactAuthorizationAndImmutableOutput(t *testing.T) {
 			case "allowance":
 				h.c.allowance = 999
 			}
-			out.Data, _ = json.Marshal(d)
-			_, err := h.p.Advance(t.Context(), s, out, nil)
+			_, err := out.Task.Advance(t.Context(), s)
 			if err == nil || h.posts != 0 || h.gets != 0 {
 				t.Fatalf("invalid authorization reached HTTP: %v gets%d posts%d", err, h.gets, h.posts)
 			}
@@ -412,16 +378,16 @@ func TestUncertainPublicationReconcilesExactIdentity(t *testing.T) {
 	h := newHarness(t)
 	out, s := h.authorized(t)
 	h.httpMode = "lost"
-	p, err := h.p.Advance(t.Context(), s, out, nil)
+	p, err := out.Task.Advance(t.Context(), s)
 	if err != nil || p.Done || p.Outcome != "publication-uncertain" || h.posts != 1 {
 		t.Fatal(p, err)
 	}
-	p, err = h.p.Advance(t.Context(), s, out, p.State)
+	p, err = out.Task.Advance(t.Context(), s)
 	if err != nil || h.posts != 2 || h.quotes != 1 || !bytes.Equal(h.requests[0], h.requests[1]) {
 		t.Fatal("uncertain retry changed body/quote", err)
 	}
 	h.pages = []wire.RfqOrdersResponse{{Orders: []wire.RfqOrder{{Type: "Priority", OrderID: orderID, OrderStatus: "filled", QuoteID: quoteID, Swapper: s.Account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: addr(0x33).Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: addr(0x44).Hex(), Amount: "950", Recipient: s.Account.Hex()}}}}, Cursor: json.RawMessage("null")}}
-	p, err = h.p.Advance(t.Context(), s, out, p.State)
+	p, err = out.Task.Advance(t.Context(), s)
 	if err != nil || p.Done || p.Reference != orderID || h.posts != 2 {
 		t.Fatal("API status became settlement", p, err)
 	}
@@ -437,10 +403,7 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
 			page := wire.RfqOrdersResponse{Orders: []wire.RfqOrder{}, Cursor: json.RawMessage("null")}
-			st := progressState{Version: 1, Digest: common.Hash{}, NextBlock: 10}
-			var d prepared
-			_ = json.Unmarshal(out.Data, &d)
-			st.Digest = d.Digest
+			task := out.Task.(*settlementTask)
 			switch mode {
 			case "missing orders":
 				page.Orders = nil
@@ -451,7 +414,7 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 			case "repeated cursor":
 				page.Cursor = json.RawMessage(`"oc_a"`)
 			case "known missing":
-				st.OrderID = orderID
+				task.state.OrderID = orderID
 			default:
 				o := wire.RfqOrder{Type: "Priority", OrderID: orderID, OrderStatus: "open", QuoteID: quoteID, Swapper: s.Account.Hex(), Nonce: "7", Input: wire.RfqAmount{Token: addr(0x33).Hex(), Amount: "1000"}, Outputs: []wire.RfqOutput{{Token: addr(0x44).Hex(), Amount: "900", Recipient: s.Account.Hex()}}}
 				if mode == "wrong owner" {
@@ -466,8 +429,7 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 				}
 			}
 			h.pages = []wire.RfqOrdersResponse{page}
-			raw, _ := json.Marshal(st)
-			p, err := h.p.Advance(t.Context(), s, out, raw)
+			p, err := out.Task.Advance(t.Context(), s)
 			if err == nil || p.Done || h.posts != 0 {
 				t.Fatalf("incomplete lookup published %s: %v", mode, err)
 			}
@@ -475,7 +437,7 @@ func TestLookupMustBeCompleteBeforePublication(t *testing.T) {
 	}
 }
 func TestCanonicalEventsControlSettlement(t *testing.T) {
-	for _, mode := range []string{"fill", "cancel", "fill then cancel", "cancel then fill", "used only", "failed receipt", "missing receipt", "removed", "wrong request", "wrong account", "revoked after fill", "signature error after fill", "balance error after fill", "allowance error after fill", "deadline equality", "expired"} {
+	for _, mode := range []string{"fill", "cancel", "fill then cancel", "used only", "failed receipt", "missing receipt", "removed", "wrong request", "wrong account", "revoked after fill", "signature error after fill", "balance error after fill", "allowance error after fill", "deadline equality", "expired"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
@@ -488,13 +450,13 @@ func TestCanonicalEventsControlSettlement(t *testing.T) {
 				if mode == "wrong account" {
 					d.Account = addr(99)
 				}
-				h.addEvent(t, d, 12, mode == "cancel" || mode == "cancel then fill")
+				h.addEvent(t, d, 12, mode == "cancel")
 			}
 			switch mode {
+			case "cancel":
+				h.pages[0].Orders[0].OrderStatus = "cancelled"
 			case "fill then cancel":
 				h.addEvent(t, d, 12, true)
-			case "cancel then fill":
-				h.addEvent(t, d, 12, false)
 			case "used only":
 				h.c.used = true
 			case "failed receipt":
@@ -504,7 +466,9 @@ func TestCanonicalEventsControlSettlement(t *testing.T) {
 			case "missing receipt":
 				h.c.receipts = map[common.Hash]*types.Receipt{}
 			case "removed":
-				h.c.logs[0].Removed = true
+				for _, r := range h.c.receipts {
+					r.Logs[0].Removed = true
+				}
 			case "revoked after fill":
 				h.c.approved = false
 				h.c.balance = 0
@@ -525,15 +489,15 @@ func TestCanonicalEventsControlSettlement(t *testing.T) {
 				head, _ := h.c.HeaderByNumber(t.Context(), s.BlockNumber)
 				s.BlockHash = head.Hash()
 			}
-			p, err := h.p.Advance(t.Context(), s, out, nil)
+			p, err := out.Task.Advance(t.Context(), s)
 			done := mode == "fill" || mode == "cancel" || mode == "fill then cancel" || mode == "revoked after fill" || mode == "expired" || mode == "signature error after fill" || mode == "balance error after fill" || mode == "allowance error after fill"
 			if done {
 				want := "settled"
-				if mode == "cancel" {
-					want = "cancelled"
-				}
 				if mode == "expired" {
 					want = "expired"
+				}
+				if mode == "cancel" {
+					want = "cancelled"
 				}
 				if err != nil || !p.Done || p.Outcome != want || h.posts != 0 {
 					t.Fatal(p, err)
@@ -548,93 +512,25 @@ func TestCanonicalEventsControlSettlement(t *testing.T) {
 		})
 	}
 }
-func TestUsedNonceScanPersistsAndResumesAfterRestart(t *testing.T) {
-	for _, cancel := range []bool{false, true} {
-		t.Run(map[bool]string{false: "fill", true: "cancel"}[cancel], func(t *testing.T) {
-			h := newHarness(t)
-			out, s := h.authorized(t)
-			h.p.cfg.EventRangeBlocks = 1
-			var d prepared
-			_ = json.Unmarshal(out.Data, &d)
-			h.addEvent(t, d, 12, cancel)
-			var state json.RawMessage
-			for i := range 3 {
-				p, err := h.p.Advance(t.Context(), s, out, state)
-				if err != nil || p.Done != (i == 2) {
-					t.Fatal("cursor did not reach terminal", i, p, err)
-				}
-				want := "settled"
-				if cancel {
-					want = "cancelled"
-				}
-				if i == 2 && p.Outcome != want {
-					t.Fatal("wrong terminal outcome", p.Outcome)
-				}
-				if i < 2 {
-					var cursor progressState
-					_ = json.Unmarshal(p.State, &cursor)
-					header, _ := h.c.HeaderByNumber(t.Context(), big.NewInt(int64(10+i)))
-					if cursor.NextBlock != uint64(11+i) || cursor.Anchor != header.Hash() {
-						t.Fatal("cursor checkpoint differs", cursor)
-					}
-				}
-				state = append(json.RawMessage(nil), p.State...)
-			}
-			if h.posts != 0 || h.gets != 0 || h.c.logReads != 6 {
-				t.Fatal("scan published or skipped history")
-			}
-		})
-	}
-}
-func TestDenseRangesCheckpointBeforeLaterFill(t *testing.T) {
+func TestOrderReceiptDoesNotScanHistory(t *testing.T) {
 	h := newHarness(t)
 	out, s := h.authorized(t)
 	var d prepared
 	_ = json.Unmarshal(out.Data, &d)
-	unrelated := d
-	unrelated.Account = addr(0x1234)
-	for i := range 1025 {
-		h.addEvent(t, unrelated, uint64(10+i/512), false)
+	other := d
+	other.Account = addr(0x1234)
+	for range 1025 {
+		h.addEvent(t, other, 10, false)
 	}
-	// Put the matching consumer after the dense history; used=true must not lose checkpoints.
 	h.addEvent(t, d, 12, false)
-	p, err := h.p.Advance(t.Context(), s, out, nil)
-	if err != nil || p.Done || p.Outcome != "scanning" {
-		t.Fatal("dense history trapped cursor", p, err)
-	}
-	var cursor progressState
-	_ = json.Unmarshal(p.State, &cursor)
-	if cursor.NextBlock != 12 || cursor.Anchor == (common.Hash{}) {
-		t.Fatal("wrong dense checkpoint", cursor)
-	}
-	restarted := *h.p
-	p, err = restarted.Advance(t.Context(), s, out, bytes.Clone(p.State))
-	if err != nil || !p.Done || p.Outcome != "settled" || h.posts != 0 || h.gets != 0 {
-		t.Fatal("restart missed later consumer", p, err)
+	progress, err := out.Task.Advance(t.Context(), s)
+	if err != nil || !progress.Done || progress.Outcome != "settled" || h.c.logReads != 0 || h.c.receiptReads != 1 || h.gets != 1 || h.posts != 0 {
+		t.Fatal("order receipt depends on unrelated chain history", progress, err)
 	}
 }
 
-func TestOrphanedScanCursorRewinds(t *testing.T) {
-	h := newHarness(t)
-	out, s := h.authorized(t)
-	h.p.cfg.EventRangeBlocks = 1
-	p, err := h.p.Advance(t.Context(), s, out, nil)
-	if err != nil || p.Done {
-		t.Fatal(p, err)
-	}
-	h.c.reorg[10] = true
-	p, err = h.p.Advance(t.Context(), s, out, p.State)
-	if err != nil || p.Outcome != "scanning" || h.c.logReads != 4 {
-		t.Fatal("orphan cursor not rewound", p, err)
-	}
-	var st progressState
-	_ = json.Unmarshal(p.State, &st)
-	if st.NextBlock != 11 {
-		t.Fatal("scan skipped orphaned block")
-	}
-}
 func TestConfigRejectsUnsafePolicy(t *testing.T) {
-	for _, mode := range []string{"zero address", "equal tokens", "zero amount", "negative", "index", "duplicate index", "pages", "range", "solver", "no reader"} {
+	for _, mode := range []string{"zero address", "equal tokens", "zero amount", "negative", "index", "duplicate index", "pages", "solver", "no reader"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			c := h.cfg
@@ -656,8 +552,6 @@ func TestConfigRejectsUnsafePolicy(t *testing.T) {
 				c.AmountOutInput = &v
 			case "pages":
 				c.MaxLookupPages = 101
-			case "range":
-				c.EventRangeBlocks = 100001
 			case "solver":
 				c.SolverIDs = []string{"a", "a"}
 			}
@@ -684,7 +578,7 @@ func TestPublicationAcceptanceAndCompletePagination(t *testing.T) {
 					h.pages[1].Orders = []wire.RfqOrder{{Type: "Priority", OrderID: orderID, OrderStatus: "expired", QuoteID: quoteID, Swapper: s.Account.Hex(), Nonce: "007", Input: wire.RfqAmount{Token: addr(0x33).Hex(), Amount: "01000"}, Outputs: []wire.RfqOutput{{Token: addr(0x44).Hex(), Amount: "950", Recipient: s.Account.Hex()}}}}
 				}
 			}
-			p, err := h.p.Advance(t.Context(), s, out, nil)
+			p, err := out.Task.Advance(t.Context(), s)
 			if err != nil || p.Done {
 				t.Fatal(p, err)
 			}
@@ -705,8 +599,8 @@ func TestPublicationAcceptanceAndCompletePagination(t *testing.T) {
 		})
 	}
 }
-func TestEventReceiptAndCursorCorruptionFailClosed(t *testing.T) {
-	for _, mode := range []string{"receipt member", "receipt block", "receipt tx index", "receipt duplicate", "receipt topic", "event orphan", "cursor version", "cursor anchor", "cursor ahead", "cursor digest"} {
+func TestEventReceiptCorruptionFailsClosed(t *testing.T) {
+	for _, mode := range []string{"receipt member", "receipt block", "receipt tx index", "receipt duplicate", "receipt topic", "event orphan"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
@@ -714,8 +608,6 @@ func TestEventReceiptAndCursorCorruptionFailClosed(t *testing.T) {
 			_ = json.Unmarshal(out.Data, &d)
 			h.addEvent(t, d, 12, false)
 			r := h.c.receipts[h.c.logs[0].TxHash]
-			var saved json.RawMessage
-			st := progressState{Version: 1, Digest: d.Digest, NextBlock: 10}
 			switch mode {
 			case "receipt member":
 				r.Logs = nil
@@ -730,22 +622,10 @@ func TestEventReceiptAndCursorCorruptionFailClosed(t *testing.T) {
 				l.Topics = []common.Hash{{}}
 				r.Logs[0] = &l
 			case "event orphan":
-				h.c.logs[0].BlockHash = common.HexToHash("0xbad")
-			case "cursor version":
-				st.Version = 2
-			case "cursor anchor":
-				st.NextBlock = 11
-			case "cursor ahead":
-				st.NextBlock = 14
-				st.Anchor = common.HexToHash("0xbad")
-			case "cursor digest":
-				st.Digest = common.Hash{}
+				r.Logs[0].BlockHash = common.HexToHash("0xbad")
 			}
-			if mode[:6] == "cursor" {
-				saved, _ = json.Marshal(st)
-			}
-			p, err := h.p.Advance(t.Context(), s, out, saved)
-			if err == nil || p.Done || h.posts != 0 || h.gets != 0 {
+			p, err := out.Task.Advance(t.Context(), s)
+			if err == nil || p.Done || h.posts != 0 {
 				t.Fatal("corrupt evidence accepted", p, err)
 			}
 		})

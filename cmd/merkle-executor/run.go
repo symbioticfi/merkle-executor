@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/merkle-executor/internal/config"
 	"github.com/symbioticfi/merkle-executor/internal/observability"
@@ -19,48 +23,95 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/aave"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/claims"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/cowswap"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/liquidlanerfq"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/merkl"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/threef"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/merkle-executor/sdk/signer"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
-	"github.com/symbioticfi/merkle-executor/sdk/txmanager"
+	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 )
 
-func runBot(ctx context.Context, path string, once, planOnly bool, out io.Writer) error {
-	return runBotWithHTTP(ctx, path, once, planOnly, out, nil)
+type environment struct {
+	cfg        *config.Config
+	client     *chain.Client
+	planner    *keeper.Planner
+	strategies []keeper.Strategy
+	log        logr.Logger
+	close      func()
 }
 
-// runBotWithHTTP permits a bounded transport to serve official API fixtures
-// while preserving the production endpoints and all recipe validation.
-func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out io.Writer, httpClient *http.Client) error {
-	cfg, err := config.Load(path)
+func planBot(ctx context.Context, path string, out io.Writer) error {
+	return planBotWithHTTP(ctx, path, out, nil)
+}
+
+func planBotWithHTTP(ctx context.Context, path string, out io.Writer, httpClient *http.Client) error {
+	env, err := openEnvironment(ctx, path, httpClient)
 	if err != nil {
 		return err
 	}
-	if planOnly {
-		cfg.Mode = "simulate"
+	defer env.close()
+	operation, cancel := context.WithTimeout(ctx, config.DefaultOperationTimeout)
+	defer cancel()
+	plan, err := env.planner.PrepareExecution(operation, env.strategies)
+	if err != nil {
+		return err
+	}
+	return env.writePlan(out, plan)
+}
+
+func (env *environment) writePlan(out io.Writer, plan keeper.ExecutionPlan) error {
+	for _, strategy := range env.strategies {
+		if failure := plan.Failures[strategy.Config.Name]; failure != nil {
+			env.log.Error(failure, "strategy planning failed", "strategy", strategy.Config.Name)
+		}
+	}
+	to, data, err := plan.Transaction()
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(struct {
+		To   common.Address       `json:"to"`
+		Data hexutil.Bytes        `json:"data"`
+		Plan keeper.ExecutionPlan `json:"plan"`
+	}{to, data, plan})
+}
+
+// openEnvironment discovers execution configuration without keys or signing state.
+func openEnvironment(ctx context.Context, path string, httpClient *http.Client) (_ *environment, err error) {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil, err
 	}
 	log, flush, err := observability.NewLogger(cfg.Observability.Debug)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer flush()
+	defer func() {
+		if err != nil {
+			flush()
+		}
+	}()
 	chainID := new(big.Int).SetUint64(cfg.Chain.ChainID)
 	startup, cancel := context.WithTimeout(ctx, config.DefaultOperationTimeout)
 	client, err := chain.Dial(startup, cfg.Chain.RPCURL, cfg.Chain.WriteRPCURL, chainID, common.HexToAddress(config.StandardMulticall3))
 	cancel()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer client.Close()
+	defer func() {
+		if err != nil {
+			client.Close()
+		}
+	}()
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: config.DefaultHTTPTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
-	source, err := permissions.New(cfg.Curator.HTTPConfig(), httpClient, client, os.Getenv)
+	source, err := permissions.New(cfg.Curator.URL, httpClient, client)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	targets := make([]common.Address, len(cfg.Strategies))
 	for i, sc := range cfg.Strategies {
@@ -70,89 +121,86 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	accounts, caller, err := discoverIdentity(discovery, client, targets)
 	cancel()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if cfg.Signer.Address != "" && common.HexToAddress(cfg.Signer.Address) != caller {
-		return errors.New("signer.address assertion does not match executor caller")
-	}
-	var txSigner signer.Signer
-	if cfg.Mode == "send" {
-		txSigner, err = signerFromEnv(cfg.Signer.KeyEnv)
-		if err != nil {
-			return err
-		}
-		if txSigner.Address() != caller {
-			return errors.New("signer key does not match executor caller")
-		}
+	sender := caller
+	if cfg.Signer.Address != "" {
+		sender = common.HexToAddress(cfg.Signer.Address)
 	}
 	strategies := make([]keeper.Strategy, 0, len(cfg.Strategies))
 	for _, sc := range cfg.Strategies {
-		s := keeper.Strategy{Config: keeper.Config{Name: sc, Executor: sc, Account: accounts[common.HexToAddress(sc)].Hex(), Interval: config.DefaultStrategyInterval, Revision: cfg.StrategyFingerprint(sc, accounts[common.HexToAddress(sc)], caller)}}
+		s := keeper.Strategy{Config: keeper.Config{Name: sc, Executor: sc, Account: accounts[common.HexToAddress(sc)].Hex(), Interval: config.DefaultStrategyInterval}}
 		for _, registration := range []struct {
 			name string
-			new  func(provider.Deps) (provider.Provider, error)
-		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}} {
+			new  func(provider.Deps) (keeper.Provider, error)
+		}{{"cowswap", cowswap.NewAutomatic}, {"merkl", merkl.NewAutomatic}, {"liquidlane-rfq", liquidlanerfq.NewAutomatic}, {"claims", claims.NewAutomatic}} {
 			p, err := registration.new(provider.Deps{Chain: client, HTTP: httpClient, LookupSecret: os.Getenv})
 			if err != nil {
-				return errors.Errorf("configure provider %s: %w", registration.name, err)
+				return nil, errors.Errorf("configure provider %s: %w", registration.name, err)
 			}
 			s.Providers = append(s.Providers, p)
 		}
 		capacity, err := aave.New(client)
 		if err != nil {
-			return errors.Errorf("configure Aave capacity: %w", err)
+			return nil, errors.Errorf("configure Aave capacity: %w", err)
 		}
-		s.Providers = append(s.Providers, capacity, keeper.NewRecipeInputs())
+		claims, err := threef.NewAutomatic(provider.Deps{Chain: client})
+		if err != nil {
+			return nil, errors.Errorf("configure 3F claims: %w", err)
+		}
+		s.Providers = append(s.Providers, capacity, claims)
 		strategies = append(strategies, s)
 	}
-	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}
-	if planOnly {
-		plans := make(map[string]keeper.Plan)
-		for _, s := range strategies {
-			operation, cancel := context.WithTimeout(ctx, config.DefaultOperationTimeout)
-			p, err := planner.Prepare(operation, s)
-			cancel()
-			if err != nil {
-				return errors.Errorf("prepare %s: %w", s.Config.Name, err)
-			}
-			plans[s.Config.Name] = p
-		}
-		encoder := json.NewEncoder(out)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(plans)
-	}
-	store, err := state.Open(cfg.StateDir)
+	planner := &keeper.Planner{PermissionSource: source, Chain: client, ChainID: chainID, Caller: caller, Sender: sender, MaxGas: cfg.TxManager.MaxGas, Confirmations: config.DefaultConfirmations, RecipeCache: recipes.NewRecipeCache(len(cfg.Strategies), config.DefaultRecipeCacheBytes)}
+	return &environment{cfg: cfg, client: client, planner: planner, strategies: strategies, log: log,
+		close: func() { client.Close(); flush() }}, nil
+}
+
+func runBot(ctx context.Context, path string) error {
+	return runBotWithHTTP(ctx, path, nil)
+}
+
+// runBotWithHTTP permits bounded official API fixture transports.
+func runBotWithHTTP(ctx context.Context, path string, httpClient *http.Client) (err error) {
+	env, err := openEnvironment(ctx, path, httpClient)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
-	if err := bindState(store, cfg.Chain.ChainID, caller.Hex()); err != nil {
-		return err
-	}
+	defer env.close()
+	cfg, strategies, log := env.cfg, env.strategies, env.log
 	metrics := observability.NewMetrics()
-	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: strategies, Mode: cfg.Mode, OperationTimeout: config.DefaultOperationTimeout, Log: log}
-	if cfg.Mode == "send" {
-		txm, err := txmanager.NewWithMetrics(client, txSigner, chainID, store, cfg.TxManager.EngineConfig(), log, metrics.Registerer())
-		if err != nil {
-			return err
-		}
-		if err := txm.Start(ctx); err != nil {
-			return err
-		}
-		defer txm.Close()
-		k.Sender = txm
-	}
-	if err := k.CheckRecovery(); err != nil {
+	k, manager, err := newKeeper(env)
+	if err != nil {
 		return err
 	}
+	if manager != nil {
+		manager.Metrics, err = transaction.NewMetrics(prometheus.WrapRegistererWithPrefix("merkle_executor_", metrics.Registerer()))
+		if err != nil {
+			return errors.Errorf("register transaction metrics: %w", err)
+		}
+	}
+	defer func() {
+		if err != nil && k.Pending() {
+			err = errors.Errorf("runtime stopped with pending work; process-local tracking is lost: %w", err)
+		}
+	}()
+	stopSender, err := startTransactionManager(ctx, manager)
+	if err != nil {
+		return err
+	}
+	defer stopSender()
 	k.Observe = metrics.Observe
 	metrics.Ready(true)
 	defer metrics.Ready(false)
 	serverErrors := make(chan error, 1)
 	if cfg.Observability.Addr != "" {
 		server := metrics.Server(cfg.Observability.Addr)
+		listener, err := net.Listen("tcp", cfg.Observability.Addr)
+		if err != nil {
+			return errors.New("observability listener failed")
+		}
 		go func() {
-			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				serverErrors <- errors.New("observability server failed")
 			}
 		}()
@@ -166,17 +214,21 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	for {
 		err := k.Tick(ctx)
 		metrics.Ready(err == nil)
-		if once {
-			return err
+		if err != nil && ctx.Err() == nil {
+			log.Error(err, "runtime iteration failed", "pending", k.Pending())
 		}
 		if ctx.Err() != nil {
-			return nil
+			return stopped(ctx, k)
 		}
-		timer := time.NewTimer(config.DefaultPollInterval)
+		interval := config.DefaultPollInterval
+		if k.Pending() {
+			interval = config.DefaultTransactionPollInterval
+		}
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil
+			return stopped(ctx, k)
 		case err := <-serverErrors:
 			timer.Stop()
 			return err
@@ -185,22 +237,56 @@ func runBotWithHTTP(ctx context.Context, path string, once, planOnly bool, out i
 	}
 }
 
-func bindState(store *state.Store, chainID uint64, caller string) error {
-	type identity struct {
-		ChainID uint64         `json:"chainId"`
-		Caller  common.Address `json:"caller"`
-	}
-	want := identity{ChainID: chainID, Caller: common.HexToAddress(caller)}
-	var old identity
-	found, err := store.Load("deployment.v1", &old)
-	if err != nil {
-		return err
-	}
-	if found {
-		if old != want {
-			return errors.New("state directory belongs to another chain or caller")
+func newKeeper(env *environment) (*keeper.Keeper, *transaction.Manager, error) {
+	k := &keeper.Keeper{Planner: env.planner, Strategies: env.strategies, Mode: env.cfg.Mode, OperationTimeout: config.DefaultOperationTimeout, Log: env.log}
+	var manager *transaction.Manager
+	if env.cfg.Mode == "send" {
+		txSigner, err := signerFromEnv(env.cfg.Signer.KeyEnv)
+		if err != nil {
+			return nil, nil, err
 		}
-		return nil
+		sender := env.planner.Sender
+		if sender == (common.Address{}) {
+			sender = env.planner.Caller
+		}
+		if txSigner.Address() != sender {
+			return nil, nil, errors.New("signer key does not match configured sender")
+		}
+		manager, err = transaction.New(env.client, txSigner, env.planner.ChainID, env.cfg.TxManager.SenderConfig(), env.log)
+		if err != nil {
+			return nil, nil, errors.Errorf("configure transaction manager: %w", err)
+		}
+		k.Sender = manager.Sender("merkle-executor")
 	}
-	return store.Save("deployment.v1", want)
+	return k, manager, nil
+}
+
+// The host starts and drains accepted work explicitly, before closing the RPC client.
+func startTransactionManager(ctx context.Context, manager *transaction.Manager) (func(), error) {
+	if manager == nil {
+		return func() {}, nil
+	}
+	startup, cancel := context.WithTimeout(ctx, config.DefaultOperationTimeout)
+	err := manager.Initialize(startup)
+	cancel()
+	if err != nil {
+		return nil, errors.Errorf("initialize transaction manager: %w", err)
+	}
+	run, stop := context.WithCancel(context.WithoutCancel(ctx))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		manager.Start(run)
+	}()
+	return func() {
+		stop()
+		<-done
+	}, nil
+}
+
+func stopped(ctx context.Context, k *keeper.Keeper) error {
+	if k.Pending() {
+		return ctx.Err()
+	}
+	return nil
 }

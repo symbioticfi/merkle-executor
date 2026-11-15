@@ -3,9 +3,7 @@ package liquidlanerfq
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"math/big"
-	"reflect"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -20,7 +18,6 @@ import (
 
 // API deployment provenance: vault-solver cc75494298aa, Makefile RFQ_OPENAPI_URL.
 const ConsumerAPI = "https://swap.symbiotic.fi/api/v1"
-const automaticPolicy = "liquid-lane-consumer/recipe-v1"
 
 type Automatic struct{ deps provider.Deps }
 type recipeRequest struct {
@@ -31,14 +28,11 @@ type recipeRequest struct {
 	requirements keeper.RecipeRequirements
 }
 
-func NewAutomatic(deps provider.Deps) (provider.Provider, error) {
+func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
 	if _, ok := deps.Chain.(chainReader); !ok {
-		return nil, errors.New("automatic RFQ requires contract, log, receipt and header reads")
+		return nil, errors.New("automatic RFQ requires contract, receipt and header reads")
 	}
 	return &Automatic{deps: deps}, nil
-}
-func (*Automatic) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("RFQ requires authenticated recipe")
 }
 
 func consumerHTTP() protocolio.HTTPConfig {
@@ -146,7 +140,7 @@ func (p *Automatic) derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tre
 		if err != nil {
 			return nil, err
 		}
-		result = &recipeRequest{template: sign, budget: budget, floors: floors, requirements: requirements, cfg: Config{HTTP: consumerHTTP(), Reactor: address.Hex(), Protocol: protocol.Hex(), TokenIn: input.Hex(), TokenOut: output.Hex(), Action: action.Key, MaxLookupPages: 10, EventRangeBlocks: 2000, AmountInInput: budget.Input}}
+		result = &recipeRequest{template: sign, budget: budget, floors: floors, requirements: requirements, cfg: Config{HTTP: consumerHTTP(), Reactor: address.Hex(), Protocol: protocol.Hex(), TokenIn: input.Hex(), TokenOut: output.Hex(), Action: action.Key, MaxLookupPages: 10, AmountInInput: budget.Input}}
 		if minimum.Source == recipes.Input {
 			index := uint(minimum.Value.Uint64())
 			result.cfg.AmountOutInput = &index
@@ -186,40 +180,40 @@ func (p *Automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t 
 	}
 	return request.requirements, nil
 }
-func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) (provider.Output, error) {
+func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) ([]provider.Output, error) {
 	request, err := p.derive(s, r, t)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	if request == nil {
-		return derived.Empty(automaticPolicy)
+		return []provider.Output{{}}, nil
 	}
 	amount, err := recipes.EconomicResult(request.budget, results)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	minimum := new(big.Int)
 	for _, floor := range request.floors {
 		value, err := recipes.EconomicResult(floor, results)
 		if err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 		if value.Cmp(minimum) > 0 {
 			minimum = value
 		}
 	}
 	if amount.Sign() == 0 || minimum.Sign() == 0 {
-		return provider.Output{}, provider.ErrNotReady
+		return nil, provider.ErrNotReady
 	}
 	request.cfg.AmountIn = amount.String()
 	request.cfg.MinAmountOut = minimum.String()
 	runtime, err := New(request.cfg, p.deps)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	out, err := runtime.Prepare(ctx, s)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	payload := out.Actions[request.cfg.Action]
 	for _, floor := range request.floors {
@@ -228,32 +222,53 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		}
 		expected, err := recipes.EconomicResult(floor, results)
 		if err != nil {
-			return provider.Output{}, err
+			return nil, err
 		}
 		if new(big.Int).SetBytes(payload[request.template.Offset+288:request.template.Offset+320]).Cmp(expected) != 0 {
-			return provider.Output{}, errors.New("RFQ selected output conflicts with exact recipe result binding")
+			return nil, errors.New("RFQ selected output conflicts with exact recipe result binding")
 		}
 	}
 	if err = derived.BindOutput(request.template, payload, results, &out); err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
-	return derived.Encode(automaticPolicy, request.cfg, out, true)
+	return []provider.Output{out}, nil
 }
-func (p *Automatic) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
-	var cfg Config
-	inner, matched, err := derived.Decode(automaticPolicy, out, &cfg)
-	if err != nil {
-		return provider.Progress{}, err
+
+// settlementTask keeps quote identity and bounded lookup progress in memory.
+type settlementTask struct {
+	provider *Provider
+	prepared prepared
+	state    progressState
+}
+
+func (p *Provider) task(d prepared) provider.Task {
+	// Request amounts and quote bytes are private to this preparation; outputs
+	// may be copied or assembled by the caller without changing the task.
+	return &settlementTask{provider: p, prepared: d}
+}
+
+func (t *settlementTask) Advance(ctx context.Context, s provider.Snapshot) (provider.Progress, error) {
+	next := t.state.clone()
+	progress, err := t.provider.advance(ctx, s, t.prepared, &next)
+	if err == nil {
+		t.state = next
 	}
-	if !matched {
-		return provider.Progress{Done: true}, nil
+	return progress, err
+}
+
+func (s progressState) clone() progressState {
+	copy := s
+	if s.Lookup != nil {
+		lookup := *s.Lookup
+		lookup.Cursors = make(map[string]bool, len(s.Lookup.Cursors))
+		for key, value := range s.Lookup.Cursors {
+			lookup.Cursors[key] = value
+		}
+		lookup.IDs = make(map[string]bool, len(s.Lookup.IDs))
+		for key, value := range s.Lookup.IDs {
+			lookup.IDs[key] = value
+		}
+		copy.Lookup = &lookup
 	}
-	if !reflect.DeepEqual(cfg.HTTP, consumerHTTP()) || cfg.MaxLookupPages != 10 || cfg.EventRangeBlocks != 2000 || len(cfg.SolverIDs) != 0 {
-		return provider.Progress{}, errors.New("persisted RFQ automatic constants differ")
-	}
-	runtime, err := New(cfg, p.deps)
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	return runtime.Advance(ctx, s, inner, state)
+	return copy
 }

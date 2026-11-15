@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
+	"golang.org/x/sync/errgroup"
 )
 
 // Batch responses are bounded independently of request count. Oversized or
@@ -41,8 +42,9 @@ func (e *batchRPCError) Error() string  { return e.Message }
 func (e *batchRPCError) ErrorCode() int { return e.Code }
 func (e *batchRPCError) ErrorData() any { return e.Data }
 
-// CallHTTPBatch sends one bounded read array using the supplied host transport.
-// It rejects duplicate, missing and unknown response IDs before decoding results.
+// CallHTTPBatch uses ordinary RPC objects for contract reads and singleton groups.
+// Only groups containing other RPC methods use arrays. The supplied host transport
+// and strict response validation apply to both shapes.
 func CallHTTPBatch(ctx context.Context, client *http.Client, endpoint string, batch []rpc.BatchElem) error {
 	if len(batch) == 0 {
 		return nil
@@ -53,65 +55,95 @@ func CallHTTPBatch(ctx context.Context, client *http.Client, endpoint string, ba
 	if len(batch) > MaxReadBatch {
 		return errors.New("RPC batch exceeds request limit")
 	}
+	if len(batch) > 1 {
+		onlyCalls := true
+		for _, element := range batch {
+			onlyCalls = onlyCalls && element.Method == "eth_call"
+		}
+		if onlyCalls {
+			// Compatible getters have already been aggregated. Preserve the exact
+			// sender/gas/block context of the remaining calls without an HTTP array.
+			var group errgroup.Group
+			group.SetLimit(8)
+			for i := range batch {
+				group.Go(func() error { return callHTTP(ctx, client, endpoint, batch[i:i+1]) })
+			}
+			return group.Wait()
+		}
+	}
+	return callHTTP(ctx, client, endpoint, batch)
+}
+
+func callHTTP(ctx context.Context, client *http.Client, endpoint string, batch []rpc.BatchElem) error {
 	messages := make([]batchMessage, len(batch))
 	for i, element := range batch {
 		messages[i] = batchMessage{JSONRPC: "2.0", ID: uint64(i + 1), Method: element.Method, Params: element.Args}
 	}
-	body, err := json.Marshal(messages)
+	var payload any = messages
+	if len(messages) == 1 {
+		payload = messages[0]
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
-		return rpcFailure("encode read batch", err)
+		return rpcFailure("encode RPC read", err)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return rpcFailure("create read batch", err)
+		return rpcFailure("create RPC read", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	bounded := *client
 	bounded.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := bounded.Do(request)
 	if err != nil {
-		return rpcFailure("read RPC batch", err)
+		return rpcFailure("read RPC", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return rpcFailure("read RPC batch HTTP status", rpc.HTTPError{StatusCode: response.StatusCode, Status: response.Status})
+		return rpcFailure("read RPC HTTP status", rpc.HTTPError{StatusCode: response.StatusCode, Status: response.Status})
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxBatchResponseBytes+1))
 	if err != nil {
-		return rpcFailure("read RPC batch response", err)
+		return rpcFailure("read RPC response", err)
 	}
 	if len(raw) > maxBatchResponseBytes {
-		return errors.New("read RPC batch response exceeds limit")
+		return errors.New("RPC read response exceeds limit")
 	}
 	var responses []batchResponse
-	if err := json.Unmarshal(raw, &responses); err != nil {
-		return errors.New("invalid RPC batch response")
+	if len(messages) == 1 {
+		responses = make([]batchResponse, 1)
+		err = json.Unmarshal(raw, &responses[0])
+	} else {
+		err = json.Unmarshal(raw, &responses)
+	}
+	if err != nil {
+		return errors.New("invalid RPC read response")
 	}
 	if len(responses) != len(batch) {
-		return errors.New("RPC batch response count mismatch")
+		return errors.New("RPC read response count mismatch")
 	}
 	seen := make([]bool, len(batch))
 	for _, response := range responses {
 		if response.JSONRPC != "2.0" || response.ID == 0 || response.ID > uint64(len(batch)) || seen[response.ID-1] {
-			return errors.New("invalid or duplicate RPC batch response ID")
+			return errors.New("invalid or duplicate RPC read response ID")
 		}
 		i := int(response.ID - 1)
 		seen[i] = true
 		if response.Error != nil {
 			if len(response.Result) > 0 && !bytes.Equal(response.Result, []byte("null")) {
-				return errors.New("RPC batch response has both result and error")
+				return errors.New("RPC read response has both result and error")
 			}
-			batch[i].Error = rpcFailure("read batch member", response.Error)
+			batch[i].Error = rpcFailure("read RPC member", response.Error)
 		} else if len(response.Result) == 0 {
-			return errors.New("RPC batch member result missing")
+			return errors.New("RPC read member result missing")
 		} else if bytes.Equal(response.Result, []byte("null")) {
 			if batch[i].Method == "eth_getBlockByNumber" || batch[i].Method == "eth_getTransactionReceipt" {
-				batch[i].Error = rpcFailure("read batch member", ethereum.NotFound)
+				batch[i].Error = rpcFailure("read RPC member", ethereum.NotFound)
 			} else {
-				batch[i].Error = errors.New("RPC batch member returned null")
+				batch[i].Error = errors.New("RPC read member returned null")
 			}
 		} else {
-			batch[i].Error = rpcFailure("decode read batch member", json.Unmarshal(response.Result, batch[i].Result))
+			batch[i].Error = rpcFailure("decode read RPC member", json.Unmarshal(response.Result, batch[i].Result))
 		}
 	}
 	return nil
@@ -136,8 +168,8 @@ func (r RPCBatchReader) BatchRead(ctx context.Context, requests []ReadRequest) (
 	return results, nil
 }
 
-// A compatible safe subset becomes one aggregate eth_call inside the same HTTP
-// array as any isolated calls. Grouping never crosses a pinned block boundary.
+// A compatible safe subset becomes one aggregate eth_call. Grouping never crosses
+// a pinned block boundary; the transport chooses objects or mixed-method arrays.
 func (r RPCBatchReader) readChunk(ctx context.Context, requests []ReadRequest) ([]ReadResult, error) {
 	results := make([]ReadResult, len(requests))
 	safe := map[string][]int{}
@@ -302,7 +334,7 @@ func filterArgument(query ethereum.FilterQuery) (map[string]any, error) {
 	return arg, nil
 }
 
-// RPCBatchCall sends one bounded array and reports each member in its own Result.
+// RPCBatchCall sends one bounded logical group, reporting each member in its Result.
 type RPCBatchCall func(context.Context, []rpc.BatchElem) error
 
 // AggregateCall and AggregateResult keep ABI generation in the host codec.

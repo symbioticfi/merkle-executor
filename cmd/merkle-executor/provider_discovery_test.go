@@ -29,7 +29,7 @@ func TestDaemonRejectsManualRuntimeSources(t *testing.T) {
 			if err = os.WriteFile(path, raw, 0600); err != nil {
 				t.Fatal(err)
 			}
-			err = runBot(t.Context(), path, true, true, new(bytes.Buffer))
+			err = planBot(t.Context(), path, new(bytes.Buffer))
 			if err == nil || calls.Load() != 0 {
 				t.Fatalf("manual runtime source reached network: %v calls=%d", err, calls.Load())
 			}

@@ -15,7 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
@@ -50,6 +49,9 @@ func TestSourceFetchesExactActiveRootWithBoundedFailures(t *testing.T) {
 			defer target.Close()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
+				if r.Header.Get("Authorization") != "" {
+					t.Error("Curator request must be public")
+				}
 				if r.Method != "GET" || r.URL.Path != "/api/v1/merkle/"+strings.ToLower(adapter.Hex())+"/"+root.Hex() || r.URL.RawQuery != "" {
 					t.Error("source requested another root/chain")
 				}
@@ -70,7 +72,7 @@ func TestSourceFetchesExactActiveRootWithBoundedFailures(t *testing.T) {
 					_, _ = w.Write([]byte("private malformed"))
 					return
 				case "oversize":
-					_, _ = w.Write([]byte(strings.Repeat("x", 1025)))
+					_, _ = w.Write([]byte(strings.Repeat("x", int(HostMaxResponseBytes)+1)))
 					return
 				}
 				_, _ = w.Write([]byte(body))
@@ -82,9 +84,9 @@ func TestSourceFetchesExactActiveRootWithBoundedFailures(t *testing.T) {
 					return nil, errors.Errorf("private transport details for %s", server.URL)
 				})
 			}
-			source, err := New(protocolio.HTTPConfig{URL: server.URL + "/api/v1", MaxResponseBytes: 1024}, client, readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+			source, err := New(server.URL+"/api/v1", client, readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 				return common.LeftPadBytes(adapter.Bytes(), 32), nil
-			}), nil)
+			}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -134,9 +136,9 @@ func TestSourceCancelsWhileReadingHTTPBody(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := common.HexToAddress("0x99")
-	source, err := New(protocolio.HTTPConfig{URL: server.URL}, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+	source, err := New(server.URL, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 		return common.LeftPadBytes(adapter.Bytes(), 32), nil
-	}), nil)
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,10 +174,10 @@ func TestSourceRejectsInvalidChainBeforeAnyIO(t *testing.T) {
 		{"overflow", new(big.Int).Lsh(big.NewInt(1), 256)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			source, err := New(protocolio.HTTPConfig{URL: "http://permissions.invalid"}, nil, readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+			source, err := New("http://permissions.invalid", nil, readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 				t.Fatal("invalid chain reached reader")
 				return nil, nil
-			}), nil)
+			}))
 			if err != nil {
 				t.Fatal(err)
 			}

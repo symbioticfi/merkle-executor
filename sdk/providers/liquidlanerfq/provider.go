@@ -2,7 +2,6 @@
 package liquidlanerfq
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"math/big"
@@ -24,25 +23,23 @@ import (
 )
 
 type Config struct {
-	HTTP             protocolio.HTTPConfig `yaml:"http"`
-	Reactor          string                `yaml:"reactor"`
-	Protocol         string                `yaml:"protocol"`
-	TokenIn          string                `yaml:"tokenIn"`
-	TokenOut         string                `yaml:"tokenOut"`
-	AmountIn         string                `yaml:"amountIn"`
-	MinAmountOut     string                `yaml:"minAmountOut"`
-	Action           string                `yaml:"action"`
-	AmountInInput    *uint                 `yaml:"amountInInput"`
-	AmountOutInput   *uint                 `yaml:"amountOutInput"`
-	DeadlineInput    *uint                 `yaml:"deadlineInput"`
-	NonceInput       *uint                 `yaml:"nonceInput"`
-	SolverIDs        []string              `yaml:"solverIds"`
-	MaxLookupPages   int                   `yaml:"maxLookupPages"`
-	EventRangeBlocks uint64                `yaml:"eventRangeBlocks"`
+	HTTP           protocolio.HTTPConfig `yaml:"http"`
+	Reactor        string                `yaml:"reactor"`
+	Protocol       string                `yaml:"protocol"`
+	TokenIn        string                `yaml:"tokenIn"`
+	TokenOut       string                `yaml:"tokenOut"`
+	AmountIn       string                `yaml:"amountIn"`
+	MinAmountOut   string                `yaml:"minAmountOut"`
+	Action         string                `yaml:"action"`
+	AmountInInput  *uint                 `yaml:"amountInInput"`
+	AmountOutInput *uint                 `yaml:"amountOutInput"`
+	DeadlineInput  *uint                 `yaml:"deadlineInput"`
+	NonceInput     *uint                 `yaml:"nonceInput"`
+	SolverIDs      []string              `yaml:"solverIds"`
+	MaxLookupPages int                   `yaml:"maxLookupPages"`
 }
 type chainReader interface {
 	provider.Reader
-	provider.LogReader
 	HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
 	TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error)
 }
@@ -54,24 +51,22 @@ type Provider struct {
 	amount, minimum                      *big.Int
 }
 type prepared struct {
-	Version       int                     `json:"version"`
 	ChainID       string                  `json:"chainId"`
 	Account       common.Address          `json:"account"`
 	Reactor       common.Address          `json:"reactor"`
 	Protocol      common.Address          `json:"protocol"`
 	PreparedBlock uint64                  `json:"preparedBlock"`
 	Quote         json.RawMessage         `json:"quote"`
+	QuoteID       string                  `json:"quoteId"`
 	Request       reactor.IReactorRequest `json:"request"`
 	Digest        common.Hash             `json:"digest"`
 	Signature     string                  `json:"signature"`
 }
 type progressState struct {
-	Version   int          `json:"version"`
-	Digest    common.Hash  `json:"digest"`
-	OrderID   string       `json:"orderId,omitempty"`
-	NextBlock uint64       `json:"nextBlock"`
-	Anchor    common.Hash  `json:"anchor"`
-	Lookup    *lookupState `json:"lookup,omitempty"`
+	OrderID   string
+	TxHash    common.Hash
+	Lookup    *lookupState
+	Cancelled bool
 }
 
 var uuid = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
@@ -103,8 +98,8 @@ func New(c Config, deps provider.Deps) (*Provider, error) {
 	if p.minimum, err = parse.Uint256(c.MinAmountOut); err != nil || p.minimum.Sign() == 0 {
 		return nil, errors.New("RFQ positive minAmountOut required")
 	}
-	if c.MaxLookupPages < 1 || c.MaxLookupPages > 100 || c.EventRangeBlocks < 1 || c.EventRangeBlocks > 100000 {
-		return nil, errors.New("RFQ lookup pages must be 1..100 and event range 1..100000")
+	if c.MaxLookupPages < 1 || c.MaxLookupPages > 100 {
+		return nil, errors.New("RFQ lookup pages must be 1..100")
 	}
 	seenInputs := map[uint]bool{}
 	for _, index := range []*uint{c.AmountInInput, c.AmountOutInput, c.DeadlineInput, c.NonceInput} {
@@ -133,21 +128,10 @@ func New(c Config, deps provider.Deps) (*Provider, error) {
 	}
 	var ok bool
 	if p.chain, ok = deps.Chain.(chainReader); !ok {
-		return nil, errors.New("RFQ requires contract, log, receipt and canonical header reads")
+		return nil, errors.New("RFQ requires contract, receipt and canonical header reads")
 	}
 	p.http, err = protocolio.NewHTTP(c.HTTP, deps.HTTP, deps.LookupSecret)
 	return p, err
-}
-func (p *Provider) PlanPreparation(pin protocolio.PreparationPin) (protocolio.PreparationPlan, error) {
-	if err := pin.Validate(); err != nil {
-		return protocolio.PreparationPlan{}, err
-	}
-	return protocolio.PreparationPlan{Requests: []protocolio.ReadRequest{protocolio.ContractRead(p.reactor, reactor.NewLiquidLaneReactor().PackEip712Domain(), new(big.Int).SetUint64(pin.BlockNumber), true)}, Resolve: func(ctx context.Context, s provider.Snapshot, at protocolio.ReadAccessor) (provider.Output, error) {
-		if !pin.Matches(s) {
-			return provider.Output{}, errors.New("RFQ staged identity mismatch")
-		}
-		return p.prepare(ctx, s, at(0))
-	}}, nil
 }
 func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.Output, error) {
 	if err := protocolio.Snapshot(s); err != nil {
@@ -206,7 +190,7 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 		if !allowed {
 			continue
 		}
-		request, _, err := p.quote(option.Quote, s.Account)
+		request, quote, err := p.quote(option.Quote, s.Account)
 		if err != nil {
 			return provider.Output{}, err
 		}
@@ -239,7 +223,8 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 		if err = protocolio.Canonical(ctx, p.chain, s); err != nil {
 			return provider.Output{}, err
 		}
-		saved, err := json.Marshal(prepared{Version: 1, ChainID: s.ChainID.String(), Account: s.Account, Reactor: p.reactor, Protocol: p.protocol, PreparedBlock: s.BlockNumber.Uint64(), Quote: append(json.RawMessage(nil), option.Quote...), Request: request, Digest: digest, Signature: "0x00"})
+		d := prepared{ChainID: s.ChainID.String(), Account: s.Account, Reactor: p.reactor, Protocol: p.protocol, PreparedBlock: s.BlockNumber.Uint64(), Quote: append(json.RawMessage(nil), option.Quote...), QuoteID: quote.QuoteID, Request: request, Digest: digest, Signature: "0x00"}
+		saved, err := json.Marshal(d)
 		if err != nil {
 			return provider.Output{}, err
 		}
@@ -256,72 +241,24 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 		if p.cfg.NonceInput != nil {
 			out.Inputs[*p.cfg.NonceInput] = request.Nonce.String()
 		}
+		out.Task = p.task(d)
 		return out, nil
 	}
 	return provider.Output{}, provider.ErrNotReady
 }
-func (p *Provider) persisted(s provider.Snapshot, out provider.Output) (prepared, common.Hash, error) {
-	var d prepared
-	if err := strictJSON(out.Data, &d); err != nil || d.Version != 1 || d.ChainID != s.ChainID.String() || d.Account != s.Account || d.Reactor != p.reactor || d.Protocol != p.protocol || d.Signature != "0x00" || !s.BlockNumber.IsUint64() || s.BlockNumber.Uint64() < d.PreparedBlock {
-		return d, common.Hash{}, errors.New("RFQ persisted identity mismatch")
-	}
-	request, _, err := p.quote(d.Quote, s.Account)
-	if err != nil {
-		return d, common.Hash{}, err
-	}
-	if request.Outputs[0].Amount.Cmp(p.minimum) < 0 {
-		return d, common.Hash{}, errors.New("RFQ persisted output below minimum")
-	}
-	if !equalRequest(request, d.Request) {
-		return d, common.Hash{}, errors.New("RFQ persisted quote/request mismatch")
-	}
-	domain := protocolio.Domain("Reactor", "1", s.ChainID, p.reactor)
-	payload, digest, err := authorization(domain, request)
-	if err != nil || digest != d.Digest || len(out.Actions) != 1 || !bytes.Equal(out.Actions[p.cfg.Action], payload) || len(out.SkipSteps) != 0 {
-		return d, domain, errors.New("RFQ persisted authorization mismatch")
-	}
-	expected := map[uint]string{}
-	if p.cfg.AmountInInput != nil {
-		expected[*p.cfg.AmountInInput] = request.AmountIn.String()
-	}
-	if p.cfg.AmountOutInput != nil {
-		expected[*p.cfg.AmountOutInput] = request.Outputs[0].Amount.String()
-	}
-	if p.cfg.DeadlineInput != nil {
-		expected[*p.cfg.DeadlineInput] = request.Deadline.String()
-	}
-	if p.cfg.NonceInput != nil {
-		expected[*p.cfg.NonceInput] = request.Nonce.String()
-	}
-	if len(out.Inputs) != len(expected) {
-		return d, domain, errors.New("RFQ persisted inputs mismatch")
-	}
-	for k, v := range expected {
-		if out.Inputs[k] != v {
-			return d, domain, errors.New("RFQ persisted inputs mismatch")
-		}
-	}
-	return d, domain, nil
-}
-func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provider.Output, state json.RawMessage) (provider.Progress, error) {
+func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared, st *progressState) (provider.Progress, error) {
 	if err := protocolio.Snapshot(s); err != nil {
 		return provider.Progress{}, err
 	}
-	d, domain, err := p.persisted(s, out)
-	if err != nil {
+	if d.ChainID != s.ChainID.String() || d.Account != s.Account || !s.BlockNumber.IsUint64() || s.BlockNumber.Uint64() < d.PreparedBlock {
+		return provider.Progress{}, errors.New("RFQ prepared chain/account mismatch")
+	}
+	domain := protocolio.Domain("Reactor", "1", s.ChainID, p.reactor)
+	if err := protocolio.Execution(ctx, p.chain, s); err != nil {
 		return provider.Progress{}, err
 	}
-	if err = protocolio.Execution(ctx, p.chain, s); err != nil {
+	if err := authorizingSign(s.Execution, d, domain); err != nil {
 		return provider.Progress{}, err
-	}
-	if err = authorizingSign(s.Execution, d, domain); err != nil {
-		return provider.Progress{}, err
-	}
-	st := progressState{Version: 1, Digest: d.Digest, NextBlock: d.PreparedBlock}
-	if len(state) != 0 {
-		if err = strictJSON(state, &st); err != nil || st.Version != 1 || st.Digest != d.Digest || st.NextBlock < d.PreparedBlock || st.NextBlock > s.BlockNumber.Uint64()+1 || (st.NextBlock == d.PreparedBlock && st.Anchor != (common.Hash{})) || (st.NextBlock > d.PreparedBlock && st.Anchor == (common.Hash{})) || (st.OrderID != "" && !uuid.MatchString(st.OrderID)) {
-			return provider.Progress{}, errors.New("RFQ invalid persisted scan cursor")
-		}
 	}
 	r := reactor.NewLiquidLaneReactor()
 	a := account.NewMerkleAccount()
@@ -341,10 +278,6 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	if err != nil {
 		return provider.Progress{}, errors.New("RFQ invalid nonce response")
 	}
-	outcome, complete, err := p.scan(ctx, s, d, &st, used)
-	if err != nil {
-		return provider.Progress{}, err
-	}
 	finish := func(name string, done bool) (provider.Progress, error) {
 		if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
 			return provider.Progress{}, err
@@ -352,46 +285,35 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 		if done {
 			st.Lookup = nil
 		}
-		raw, err := json.Marshal(st)
-		return provider.Progress{Done: done, Outcome: name, Reference: st.OrderID, State: raw}, err
+		return provider.Progress{Done: done, Outcome: name, Reference: st.OrderID}, nil
 	}
-	if outcome != "" {
-		return finish(outcome, true)
+	if !used && new(big.Int).SetUint64(s.Timestamp).Cmp(d.Request.Deadline) <= 0 {
+		raw, err = reads.At(2).CallData()
+		if err != nil {
+			return provider.Progress{}, err
+		}
+		approved, err := a.UnpackSignatures(raw)
+		if err != nil || !approved {
+			return provider.Progress{}, errors.New("RFQ account authorization unavailable")
+		}
+		raw, err = reads.At(3).CallData()
+		if err != nil {
+			return provider.Progress{}, err
+		}
+		balance, err := token.UnpackBalanceOf(raw)
+		if err != nil || balance.Cmp(d.Request.AmountIn) < 0 {
+			return provider.Progress{}, errors.New("RFQ input balance unavailable")
+		}
+		raw, err = reads.At(4).CallData()
+		if err != nil {
+			return provider.Progress{}, err
+		}
+		allowance, err := token.UnpackAllowance(raw)
+		if err != nil || allowance.Cmp(d.Request.AmountIn) < 0 {
+			return provider.Progress{}, errors.New("RFQ Reactor allowance unavailable")
+		}
 	}
-	if !complete {
-		return finish("scanning", false)
-	}
-	if used {
-		return provider.Progress{}, errors.New("RFQ nonce consumed without matching canonical evidence")
-	}
-	if new(big.Int).SetUint64(s.Timestamp).Cmp(d.Request.Deadline) > 0 {
-		return finish("expired", true)
-	}
-	raw, err = reads.At(2).CallData()
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	approved, err := a.UnpackSignatures(raw)
-	if err != nil || !approved {
-		return provider.Progress{}, errors.New("RFQ account authorization unavailable")
-	}
-	raw, err = reads.At(3).CallData()
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	balance, err := token.UnpackBalanceOf(raw)
-	if err != nil || balance.Cmp(d.Request.AmountIn) < 0 {
-		return provider.Progress{}, errors.New("RFQ input balance unavailable")
-	}
-	raw, err = reads.At(4).CallData()
-	if err != nil {
-		return provider.Progress{}, err
-	}
-	allowance, err := token.UnpackAllowance(raw)
-	if err != nil || allowance.Cmp(d.Request.AmountIn) < 0 {
-		return provider.Progress{}, errors.New("RFQ Reactor allowance unavailable")
-	}
-	found, complete, err := p.lookup(ctx, s, d, &st)
+	found, complete, err := p.lookup(ctx, s, d, st)
 	if err != nil {
 		return provider.Progress{}, err
 	}
@@ -400,6 +322,30 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	}
 	if !complete {
 		return finish("lookup-scanning", false)
+	}
+	if st.Cancelled {
+		if !used {
+			return finish("awaiting-receipt", false)
+		}
+		return finish("cancelled", true)
+	}
+	if st.TxHash != (common.Hash{}) {
+		if !used {
+			return finish("awaiting-receipt", false)
+		}
+		if err := p.fillReceipt(ctx, s, d, st.TxHash); err != nil {
+			return provider.Progress{}, err
+		}
+		return finish("settled", true)
+	}
+	if used {
+		if found {
+			return finish("awaiting-receipt", false)
+		}
+		return provider.Progress{}, errors.New("RFQ nonce consumed without matching canonical evidence")
+	}
+	if new(big.Int).SetUint64(s.Timestamp).Cmp(d.Request.Deadline) > 0 {
+		return finish("expired", true)
 	}
 	if found {
 		return finish("published", false)
@@ -418,5 +364,3 @@ func (p *Provider) Advance(ctx context.Context, s provider.Snapshot, out provide
 	st.OrderID = response.OrderID
 	return finish("published", false)
 }
-
-var _ provider.Provider = (*Provider)(nil)

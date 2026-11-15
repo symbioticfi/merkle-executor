@@ -16,7 +16,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
@@ -43,13 +42,13 @@ func TestSourceReadsCurrentBackendCertificate(t *testing.T) {
 	}))
 	defer server.Close()
 	reads := 0
-	source, err := New(protocolio.HTTPConfig{URL: server.URL + "/api/v1"}, server.Client(), readerFunc(func(_ context.Context, call ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	source, err := New(server.URL+"/api/v1", server.Client(), readerFunc(func(_ context.Context, call ethereum.CallMsg, block *big.Int) ([]byte, error) {
 		reads++
 		if call.To == nil || *call.To != common.HexToAddress(bundle.Account) || block == nil || block.Cmp(big.NewInt(123)) != 0 || string(call.Data) != string(merkleaccount.NewMerkleAccount().PackAdapter()) {
 			t.Fatal("account adapter was not read at the authenticated pin")
 		}
 		return common.LeftPadBytes(common.HexToAddress(bundle.Adapter).Bytes(), 32), nil
-	}), nil)
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,9 +142,9 @@ func TestSourceRejectsCertificateScopeAndLeafChanges(t *testing.T) {
 			tc.mutate(bundle, bundle["metadata"].(map[string]any))
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(document) }))
 			defer server.Close()
-			source, err := New(protocolio.HTTPConfig{URL: server.URL}, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+			source, err := New(server.URL, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 				return common.LeftPadBytes(adapter.Bytes(), 32), nil
-			}), nil)
+			}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -177,7 +176,7 @@ func TestSourceRejectsFailedAccountAdapterBeforeHTTP(t *testing.T) {
 			calls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
 			defer server.Close()
-			source, err := New(protocolio.HTTPConfig{URL: server.URL}, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) { return tc.data, tc.err }), nil)
+			source, err := New(server.URL, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) { return tc.data, tc.err }))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -221,9 +220,9 @@ func TestSourcePreservesUint256ChainIDPrecision(t *testing.T) {
 				root := common.HexToHash(bundle["root"].(string))
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(document) }))
 				defer server.Close()
-				source, err := New(protocolio.HTTPConfig{URL: server.URL}, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+				source, err := New(server.URL, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 					return common.LeftPadBytes(adapter.Bytes(), 32), nil
-				}), nil)
+				}))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -260,13 +259,23 @@ func TestSourceHonorsExactHTTPResponseBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundle := response.Bundle
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+		_, _ = w.Write(bytes.Repeat([]byte(" "), int(HostMaxResponseBytes)-len(body)))
+		if strings.Contains(r.URL.Path, "oversize") {
+			_, _ = w.Write([]byte(" "))
+		}
+	}))
 	defer server.Close()
 	for _, extra := range []int64{0, 1} {
 		t.Run(fmt.Sprintf("responseOverBound=%d", extra), func(t *testing.T) {
-			source, err := New(protocolio.HTTPConfig{URL: server.URL, MaxResponseBytes: int64(len(body)) - extra}, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+			baseURL := server.URL
+			if extra != 0 {
+				baseURL += "/oversize"
+			}
+			source, err := New(baseURL, server.Client(), readerFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
 				return common.LeftPadBytes(common.HexToAddress(bundle.Adapter).Bytes(), 32), nil
-			}), nil)
+			}))
 			if err != nil {
 				t.Fatal(err)
 			}

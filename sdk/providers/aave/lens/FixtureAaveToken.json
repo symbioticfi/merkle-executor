@@ -1,0 +1,133 @@
+{
+  "abi": [
+    {
+      "type": "function",
+      "name": "allowance",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "approve",
+      "inputs": [
+        {
+          "name": "spender",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "balanceOf",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "mint",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "totalSupply",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "transferFrom",
+      "inputs": [
+        {
+          "name": "from",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "to",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    }
+  ],
+  "bytecode": "0x60808060405234601557610295908161001a8239f35b5f80fdfe608060405260033611610010575f80fd5b5f3560e01c8063095ea7b3146101e757806318160ddd146101ca57806323b872dd1461013157806340c10f19146100e557806370a08231146100ae5763dd62ed3e1461005a575f80fd5b346100aa5760403660031901126100aa5761007361022e565b61007b610244565b6001600160a01b039182165f908152600160209081526040808320949093168252928352819020549051908152f35b5f80fd5b346100aa5760203660031901126100aa576001600160a01b036100cf61022e565b165f525f602052602060405f2054604051908152f35b346100aa5760403660031901126100aa5761012c61010161022e565b6024359060018060a01b03165f525f60205260405f2061012282825461027b565b905560025461027b565b600255005b346100aa5760603660031901126100aa5761014a61022e565b610152610244565b6044359160018060a01b0316805f52600160205260405f2060018060a01b0333165f5260205260405f2061018784825461025a565b90555f525f60205260405f2061019e83825461025a565b905560018060a01b03165f525f6020526101bd60405f2091825461027b565b9055602060405160018152f35b346100aa575f3660031901126100aa576020600254604051908152f35b346100aa5760403660031901126100aa5761020061022e565b335f52600160205260405f209060018060a01b03165f5260205260405f206024359055602060405160018152f35b600435906001600160a01b03821682036100aa57565b602435906001600160a01b03821682036100aa57565b9190820391821161026757565b634e487b7160e01b5f52601160045260245ffd5b919082018092116102675756fea164736f6c6343000826000a",
+  "sourceSHA256": "0e258c6b93c9811a37330edc933f8cb940a10be4b3daa66786e461dbace8dce5"
+}

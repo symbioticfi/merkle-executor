@@ -5,37 +5,25 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"strconv"
 )
 
-// ValidateComposition rejects ambiguous receipt attribution without changing the
-// committed program. It also runs on recovered jobs, using their durable bytes.
-func ValidateComposition(calldata []byte, providers []provider.Provider) error {
-	return validateComposition(calldata, providers, nil)
-}
-
-func ValidatePlanComposition(calldata []byte, providers []provider.Provider, outputs []provider.Output) error {
+// ValidatePlanComposition checks receipt attribution against immutable call data.
+func ValidatePlanComposition(calldata []byte, providers []Provider, outputs [][]provider.Output) error {
 	if len(providers) != len(outputs) {
 		return errors.New("provider output count differs from prepared plan")
 	}
-	return validateComposition(calldata, providers, outputs)
-}
-
-func validateComposition(calldata []byte, providers []provider.Provider, outputs []provider.Output) error {
+	for _, group := range outputs {
+		if len(group) == 0 {
+			return errors.New("provider returned no execution outputs")
+		}
+	}
 	owners := make(map[common.Address]int)
 	claims := make(map[string]common.Address)
 	for i, p := range providers {
-		var targets map[string]common.Address
-		if exclusive, ok := p.(provider.ExclusiveOutputTargetProvider); ok {
-			if outputs == nil {
-				return errors.New("derived exclusive targets require persisted provider outputs")
-			}
-			var err error
-			targets, err = exclusive.ExclusiveOutputTargets(outputs[i])
-			if err != nil {
-				return err
-			}
-		} else if exclusive, ok := p.(provider.ExclusiveTargetProvider); ok {
-			targets = exclusive.ExclusiveTargets()
+		targets, err := exclusiveTargets(p, outputs, i)
+		if err != nil {
+			return err
 		}
 		if err := addTargetClaims(targets, i, owners, claims); err != nil {
 			return err
@@ -49,6 +37,29 @@ func validateComposition(calldata []byte, providers []provider.Provider, outputs
 		return err
 	}
 	return validateTargetClaims(targets, owners, claims)
+}
+
+func exclusiveTargets(p Provider, outputs [][]provider.Output, i int) (map[string]common.Address, error) {
+	if exclusive, ok := p.(provider.ExclusiveOutputTargetProvider); ok {
+		if i >= len(outputs) || len(outputs[i]) == 0 {
+			return nil, errors.New("derived exclusive targets require prepared provider outputs")
+		}
+		all := map[string]common.Address{}
+		for j, output := range outputs[i] {
+			targets, err := exclusive.ExclusiveOutputTargets(output)
+			if err != nil {
+				return nil, err
+			}
+			for key, target := range targets {
+				if len(outputs[i]) > 1 {
+					key = "cycle" + strconv.Itoa(j) + "/" + key
+				}
+				all[key] = target
+			}
+		}
+		return all, nil
+	}
+	return nil, nil
 }
 
 // ValidateRecipeComposition checks pure authenticated target ownership before
@@ -108,5 +119,66 @@ func addTargetClaims(targets map[string]common.Address, owner int, owners map[co
 		owners[target] = owner
 		claims[key] = target
 	}
+	return nil
+}
+
+// executionComposition inspects each candidate once. Rejected additions leave
+// the accepted prefix intact, including when receipt attribution conflicts.
+type executionComposition struct {
+	targets map[common.Address]bool
+	owners  map[common.Address]bool
+	opaque  bool
+}
+
+func newExecutionComposition() *executionComposition {
+	return &executionComposition{targets: map[common.Address]bool{}, owners: map[common.Address]bool{}}
+}
+
+func (c *executionComposition) add(plan Plan, strategy Strategy) error {
+	if err := validatePlanMember(plan, strategy); err != nil {
+		return err
+	}
+	if len(strategy.Providers) != len(plan.Outputs) {
+		return errors.New("provider output count differs from prepared plan")
+	}
+	owners, claims := map[common.Address]int{}, map[string]common.Address{}
+	for i, runtime := range strategy.Providers {
+		if len(plan.Outputs[i]) == 0 {
+			return errors.New("provider returned no execution outputs")
+		}
+		exclusive, err := exclusiveTargets(runtime, plan.Outputs, i)
+		if err != nil {
+			return err
+		}
+		if err = addTargetClaims(exclusive, i, owners, claims); err != nil {
+			return err
+		}
+	}
+	targets, targetErr := recipes.ManagedTargets(plan.Calldata)
+	if len(owners) != 0 || len(c.owners) != 0 {
+		if targetErr != nil {
+			return targetErr
+		}
+		if err := validateTargetClaims(targets, owners, claims); err != nil {
+			return err
+		}
+		for _, target := range targets {
+			if c.owners[target] {
+				return errors.New("managed call conflicts with an earlier exclusive receipt target")
+			}
+		}
+		for target := range owners {
+			if c.opaque || c.targets[target] {
+				return errors.New("exclusive receipt target conflicts with an earlier call")
+			}
+		}
+	}
+	for target := range owners {
+		c.owners[target] = true
+	}
+	for _, target := range targets {
+		c.targets[target] = true
+	}
+	c.opaque = c.opaque || targetErr != nil
 	return nil
 }

@@ -70,7 +70,7 @@ func InputIndex(index uint) error {
 
 // RejectAliases prevents operational values from changing when an anchor moves
 // without changing the node identity used by historical configuration hashes.
-// Anchor-free and unused-anchor configuration retains its original fingerprint.
+// Anchor-free and unused-anchor configuration retains its original structure.
 func RejectAliases(node yaml.Node) error {
 	if node.Kind == yaml.AliasNode {
 		return errors.New("YAML aliases are not supported in provider configuration")

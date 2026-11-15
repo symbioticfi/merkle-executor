@@ -42,7 +42,7 @@ func TestLensArtifactIdentity(t *testing.T) {
 	}
 	sourceHash := sha256.Sum256(source)
 	runtimeHash := sha256.Sum256(artifact.Runtime)
-	if !strings.HasPrefix(artifact.Compiler, "0.8.37+") || artifact.EVMVersion != "cancun" || len(contracts.Revision) != 40 || artifact.RecipesRevision != contracts.Revision || artifact.SourceSHA256 != hex.EncodeToString(sourceHash[:]) || artifact.RuntimeSHA256 != hex.EncodeToString(runtimeHash[:]) {
+	if !strings.HasPrefix(artifact.Compiler, "0.8.38+") || artifact.EVMVersion != "cancun" || len(contracts.Revision) != 40 || artifact.RecipesRevision != contracts.Revision || artifact.SourceSHA256 != hex.EncodeToString(sourceHash[:]) || artifact.RuntimeSHA256 != hex.EncodeToString(runtimeHash[:]) {
 		t.Fatal("lens artifact/compiler/source/runtime identity differs")
 	}
 }

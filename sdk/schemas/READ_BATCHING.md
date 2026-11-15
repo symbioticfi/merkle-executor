@@ -15,19 +15,49 @@ Account inherited hasRole: OZ-upgradeable `14f52c54d3a1eefbda3d4071efba24d3c1e07
 
 ## CoW
 
-Settlement `0x9008D19f58AAbD9eD0D60971565AA8510560ab41`: `src/contracts/GPv2Settlement.sol` SHA256 `2878f0c7cf57b91a5ee6170eac15045c8c415993e676e2a23ac792a07607da63`, public filledAmount map; `src/contracts/mixins/GPv2Signing.sol` SHA256 `dc678895f9eb4cef3910f88621d99496da0daa5d14866e23a16b7cbb4e847a19`, immutable domainSeparator. All three Advance getters including pinned account.signatures safe. Persisted identity checks and terminal/idle precedence remain mandatory.
+Settlement `0x9008D19f58AAbD9eD0D60971565AA8510560ab41`: `src/contracts/GPv2Settlement.sol` SHA256 `2878f0c7cf57b91a5ee6170eac15045c8c415993e676e2a23ac792a07607da63`, public filledAmount map; `src/contracts/mixins/GPv2Signing.sol` SHA256 `dc678895f9eb4cef3910f88621d99496da0daa5d14866e23a16b7cbb4e847a19`, immutable domainSeparator. All three Advance getters including pinned account.signatures safe. Prepared identity checks and terminal/idle precedence remain mandatory.
 
 ## Merkl
 
 The provider uses the distributor's caller-independent `getMerkleRoot`, `claimed`
-and `claimRecipient` getters in one strict aggregate. The root and recipient checks
-remain mandatory; failed members fail the preparation. [Schema provenance](PROVENANCE.md)
+and `claimRecipient` getters. Automatic preparation deduplicates root/default
+recipient reads per distributor and claimed/recipient reads per token across all
+claims, with at most 256 inner calls per aggregate. Member failures are consumed
+in claim order; every required root and recipient check remains mandatory. The
+direct typed provider retains its strict single aggregate. [Schema provenance](PROVENANCE.md)
 records the distributor and Multicall3 sources. This opt-in scope does not authorize
 arbitrary issuer getters or token implementations for aggregation.
 
 ## Exclusions
 
-SDK direct data RPC reads (`From=snapshot.Account`), arbitrary ERC1271 signatures, full execution simulations and unknown external getter implementations retain original isolated eth_call context. JSON batching still eliminates independent network round trips. All final canonical fences and hash-linked ancestry walks remain ordered singles; writes/signing/nonce admission are excluded.
+SDK direct data RPC reads (`From=snapshot.Account`), arbitrary ERC1271 signatures, full execution simulations and unknown external getter implementations retain original isolated eth_call context. JSON batching still eliminates independent network round trips. Closing canonical header reads can share a JSON array after execution; hash-linked ancestry walks remain ordered. Writes, signing and nonce admission are excluded.
+
+## Attempt-wide preparation
+
+`recipes.DiscoverBatch` opens one block for all executors, groups metadata and
+deduplicates account roots and recipe-event headers. Cold event logs share the
+event-evidence stage; authenticated RAM cache hits omit log discovery. A shared
+closing header authenticates discovery before any provider acquisition starts.
+Only final admission publishes new cache entries.
+
+`ValidatePreparedBatch` rereads selected executor metadata at one fresh block,
+groups roles by account, executor and leaf, checks original pins and simulates
+the exact caller-bound transaction. A direct execution shares the JSON array
+with independent getters while retaining isolated EVM state. Same-executor and
+delegated multicalls retain their sequential result probes plus an unchanged-code
+exact envelope simulation. Closing headers are deduplicated by block number/hash
+and execute after simulation. Neither cached metadata nor cached role state may
+skip these reads. An inactive member or changed numerical witness carries its
+member index; all inactive indices come from one successful envelope and are
+reported only after canonical closing guards. Transport failures never become an
+idle member.
+
+Native repeat selection grows candidate lengths exponentially and searches a
+rejected interval for the executable prefix. Successful probes inspect every
+result in order and stop at the first idle or repeated vector. Executor runtime
+is read once per selection, and final selected bytes receive their own exact
+unchanged-code simulation. Independent JSON-RPC batching never substitutes for
+these sequential EVM effects.
 
 ## Liquid Lane RFQ consumer
 
@@ -38,9 +68,8 @@ adapters revision above is also a direct mapping read. These are the only three
 safe getters used by the consumer's Advance stage. Domain can be staged into initial
 recipe metadata before quote acquisition. Token `balanceOf` and `allowance` targets
 come from the authenticated recipe and can have arbitrary implementations. They
-remain isolated eth_call members sharing the JSON array; no caller-independence is inferred from their ABI. Fill and indexed
-account cancellation logs share a separate array with the range header. A matching
-event header and receipt share a later batch; canonical closure follows those reads. [Full source hashes and semantics](LIQUID_LANE_RFQ.md).
+remain isolated eth_call members sharing the JSON array; no caller-independence is inferred from their ABI. The `/orders` API supplies a candidate transaction hash; its receipt and canonical
+headers are inspected directly. No Fill or nonce invalidation range is scanned. [Full source hashes and semantics](LIQUID_LANE_RFQ.md).
 
 ## Native recipe reads
 

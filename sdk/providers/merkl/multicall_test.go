@@ -154,7 +154,7 @@ func TestPrepareRejectsInvalidAggregateWithoutIndividualFallback(t *testing.T) {
 				}
 				return multicall.NewMulticall3().GetABI().Methods["aggregate3"].Outputs.Pack(results)
 			})
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: 452, AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: true, DedicatedClaimGroup: true}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: srv.URL}, Distributor: addr(4).Hex(), Multicall3: addr(5).Hex(), Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "0:0", CalldataBytes: 452, AmountInputs: []uint{0}, ClaimableInputs: []uint{1}, SkipIfEmpty: true, DedicatedClaimGroup: true}
 			p, err := New(cfg, provider.Deps{Chain: chain, HTTP: srv.Client()})
 			if err != nil {
 				t.Fatal(err)
@@ -180,7 +180,7 @@ func TestPrepareRejectsInvalidAggregateWithoutIndividualFallback(t *testing.T) {
 func TestConstructorRequiresExplicitMulticallDeployment(t *testing.T) {
 	for _, address := range []string{"", "0x0000000000000000000000000000000000000000", "not-an-address"} {
 		t.Run(address, func(t *testing.T) {
-			cfg := Config{HTTP: protocolio.HTTPConfig{URL: "https://example.invalid"}, Distributor: addr(4).Hex(), Multicall3: address, Tokens: []string{addr(1).Hex()}, ProofLengths: []int{1}, Action: "0:0", CalldataBytes: 452}
+			cfg := Config{HTTP: protocolio.HTTPConfig{URL: "https://example.invalid"}, Distributor: addr(4).Hex(), Multicall3: address, Tokens: []string{addr(1).Hex()}, ProofCapacities: []int{1}, Action: "0:0", CalldataBytes: 452}
 			_, err := New(cfg, provider.Deps{})
 			if err == nil || !strings.Contains(err.Error(), "multicall3 must be a nonzero address") {
 				t.Fatalf("missing or invalid multicall deployment not clearly rejected: %v", err)
@@ -242,7 +242,7 @@ func TestPrepareValidatesWholeBatchBeforeReturningIdle(t *testing.T) {
 			for i, row := range rows {
 				tokens[i], users[i], amounts[i] = common.HexToAddress(row.Token.Address), addr(3), big.NewInt(100)
 				cfg.Tokens = append(cfg.Tokens, row.Token.Address)
-				cfg.ProofLengths = append(cfg.ProofLengths, 5)
+				cfg.ProofCapacities = append(cfg.ProofCapacities, 5)
 			}
 			cfg.CalldataBytes = len(a.PackClaim(users, tokens, amounts, proofs))
 			p, err := New(cfg, provider.Deps{Chain: multicallReader(t, tokens, chain), HTTP: srv.Client()})

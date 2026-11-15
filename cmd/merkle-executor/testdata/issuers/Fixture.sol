@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.37;
+pragma solidity 0.8.38;
 
 // Local lifecycle fixture only. Minting, vault registration and fulfillment are
 // deliberately permissionless to keep issuer administration outside this test.
@@ -47,6 +47,10 @@ contract FixtureAsyncIssuer {
     function finalize(address controller) external {
         maxRedeem[controller] += pendingShares[controller];
         pendingShares[controller] = 0;
+    }
+
+    function claimableRedeemRequest(uint256, address controller) external view returns (uint256) {
+        return maxRedeem[controller];
     }
 
     function redeem(uint256 shares, address receiver, address controller) external returns (uint256 assets) {

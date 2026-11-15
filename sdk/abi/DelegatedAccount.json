@@ -1,0 +1,4 @@
+[
+  {"type":"function","name":"execute","stateMutability":"payable","inputs":[{"name":"mode","type":"bytes32"},{"name":"executionCalldata","type":"bytes"}],"outputs":[]},
+  {"type":"function","name":"supportsExecutionMode","stateMutability":"view","inputs":[{"name":"mode","type":"bytes32"}],"outputs":[{"name":"supported","type":"bool"}]}
+]

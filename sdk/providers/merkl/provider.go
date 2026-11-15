@@ -28,7 +28,7 @@ type Config struct {
 	Multicall3          string                `yaml:"multicall3"`
 	Distributor         string                `yaml:"distributor"`
 	Tokens              []string              `yaml:"tokens"`
-	ProofLengths        []int                 `yaml:"proofLengths"`
+	ProofCapacities     []int                 `yaml:"proofCapacities"`
 	Action              string                `yaml:"action"`
 	CalldataBytes       int                   `yaml:"calldataBytes"`
 	MinClaimable        string                `yaml:"minClaimable"`
@@ -36,7 +36,6 @@ type Config struct {
 	ClaimableInputs     []uint                `yaml:"claimableInputs"`
 	SkipIfEmpty         bool                  `yaml:"skipIfEmpty"`
 	DedicatedClaimGroup bool                  `yaml:"dedicatedClaimGroup"`
-	DirectRecipient     bool                  `yaml:"directRecipient"`
 	AllowIdle           bool                  `yaml:"allowIdle"`
 }
 type Client struct{ http *protocolio.Client }
@@ -81,8 +80,8 @@ func New(c Config, deps provider.Deps) (*Provider, error) {
 	if e := protocolio.Action(c.Action); e != nil {
 		return nil, e
 	}
-	if len(c.Tokens) == 0 || len(c.Tokens) > 32 || len(c.ProofLengths) != len(c.Tokens) {
-		return nil, errors.New("Merkl requires 1..32 tokens and an exact proofLengths entry per token")
+	if len(c.Tokens) == 0 || len(c.Tokens) > 32 || len(c.ProofCapacities) != len(c.Tokens) {
+		return nil, errors.New("Merkl requires 1..32 tokens and one proofCapacities entry per token")
 	}
 	if c.CalldataBytes < 4 || c.CalldataBytes > 131072 {
 		return nil, errors.New("Merkl calldataBytes outside 4..131072")
@@ -135,13 +134,13 @@ func New(c Config, deps provider.Deps) (*Provider, error) {
 		}
 		seen[t] = true
 		p.tokens = append(p.tokens, t)
-		if c.ProofLengths[i] < 0 || c.ProofLengths[i] > 64 {
-			return nil, errors.New("Merkl proof length outside 0..64")
+		if c.ProofCapacities[i] < 0 || c.ProofCapacities[i] > 64 {
+			return nil, errors.New("Merkl proof capacity outside 0..64")
 		}
 	}
 	if c.SkipIfEmpty {
 		// Validate the configured ABI shape even when no reward row is available.
-		payload, e := binding.NewMerklDistributor().TryPackClaim([]common.Address{{}}, p.tokens, []*big.Int{new(big.Int)}, [][][32]byte{make([][32]byte, c.ProofLengths[0])})
+		payload, e := binding.NewMerklDistributor().TryPackClaim([]common.Address{{}}, p.tokens, []*big.Int{new(big.Int)}, [][][32]byte{make([][32]byte, c.ProofCapacities[0])})
 		if e != nil || len(payload) != c.CalldataBytes {
 			return nil, errors.New("Merkl calldataBytes does not match configured single-claim layout")
 		}
@@ -166,32 +165,6 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	return p.prepare(ctx, s, func() ([]multicall.Multicall3Result, error) { return p.readBatch(ctx, s) })
 }
 
-// PlanPreparation only encodes configured reads. The strict aggregate stays an
-// isolated eth_call; it must not be nested inside the host's safe-getter aggregate.
-func (p *Provider) PlanPreparation(pin protocolio.PreparationPin) (protocolio.PreparationPlan, error) {
-	if err := pin.Validate(); err != nil {
-		return protocolio.PreparationPlan{}, err
-	}
-	payload, err := p.batchPayload(pin.Account)
-	if err != nil {
-		return protocolio.PreparationPlan{}, err
-	}
-	return protocolio.PreparationPlan{
-		Requests: []protocolio.ReadRequest{protocolio.ContractRead(p.multicall, payload, new(big.Int).SetUint64(pin.BlockNumber), false)},
-		Resolve: func(ctx context.Context, s provider.Snapshot, read protocolio.ReadAccessor) (provider.Output, error) {
-			if !pin.Matches(s) {
-				return provider.Output{}, errors.New("Merkl staged identity mismatch")
-			}
-			return p.prepare(ctx, s, func() ([]multicall.Multicall3Result, error) {
-				raw, err := read(0).CallData()
-				if err != nil {
-					return nil, err
-				}
-				return p.decodeBatch(raw)
-			})
-		},
-	}, nil
-}
 func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, read func() ([]multicall.Multicall3Result, error)) (provider.Output, error) {
 	if e := protocolio.Snapshot(s); e != nil {
 		return provider.Output{}, e
@@ -280,8 +253,8 @@ func (p *Provider) prepareRewards(s provider.Snapshot, entries []wire.MerklEntry
 		if reward.Token.Decimals < 0 || reward.Token.Decimals > 255 {
 			return provider.Output{}, errors.New("Merkl invalid token decimals")
 		}
-		if len(reward.Proofs) != p.cfg.ProofLengths[i] {
-			return provider.Output{}, errors.New("Merkl proof does not fit approved proofLengths layout")
+		if len(reward.Proofs) > p.cfg.ProofCapacities[i] {
+			return provider.Output{}, errors.New("Merkl proof does not fit approved proofCapacities layout")
 		}
 		for _, raw := range reward.Proofs {
 			h, e := protocolio.Hash(raw)
@@ -316,7 +289,7 @@ func (p *Provider) prepareRewards(s provider.Snapshot, entries []wire.MerklEntry
 			}
 			recipient = defaultRecipient
 		}
-		if !p.cfg.DirectRecipient && recipient != (common.Address{}) && recipient != s.Account {
+		if recipient != (common.Address{}) && recipient != s.Account {
 			return provider.Output{}, errors.New("Merkl distributor would redirect rewards away from account")
 		}
 		if delta.Cmp(p.minimum) >= 0 {
@@ -335,10 +308,18 @@ func (p *Provider) prepareRewards(s provider.Snapshot, entries []wire.MerklEntry
 	if claimable.Sign() == 0 && !p.cfg.AllowIdle {
 		return p.empty("Merkl rewards below minClaimable")
 	}
-	payload, e := a.TryPackClaim(users, p.tokens, amounts, proofs)
-	if p.cfg.DirectRecipient {
-		recipients := append([]common.Address(nil), users...)
-		payload, e = a.TryPackClaimWithRecipient(users, p.tokens, amounts, proofs, recipients, make([][]byte, len(users)))
+	reserved := make([][][32]byte, len(proofs))
+	for i, proof := range proofs {
+		reserved[i] = make([][32]byte, p.cfg.ProofCapacities[i])
+		copy(reserved[i], proof)
+	}
+	payload, e := a.TryPackClaim(users, p.tokens, amounts, reserved)
+	if e == nil {
+		proofArray := 4 + int(new(big.Int).SetBytes(payload[100:132]).Uint64())
+		for i, proof := range proofs {
+			relative := int(new(big.Int).SetBytes(payload[proofArray+32+32*i : proofArray+64+32*i]).Uint64())
+			big.NewInt(int64(len(proof))).FillBytes(payload[proofArray+32+relative : proofArray+64+relative])
+		}
 	}
 	if e != nil {
 		return provider.Output{}, errors.New("encode Merkl claim")
@@ -381,9 +362,6 @@ func VerifyProof(user, token common.Address, amount *big.Int, proof [][32]byte, 
 	}
 	return h == root
 }
-func (p *Provider) Advance(_ context.Context, _ provider.Snapshot, _ provider.Output, _ json.RawMessage) (provider.Progress, error) {
-	return provider.Progress{Done: true}, nil
-}
 
 // readBatch fetches the entire bounded distributor snapshot in one eth_call.
 // Every getter is required to execute successfully; decoding the default recipient
@@ -400,17 +378,7 @@ func (p *Provider) readBatch(ctx context.Context, s provider.Snapshot) ([]multic
 	return p.decodeBatch(raw)
 }
 func (p *Provider) batchPayload(account common.Address) ([]byte, error) {
-	distributor := binding.NewMerklDistributor()
-	calls := make([]multicall.Multicall3Call3, 0, 2+2*len(p.tokens))
-	add := func(data []byte) {
-		calls = append(calls, multicall.Multicall3Call3{Target: p.distributor, AllowFailure: false, CallData: data})
-	}
-	add(distributor.PackGetMerkleRoot())
-	add(distributor.PackClaimRecipient(account, common.Address{}))
-	for _, token := range p.tokens {
-		add(distributor.PackClaimed(account, token))
-		add(distributor.PackClaimRecipient(account, token))
-	}
+	calls := rewardCalls(p.distributor, account, p.tokens)
 	aggregate := multicall.NewMulticall3()
 	payload, err := aggregate.TryPackAggregate3(calls)
 	if err != nil {

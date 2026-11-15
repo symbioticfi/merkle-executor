@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -114,7 +116,7 @@ func TestHTTPBatchRejectsAmbiguousWireResponsesWithoutRetry(t *testing.T) {
 			}))
 			defer server.Close()
 			var first, second hexutil.Bytes
-			method := "eth_call"
+			method := "eth_getLogs"
 			if mode == "null" {
 				method = "eth_getBlockByNumber"
 			}
@@ -146,6 +148,78 @@ func TestHTTPBatchRejectsAmbiguousWireResponsesWithoutRetry(t *testing.T) {
 			}
 			if err != nil && strings.Contains(err.Error(), "private") {
 				t.Fatal("private body exposed")
+			}
+		})
+	}
+}
+
+func TestHTTPContractReadsUseSingleRequests(t *testing.T) {
+	for _, count := range []int{1, 3} {
+		t.Run(big.NewInt(int64(count)).String(), func(t *testing.T) {
+			var calls atomic.Int32
+			arrived := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == int32(count) {
+					close(arrived)
+				}
+				select {
+				case <-arrived:
+				case <-r.Context().Done():
+					return
+				}
+				var request batchMessage
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error("eth_call must use a JSON object", err)
+					http.Error(w, "batch unsupported", http.StatusBadRequest)
+					return
+				}
+				if request.Method != "eth_call" {
+					t.Error("method changed", request.Method)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": request.Params[0]})
+			}))
+			defer server.Close()
+			results := make([]hexutil.Bytes, count)
+			batch := make([]rpc.BatchElem, count)
+			for i := range batch {
+				batch[i] = rpc.BatchElem{Method: "eth_call", Args: []any{hexutil.Encode([]byte{byte(i + 1)})}, Result: &results[i]}
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if err := CallHTTPBatch(ctx, server.Client(), server.URL, batch); err != nil {
+				t.Fatal(err)
+			}
+			if calls.Load() != int32(count) {
+				t.Fatal("unexpected retries", calls.Load())
+			}
+			for i := range batch {
+				if batch[i].Error != nil || len(results[i]) != 1 || results[i][0] != byte(i+1) {
+					t.Fatalf("result association changed: %+v %+v", batch, results)
+				}
+			}
+		})
+	}
+}
+
+func TestHTTPSingleRejectsInvalidResponses(t *testing.T) {
+	for _, response := range []string{
+		`[{"jsonrpc":"2.0","id":1,"result":"0x01"}]`,
+		`{"jsonrpc":"2.0","id":2,"result":"0x01"}`,
+		`{"jsonrpc":"1.0","id":1,"result":"0x01"}`,
+		`{"jsonrpc":"2.0","id":1,"result":"0x01","error":{"code":-32000,"message":"private"}}`,
+		`{"jsonrpc":"2.0","id":1}`,
+		`null`,
+	} {
+		t.Run(response, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(response))
+			}))
+			defer server.Close()
+			var result hexutil.Bytes
+			batch := []rpc.BatchElem{{Method: "eth_call", Result: &result}}
+			err := CallHTTPBatch(t.Context(), server.Client(), server.URL, batch)
+			if err == nil || strings.Contains(err.Error(), "private") {
+				t.Fatal("invalid single response accepted or leaked", err)
 			}
 		})
 	}

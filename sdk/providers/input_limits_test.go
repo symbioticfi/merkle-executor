@@ -35,11 +35,11 @@ func TestEveryProviderInputIndexBoundary(t *testing.T) {
 			return err
 		}},
 		{"merkl/amount", func(i *uint) error {
-			_, err := merkl.New(merkl.Config{HTTP: protocolio.HTTPConfig{URL: "http://localhost"}, Multicall3: b, Distributor: a, Tokens: []string{a}, ProofLengths: []int{0}, Action: "0:0", CalldataBytes: 4, AmountInputs: []uint{*i}}, deps)
+			_, err := merkl.New(merkl.Config{HTTP: protocolio.HTTPConfig{URL: "http://localhost"}, Multicall3: b, Distributor: a, Tokens: []string{a}, ProofCapacities: []int{0}, Action: "0:0", CalldataBytes: 4, AmountInputs: []uint{*i}}, deps)
 			return err
 		}},
 		{"merkl/claimable", func(i *uint) error {
-			_, err := merkl.New(merkl.Config{HTTP: protocolio.HTTPConfig{URL: "http://localhost"}, Multicall3: b, Distributor: a, Tokens: []string{a}, ProofLengths: []int{0}, Action: "0:0", CalldataBytes: 4, ClaimableInputs: []uint{*i}}, deps)
+			_, err := merkl.New(merkl.Config{HTTP: protocolio.HTTPConfig{URL: "http://localhost"}, Multicall3: b, Distributor: a, Tokens: []string{a}, ProofCapacities: []int{0}, Action: "0:0", CalldataBytes: 4, ClaimableInputs: []uint{*i}}, deps)
 			return err
 		}},
 	} {

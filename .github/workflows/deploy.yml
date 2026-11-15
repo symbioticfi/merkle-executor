@@ -1,0 +1,81 @@
+name: build & deploy
+
+on:
+  push:
+    branches: [stage, main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  image:
+    environment: deploy
+    needs: ci
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
+
+      - id: meta
+        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # pin@v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # pin@v4.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # pin@v7.4.0
+        # Tags are immutable, so a re-run for an already pushed commit fails to push.
+        # The digest step below falls back to the existing image so the deploy still dispatches.
+        continue-on-error: true
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: symbioticfi/merkle-executor:${{ github.sha }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.meta.outputs.date }}
+
+      - id: digest
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: symbioticfi/merkle-executor:${{ github.sha }}
+        run: |
+          if [ "$BUILD_OUTCOME" = "success" ]; then
+            echo "digest=$BUILD_DIGEST" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! digest=$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -er .digest); then
+            echo "::error::build failed and $IMAGE does not exist"
+            exit 1
+          fi
+          echo "::warning::build failed; $IMAGE already exists, deploying $digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  dispatch:
+    # shortcut: main only publishes the image; dispatch deploy_executor_prod.yml here once
+    # vault-solver-deploy has a prod executor profile (own executors and caller key).
+    if: github.ref_name == 'stage'
+    needs: image
+    runs-on: ubuntu-latest
+    environment: deploy
+    steps:
+      - name: Trigger deploy
+        env:
+          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+          IMAGE_TAG: ${{ github.sha }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          gh workflow run deploy_executor_stage.yml \
+            --repo symbioticfi/vault-solver-deploy --ref main \
+            -f image_tag="$IMAGE_TAG" -f digest="$DIGEST"

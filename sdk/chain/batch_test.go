@@ -184,8 +184,8 @@ func TestMixedBatchAggregatesOnlyCompatibleVerifiedCalls(t *testing.T) {
 				requests++
 				var reqs []rpcRequest
 				_ = json.Unmarshal(body, &reqs)
-				if len(reqs) != 2 {
-					t.Fatalf("mixed stage should use aggregate plus isolated call, got%d", len(reqs))
+				if len(reqs) != 3 {
+					t.Fatalf("mixed stage should use aggregate, isolated call and header, got%d", len(reqs))
 				}
 				var call struct {
 					To    common.Address
@@ -220,7 +220,7 @@ func TestMixedBatchAggregatesOnlyCompatibleVerifiedCalls(t *testing.T) {
 				if mode == "malformed" {
 					raw = []byte{1}
 				}
-				response := []map[string]any{{"jsonrpc": "2.0", "id": reqs[0].ID, "result": hexutil.Encode(raw)}, {"jsonrpc": "2.0", "id": reqs[1].ID, "result": "0x0b"}}
+				response := []map[string]any{{"jsonrpc": "2.0", "id": reqs[0].ID, "result": hexutil.Encode(raw)}, {"jsonrpc": "2.0", "id": reqs[1].ID, "result": "0x0b"}, {"jsonrpc": "2.0", "id": reqs[2].ID, "result": nil}}
 				if mode == "outer error" {
 					delete(response[0], "result")
 					response[0]["error"] = map[string]any{"code": -32000, "message": "secret aggregate failure"}
@@ -235,6 +235,7 @@ func TestMixedBatchAggregatesOnlyCompatibleVerifiedCalls(t *testing.T) {
 			defer client.Close()
 			reqs := []protocolio.ReadRequest{protocolio.ContractRead(target, []byte{1, 0, 0, 0}, big.NewInt(12), true), protocolio.ContractRead(target, []byte{2, 0, 0, 0}, big.NewInt(12), true), protocolio.ContractRead(target, []byte{3, 0, 0, 0}, big.NewInt(12), true)}
 			reqs[1].Call.From = common.HexToAddress("0x09")
+			reqs = append(reqs, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: big.NewInt(12)})
 			results, err := client.BatchRead(context.Background(), reqs)
 			if requests != 1 {
 				t.Fatalf("mixed stage used%d requests", requests)
@@ -245,7 +246,7 @@ func TestMixedBatchAggregatesOnlyCompatibleVerifiedCalls(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || len(results) != 3 || results[1].Err != nil || results[1].Data[0] != 11 || results[2].Err == nil {
+			if err != nil || len(results) != 4 || results[1].Err != nil || results[1].Data[0] != 11 || results[2].Err == nil || !errors.Is(results[3].Err, ethereum.NotFound) {
 				t.Fatalf("aggregate association/lazy error lost: %+v %v", results, err)
 			}
 			if mode == "outer error" {

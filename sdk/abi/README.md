@@ -10,7 +10,7 @@ These ABI arrays are generated from adapters `codex/bailsec-normalized` at
 The source pin is `source.json`. From the SDK directory, after rebuilding that
 exact clean checkout, run
 `MERKLE_ADAPTERS_REPO=/path/to/adapters python3 hack/sync-adapters.py`, then
-regenerate Go bindings with `make generate`, using abigen 1.17.5 and
+regenerate Go bindings with `make generate`, using abigen 1.17.10 and
 its `--v2` generator. The Recipes instruction payloads are declared in
 `recipes/codec.go`, because they are encoded data rather than public
 contract methods. The independently encoded fixture and local EVM test verify
@@ -23,5 +23,22 @@ the active permission root through `root()`.
 The CoW, Liquid Lane RFQ and Merkl providers also use the protocol ABI subsets in
 this directory, including their Multicall3 transport. Sources and deliberate
 subset limits are documented in [schema provenance](../schemas/PROVENANCE.md).
-Native protocol calls and reads are encoded in committed recipes; issuer artifacts
+
+`DelegatedAccount.json` is the ERC-7579 `execute(bytes32,bytes)` and
+`supportsExecutionMode(bytes32)` subset used by MetaMask's
+[EIP7702DeleGatorCore v1.3.0](https://github.com/MetaMask/delegation-framework/blob/v1.3.0/src/EIP7702/EIP7702DeleGatorCore.sol).
+Batch mode is `0x01` followed by 31 zero bytes: ordered CALLs, default atomic
+execution. The local Anvil fixture `recipes/testdata/anvil/MetaMaskDelegator.json`
+records that deployment's runtime, address, capture block and Keccak hash.
+Native protocol calls and reads are normally encoded in committed recipes; issuer artifacts
 used by local integration tests live under `cmd/merkle-executor/testdata/issuers`.
+
+`NativeClaims.json` is the selected native issuer claim/discovery subset, generated
+as `bindings/nativeclaims` by the same abigen v2 script. Its pinned interface
+sources and deliberate limits are recorded in
+[native claim provenance](../schemas/NATIVE_CLAIMS.md).
+
+`AccessManager.json` contains the `canCall` and `execute` subset of OpenZeppelin
+AccessManagerUpgradeable v5.7.0. `recipes.RouteExecution` requires an immediate
+grant for the exact target and selector before wrapping a call. Scheduling and
+role administration are outside this execution helper.
