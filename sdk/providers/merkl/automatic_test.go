@@ -106,7 +106,7 @@ func TestAutomaticPreparesAllFrontendClaimsWithOneRewardsFetch(t *testing.T) {
 		{name: "idle A and positive B", claimedA: 100},
 		{name: "positive A and idle B", claimedB: 200},
 		{name: "all idle optional gates", claimedA: 100, claimedB: 200},
-		{name: "all idle nonoptional claims", claimedA: 100, claimedB: 200, literalGate: true, want: "rewards below minClaimable"},
+		{name: "all idle nonoptional claims", claimedA: 100, claimedB: 200, literalGate: true, want: "no unclaimed Merkl rewards"},
 		{name: "idle first cannot hide invalid second proof", claimedB: 200, corrupt: true, want: "proof does not match"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

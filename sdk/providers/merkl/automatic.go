@@ -176,7 +176,7 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		}
 	}
 	if !anyClaimable && !allOptional {
-		return nil, errors.Errorf("%w: Merkl rewards below minClaimable", provider.ErrNotReady)
+		return nil, errors.Errorf("%w: no unclaimed Merkl rewards", provider.ErrNotReady)
 	}
 	return []provider.Output{out}, nil
 }

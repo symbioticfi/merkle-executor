@@ -112,9 +112,6 @@ func New(c Config, deps provider.Deps) (*Provider, error) {
 			seenInputs[*index] = true
 		}
 	}
-	if c.AmountInInput != nil && c.AmountOutInput != nil && *c.AmountInInput == *c.AmountOutInput {
-		return nil, errors.New("RFQ input mappings must differ")
-	}
 	var ok bool
 	if p.chain, ok = deps.Chain.(chainReader); !ok {
 		return nil, errors.New("RFQ requires contract, receipt and canonical header reads")
