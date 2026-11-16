@@ -165,15 +165,11 @@ func (p *Provider) read(ctx context.Context, s provider.Snapshot, target common.
 	}
 	raw, err := p.chain.CallContract(ctx, ethereum.CallMsg{To: &target, Data: data}, s.BlockNumber)
 	if err != nil {
-		for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
-			if errors.Is(err, cause) {
-				return nil, errors.Errorf("protocol chain read failed: %w", cause)
-			}
-		}
+		diagnostic := protocolio.Failure("read "+name, protocolio.CallFailure("eth_call", ethereum.CallMsg{To: &target, Data: data}, s.BlockNumber, err))
 		if isRevert(err) {
-			return nil, errors.New("execution reverted")
+			return nil, errors.Errorf("execution reverted: %w", diagnostic)
 		}
-		return nil, errors.New("protocol chain read failed")
+		return nil, diagnostic
 	}
 	out, err := contractABI.Unpack(name, raw)
 	if err != nil {

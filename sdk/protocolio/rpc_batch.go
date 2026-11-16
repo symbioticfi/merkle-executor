@@ -74,7 +74,10 @@ func CallHTTPBatch(ctx context.Context, client *http.Client, endpoint string, ba
 	return callHTTP(ctx, client, endpoint, batch)
 }
 
-func callHTTP(ctx context.Context, client *http.Client, endpoint string, batch []rpc.BatchElem) error {
+func callHTTP(ctx context.Context, client *http.Client, endpoint string, batch []rpc.BatchElem) (err error) {
+	defer func() {
+		err = batchFailure(batch, err)
+	}()
 	messages := make([]batchMessage, len(batch))
 	for i, element := range batch {
 		messages[i] = batchMessage{JSONRPC: "2.0", ID: uint64(i + 1), Method: element.Method, Params: element.Args}
@@ -133,7 +136,7 @@ func callHTTP(ctx context.Context, client *http.Client, endpoint string, batch [
 			if len(response.Result) > 0 && !bytes.Equal(response.Result, []byte("null")) {
 				return errors.New("RPC read response has both result and error")
 			}
-			batch[i].Error = Failure("read RPC member", response.Error)
+			batch[i].Error = requestFailure(batch[i], response.Error)
 		} else if len(response.Result) == 0 {
 			return errors.New("RPC read member result missing")
 		} else if bytes.Equal(response.Result, []byte("null")) {
@@ -232,12 +235,12 @@ func (r RPCBatchReader) readChunk(ctx context.Context, requests []ReadRequest) (
 		operations = append(operations, op)
 	}
 	if err := r.Call(ctx, calls); err != nil {
-		return nil, err
+		return nil, batchFailure(calls, err)
 	}
 	for i, op := range operations {
 		if calls[i].Error != nil {
 			for _, index := range op.indices {
-				results[index].Err = calls[i].Error
+				results[index].Err = requestFailure(calls[i], calls[i].Error)
 			}
 			continue
 		}
@@ -248,7 +251,7 @@ func (r RPCBatchReader) readChunk(ctx context.Context, requests []ReadRequest) (
 			}
 			for j, index := range op.indices {
 				if !decoded[j].Success {
-					results[index].Err = errors.New("safe read aggregate getter reverted")
+					results[index].Err = CallFailure("eth_call", requests[index].Call, requests[index].Block, errors.New("execution reverted"))
 				} else {
 					results[index].Data = decoded[j].Data
 				}
@@ -366,7 +369,17 @@ type operationError struct {
 	cause     error
 }
 
-func (e *operationError) Error() string { return e.operation + " failed" }
+func (e *operationError) Error() string {
+	var request *requestError
+	if errors.As(e.cause, &request) {
+		return e.operation + " failed: " + request.Error()
+	}
+	var operation *operationError
+	if errors.As(e.cause, &operation) {
+		return e.operation + " failed: " + operation.Error()
+	}
+	return e.operation + " failed: " + failureReason(e.cause)
+}
 func (e *operationError) Unwrap() error { return e.cause }
 func Failure(operation string, err error) error {
 	if err == nil {
