@@ -34,6 +34,12 @@ Solidity 0.8.28/Paris/optimizer-200 compiler settings. The local test executes t
 handler through a committed recipe with token, oracle and account fixtures.
 It checks full-amount quote rounding, eligibility and treasury failures, atomic
 rollback, output guards and generic canonical confirmation.
+It also executes the exact frontend-generated standalone redemption recipe from
+`sdk/recipes/testdata/curator-noon-redemption.json`: no external numerical inputs,
+no transaction while empty, exact live-balance redemption with only read/approve/redeem
+instructions, and idle again after the receipt. No USDC balance query or receipt-delta
+instruction is needed by this standalone recipe. The separate sUSN claim may replenish
+this balance on a later run.
 
 ```sh
 python3 cmd/merkle-executor/testdata/issuers/noon/generate.py --check

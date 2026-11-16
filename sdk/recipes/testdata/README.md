@@ -1,5 +1,12 @@
 # Recipe fixtures
 
+`curator-noon-redemption.json` retains the Curator frontend's standalone **Redeem
+USN** compiler output and active-root leaves. Its provenance points to the source
+fixture and compiler revision. It is test topology, not a signed certificate.
+The SDK verifies its commitment, proofs, runtime assembly, the three-instruction
+read/approve/redeem shape and empty-balance readiness. The daemon's source-pinned Noon integration executes those same bytes
+against the real handler implementation with local account/token/oracle fixtures.
+
 `merkle-tree.json` is copied from the adapters contract test fixture. All 33 stored
 leaves and proofs are checked using the Go codec. `core-abi.json` was independently
 encoded with Foundry `cast abi-encode`/`cast calldata`; its recipe includes Read,

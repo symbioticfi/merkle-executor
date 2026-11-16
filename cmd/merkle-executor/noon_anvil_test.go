@@ -26,6 +26,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
@@ -98,7 +99,9 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	call(owner, handler, handlerArtifact, "grantRole", accountant, owner)
 	call(owner, handler, handlerArtifact, "setPegPercentage", big.NewInt(9990))
 	call(owner, handler, handlerArtifact, "addRedeemableCollateral", usdc, oracle, big.NewInt(1e8))
-	account := deploy(accountArtifact)
+	// Match the account baked into the retained frontend-generated recipe too.
+	account := common.HexToAddress("0xc8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8")
+	install(account, deploy(accountArtifact))
 	executor := deploy(executorArtifact, owner, account)
 	call(owner, handler, handlerArtifact, "addWhitelistedUser", account)
 	amount, _ := new(big.Int).SetString("1234567890123456789", 10)
@@ -398,4 +401,56 @@ func TestAnvilNoonNativeBurnAndUSDCPayment(t *testing.T) {
 	if after, e := client.NonceAt(ctx, caller, nil); e != nil || after != nonce {
 		t.Fatal("fresh runtime repeated completed redemption", e)
 	}
+	t.Run("standalone frontend recipe", func(t *testing.T) {
+		raw, err := os.ReadFile("../../sdk/recipes/testdata/curator-noon-redemption.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fixture struct {
+			Account    common.Address
+			Recipe     hexutil.Bytes
+			RecipeHash common.Hash
+		}
+		if err = json.Unmarshal(raw, &fixture); err != nil || fixture.Account != account {
+			t.Fatal("frontend fixture account mismatch", err)
+		}
+		recipe, err := recipes.DecodeRecipe(fixture.Recipe)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hash, err := recipes.HashRecipe(recipe); err != nil || hash != fixture.RecipeHash {
+			t.Fatal("frontend recipe commitment changed", err)
+		}
+		tree, err := recipes.DecodeTree(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashes := make([][32]byte, len(tree.Leaves))
+		for i, leaf := range tree.Leaves {
+			hashes[i] = leaf.Hash
+		}
+		root = tree.Root
+		rawTree = servicePermissionCertificate(t, raw, account, account)
+		call(owner, account, accountArtifact, "configure", root, hashes, executor)
+		call(owner, executor, executorArtifact, "setRecipe", recipe.Queries, recipe.Steps)
+		prepareStandalone := func() (keeper.ExecutionPlan, error) {
+			k := serviceKeeper(t, ctx, path, nil)
+			return k.Planner.PrepareExecution(ctx, k.Strategies)
+		}
+		if _, err = prepareStandalone(); !errors.Is(err, provider.ErrNotReady) {
+			t.Fatalf("empty standalone redemption did not wait: %v", err)
+		}
+		beforeUSDC := read(usdc, tokenArtifact, "balanceOf", account)
+		call(owner, usn, tokenArtifact, "mint", account, amount)
+		runService(t, ctx, path, "ok", 1)
+		if read(usn, tokenArtifact, "balanceOf", account).Sign() != 0 || read(usn, tokenArtifact, "allowance", account, handler).Sign() != 0 {
+			t.Fatal("standalone redemption did not spend exactly the live balance")
+		}
+		if received := new(big.Int).Sub(read(usdc, tokenArtifact, "balanceOf", account), beforeUSDC); received.Int64() != 1_233_332 {
+			t.Fatalf("standalone redemption payout: %s", received)
+		}
+		if _, err = prepareStandalone(); !errors.Is(err, provider.ErrNotReady) {
+			t.Fatalf("completed standalone redemption did not return to idle: %v", err)
+		}
+	})
 }
