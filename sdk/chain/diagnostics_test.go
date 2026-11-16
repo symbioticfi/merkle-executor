@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -18,8 +21,14 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
+type failedDiagnosticsTransport struct{ cause error }
+
+func (f failedDiagnosticsTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, f.cause
+}
+
 func TestRPCDiagnosticsSurviveReadBoundariesWithoutSecrets(t *testing.T) {
-	for _, mode := range []string{"http", "rpc", "canceled", "transport"} {
+	for _, mode := range []string{"http", "rpc", "canceled", "transport", "eof"} {
 		t.Run(mode, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var request rpcRequest
@@ -42,8 +51,18 @@ func TestRPCDiagnosticsSurviveReadBoundariesWithoutSecrets(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close()
-			if mode == "transport" {
-				server.Close()
+			var transportErr error
+			switch mode {
+			case "transport":
+				transportErr = &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+			case "eof":
+				transportErr = io.EOF
+			}
+			if transportErr != nil {
+				// Closing a real server can race keep-alive reuse and return either
+				// EOF or ECONNREFUSED. Inject each cause at the HTTP boundary instead.
+				client.http.CloseIdleConnections()
+				client.http.Transport = failedDiagnosticsTransport{cause: transportErr}
 			}
 			target := common.HexToAddress("0x0dabc0d9b270c9b0c4c77aaceaa712b56d0f9178")
 			data := append([]byte{0x8d, 0x29, 0xd3, 0x0e}, []byte("secret-calldata")...)
@@ -87,6 +106,8 @@ func TestRPCDiagnosticsSurviveReadBoundariesWithoutSecrets(t *testing.T) {
 						want = "rpc_code=-32005"
 					case "transport":
 						want = "connection refused"
+					case "eof":
+						want = "EOF"
 					case "canceled":
 						want = "context canceled"
 						if !errors.Is(err, context.Canceled) {
@@ -95,6 +116,9 @@ func TestRPCDiagnosticsSurviveReadBoundariesWithoutSecrets(t *testing.T) {
 					}
 					if !strings.Contains(err.Error(), want) {
 						t.Errorf("diagnostic missing failure reason %q: %s", want, err)
+					}
+					if transportErr != nil && !errors.Is(err, transportErr) {
+						t.Fatal("transport error identity was lost")
 					}
 				})
 			}
