@@ -5,7 +5,6 @@ import (
 	"context"
 	"math/big"
 	"net/http"
-	"strings"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -13,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
 type Client struct {
@@ -67,7 +67,7 @@ func dialHTTP(ctx context.Context, endpoint string, client *http.Client, expecte
 	got, err := c.ChainID(ctx)
 	if err != nil {
 		c.Close()
-		return nil, rpcFailure(role+" RPC chain identity", err)
+		return nil, rpcFailure(role+" RPC eth_chainId", err)
 	}
 	if got == nil || got.Cmp(expected) != 0 {
 		c.Close()
@@ -86,88 +86,65 @@ func (c *Client) Close() {
 }
 func (c *Client) NonceAt(ctx context.Context, a common.Address, b *big.Int) (uint64, error) {
 	value, err := c.write.NonceAt(ctx, a, b)
-	return value, rpcFailure("read mined nonce from write RPC", err)
+	return value, rpcFailure("read mined nonce from write RPC eth_getTransactionCount", err)
 }
 func (c *Client) PendingNonceAt(ctx context.Context, a common.Address) (uint64, error) {
 	value, err := c.write.PendingNonceAt(ctx, a)
-	return value, rpcFailure("read pending nonce from write RPC", err)
+	return value, rpcFailure("read pending nonce from write RPC eth_getTransactionCount", err)
 }
 func (c *Client) SendTransaction(ctx context.Context, tx *types.Transaction) error {
-	return rpcFailure("submit transaction to write RPC", c.write.SendTransaction(ctx, tx))
+	return rpcFailure("submit transaction to write RPC eth_sendRawTransaction", c.write.SendTransaction(ctx, tx))
 }
 
 func (c *Client) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
 	value, err := c.Client.CallContract(ctx, msg, block)
-	return value, rpcFailure("call contract on read RPC", err)
+	return value, rpcFailure("call contract on read RPC", protocolio.CallFailure("eth_call", msg, block, err))
 }
 
 func (c *Client) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
 	value, err := c.Client.HeaderByNumber(ctx, number)
-	return value, rpcFailure("read header by number", err)
+	return value, rpcFailure("read RPC eth_getBlockByNumber", err)
 }
 
 func (c *Client) HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error) {
 	value, err := c.Client.HeaderByHash(ctx, hash)
-	return value, rpcFailure("read header by hash", err)
+	return value, rpcFailure("read RPC eth_getBlockByHash", err)
 }
 
 func (c *Client) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
 	value, err := c.Client.FilterLogs(ctx, query)
-	return value, rpcFailure("read event logs", err)
+	return value, rpcFailure("read RPC eth_getLogs", err)
 }
 
 func (c *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64, error) {
 	value, err := c.Client.EstimateGas(ctx, msg)
-	return value, rpcFailure("estimate transaction gas", err)
+	return value, rpcFailure("estimate transaction gas", protocolio.CallFailure("eth_estimateGas", msg, nil, err))
 }
 
 func (c *Client) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
 	value, err := c.Client.TransactionReceipt(ctx, hash)
-	return value, rpcFailure("read transaction receipt", err)
+	return value, rpcFailure("read RPC eth_getTransactionReceipt", err)
 }
-
-// RPC causes can contain authentication URLs, query parameters and response
-// bodies. Keep them available for errors.Is/As, but never render them in logs.
-type rpcError struct {
-	operation string
-	cause     error
-}
-
-func (e *rpcError) Error() string {
-	// The sender uses these bounded classifications to handle nonce races,
-	// rejected broadcasts and exact-byte retries. Never echo a provider message.
-	message := strings.ToLower(e.cause.Error())
-	for _, kind := range []string{"nonce too low", "nonce is too low", "nonce has already been used", "replacement transaction underpriced", "already known", "already imported", "insufficient funds", "intrinsic gas too low", "invalid sender", "transaction type not supported", "execution reverted"} {
-		if strings.Contains(message, kind) {
-			return e.operation + " failed: " + kind
-		}
-	}
-	return e.operation + " failed"
-}
-func (e *rpcError) Unwrap() error { return e.cause }
 
 func rpcFailure(operation string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return &rpcError{operation: operation, cause: err}
+	return protocolio.Failure(operation, err)
 }
 
 // FeeHistory uses the read endpoint; sender nonce admission remains on write.
 func (c *Client) FeeHistory(ctx context.Context, count uint64, last *big.Int, percentiles []float64) (*ethereum.FeeHistory, error) {
 	history, err := c.Client.FeeHistory(ctx, count, last, percentiles)
-	return history, rpcFailure("read fee history", err)
+	return history, rpcFailure("read RPC eth_feeHistory", err)
 }
 
 // BalanceAt reads account funds with the same redaction boundary as other I/O.
 func (c *Client) BalanceAt(ctx context.Context, account common.Address, block *big.Int) (*big.Int, error) {
 	balance, err := c.Client.BalanceAt(ctx, account, block)
-	return balance, rpcFailure("read account balance", err)
+	return balance, rpcFailure("read RPC eth_getBalance", err)
 }
 
 // TransactionSenderBalanceAt reads funds from the same endpoint as nonce
 // admission and submission. A failed sending-endpoint read never falls back.
 func (c *Client) TransactionSenderBalanceAt(ctx context.Context, account common.Address, block *big.Int) (*big.Int, error) {
 	balance, err := c.write.BalanceAt(ctx, account, block)
-	return balance, rpcFailure("read transaction sender balance", err)
+	return balance, rpcFailure("write RPC eth_getBalance", err)
 }

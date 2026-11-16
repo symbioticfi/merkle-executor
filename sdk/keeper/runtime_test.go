@@ -389,7 +389,7 @@ func TestRAMIdleAndInvalidPreparationRemainDistinct(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		want string
-	}{{provider.ErrNotReady, "idle"}, {errors.New("bad proof"), "error"}} {
+	}{{provider.ErrNotReady, "idle"}, {errors.New("bad proof"), ""}} {
 		k, p, s := runtimeHarness(t)
 		p.err = tc.err
 		outcome := ""

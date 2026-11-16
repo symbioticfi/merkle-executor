@@ -79,12 +79,16 @@ func (k *Keeper) Tick(ctx context.Context) error {
 		plan, err := k.Planner.PrepareExecution(operation, k.Strategies)
 		var failures []error
 		for _, s := range k.Strategies {
-			memberErr := err
-			if memberErr == nil {
-				memberErr = plan.Failures[s.Config.Name]
-				if memberErr != nil {
+			memberErr := plan.Failures[s.Config.Name]
+			if memberErr != nil {
+				if !errors.Is(err, memberErr) {
 					failures = append(failures, memberErr)
 				}
+			} else if err != nil {
+				if !errors.Is(err, provider.ErrNotReady) {
+					continue
+				}
+				memberErr = err
 			}
 			k.observe(s.Config.Name, memberErr)
 		}
@@ -179,10 +183,11 @@ func (k *Keeper) drain(ctx context.Context) error {
 		}
 		plan, err := k.prepareAndSubmit(ctx, candidates)
 		if plan == nil {
-			for _, strategy := range candidates {
-				k.observe(strategy.Config.Name, err)
-			}
-			if !errors.Is(err, provider.ErrNotReady) {
+			if errors.Is(err, provider.ErrNotReady) {
+				for _, strategy := range candidates {
+					k.observe(strategy.Config.Name, err)
+				}
+			} else {
 				failures = append(failures, err)
 			}
 			return errors.Join(failures...)
@@ -191,7 +196,9 @@ func (k *Keeper) drain(ctx context.Context) error {
 			if failure := plan.Failures[strategy.Config.Name]; failure != nil {
 				visited[strategy.Config.Name] = true
 				k.observe(strategy.Config.Name, failure)
-				failures = append(failures, failure)
+				if !errors.Is(err, failure) {
+					failures = append(failures, failure)
+				}
 			}
 		}
 		for _, member := range plan.Members {
@@ -212,6 +219,9 @@ func (k *Keeper) prepareAndSubmit(ctx context.Context, candidates []Strategy) (*
 	}
 	plan, err := k.Planner.PrepareExecution(operation, candidates)
 	if err != nil {
+		if len(plan.Failures) > 0 {
+			return &plan, err
+		}
 		return nil, err
 	}
 	if err = validateExecutionComposition(plan, candidates); err != nil {
