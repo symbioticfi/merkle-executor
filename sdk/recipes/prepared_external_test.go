@@ -166,3 +166,26 @@ func TestExternalEnvelopeOwnsUsefulnessWhileGenericChecksResults(t *testing.T) {
 		t.Fatalf("generic numerical witness validation changed: %v", err)
 	}
 }
+
+func TestPreparedExternalRoutesCheckEachCaller(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		r, prepared, calls, leaves, _ := externalFixture(t, 2)
+		prepared[1].Snapshot.Caller = common.Address{42}
+		r.members[1].caller = prepared[1].Snapshot.Caller
+		if changed {
+			r.members[1].caller = common.Address{43}
+		}
+		outer := common.Address{99}
+		called := 0
+		err := ValidatePreparedRoutesWithSimulation(t.Context(), r, prepared, calls, leaves, outer, func(_ context.Context, request PreparedBatchSimulationRequest) error {
+			called++
+			if request.Caller != outer || len(request.Calls) != 2 || request.BlockNumber.Uint64() != 11 {
+				t.Fatalf("combined simulation lost its execution context: %+v", request)
+			}
+			return nil
+		})
+		if changed && (err == nil || called != 0) || !changed && (err != nil || called != 1) {
+			t.Fatalf("changed=%v simulations=%d err=%v", changed, called, err)
+		}
+	}
+}

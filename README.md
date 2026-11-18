@@ -45,6 +45,13 @@ When configured, `/healthz`, `/readyz` and `/metrics` expose process health and
 keeper outcomes. Readiness reflects the latest iteration. `version` prints build
 metadata. There are no offline checkpoint commands.
 
+RPC failures include the method and, for contract calls, target, four-byte
+selector and block. Diagnostics retain HTTP status, JSON-RPC code and fixed
+failure classifications; URLs, credentials, headers, full calldata, provider
+messages and error data are never rendered. Unknown causes remain classified as
+unknown. Shared preparation failures are reported at runtime level; only failures
+attributed by the planner are logged against a strategy.
+
 ## Execution
 
 One discovery cycle groups executor metadata, account roots, event evidence and

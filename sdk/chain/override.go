@@ -34,5 +34,5 @@ func (c *Client) CallContractWithCodeOverrides(ctx context.Context, msg ethereum
 	}
 	var result hexutil.Bytes
 	err := c.Client.Client().CallContext(ctx, &result, "eth_call", protocolio.CallArgument(msg), hexutil.EncodeBig(block), overrides)
-	return result, rpcFailure("call recipe with code override", err)
+	return result, rpcFailure("call recipe with code override", protocolio.CallFailure("eth_call", msg, block, err))
 }

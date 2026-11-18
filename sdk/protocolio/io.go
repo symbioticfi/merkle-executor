@@ -146,7 +146,7 @@ func CallData(ctx context.Context, r provider.Reader, s provider.Snapshot, to co
 	}
 	raw, e := r.CallContract(ctx, ethereum.CallMsg{To: &to, Data: data}, s.BlockNumber)
 	if e != nil {
-		return nil, errors.New("protocol chain read failed")
+		return nil, Failure("protocol chain read", CallFailure("eth_call", ethereum.CallMsg{To: &to, Data: data}, s.BlockNumber, e))
 	}
 	return raw, nil
 }

@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -262,7 +263,8 @@ func TestRPCFailuresRedactCredentialsAndBodiesButPreserveErrorIdentity(t *testin
 	if err == nil || strings.Contains(err.Error(), "test-secret") || strings.Contains(err.Error(), fixture.server.URL) {
 		t.Fatal("transport error exposed credential-bearing endpoint")
 	}
-	if cause := errors.Unwrap(err); cause == nil || !strings.Contains(cause.Error(), "endpoint-query-test-secret") {
+	var transport *url.Error
+	if !errors.As(err, &transport) || !strings.Contains(transport.URL, "endpoint-query-test-secret") {
 		t.Fatal("transport fixture did not exercise a credential-bearing cause")
 	}
 }
