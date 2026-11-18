@@ -64,7 +64,6 @@ type prepared struct {
 type progressState struct {
 	OrderID   string
 	TxHash    common.Hash
-	Lookup    *lookupState
 	Cancelled bool
 }
 
@@ -225,7 +224,7 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 	}
 	return provider.Output{}, provider.ErrNotReady
 }
-func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared, st *progressState) (provider.Progress, error) {
+func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared, st *progressState, lookup *lookupState) (provider.Progress, error) {
 	if err := protocolio.Snapshot(s); err != nil {
 		return provider.Progress{}, err
 	}
@@ -265,9 +264,6 @@ func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared,
 		if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
 			return provider.Progress{}, err
 		}
-		if done {
-			st.Lookup = nil
-		}
 		return provider.Progress{Done: done, Outcome: name, Reference: st.OrderID}, nil
 	}
 	if !used && new(big.Int).SetUint64(s.Timestamp).Cmp(d.Request.Deadline) <= 0 {
@@ -296,7 +292,7 @@ func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared,
 			return provider.Progress{}, errors.New("RFQ Reactor allowance unavailable")
 		}
 	}
-	found, complete, err := p.lookup(ctx, s, d, st)
+	found, complete, err := p.lookup(ctx, s, d, st, lookup)
 	if err != nil {
 		return provider.Progress{}, err
 	}

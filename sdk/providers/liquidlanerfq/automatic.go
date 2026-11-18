@@ -3,7 +3,6 @@ package liquidlanerfq
 import (
 	"bytes"
 	"context"
-	"maps"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -189,6 +188,7 @@ type settlementTask struct {
 	provider *Provider
 	prepared prepared
 	state    progressState
+	lookup   lookupState
 }
 
 func (p *Provider) task(d prepared) provider.Task {
@@ -198,21 +198,10 @@ func (p *Provider) task(d prepared) provider.Task {
 }
 
 func (t *settlementTask) Advance(ctx context.Context, s provider.Snapshot) (provider.Progress, error) {
-	next := t.state.clone()
-	progress, err := t.provider.advance(ctx, s, t.prepared, &next)
+	next := t.state
+	progress, err := t.provider.advance(ctx, s, t.prepared, &next, &t.lookup)
 	if err == nil {
 		t.state = next
 	}
 	return progress, err
-}
-
-func (s progressState) clone() progressState {
-	copy := s
-	if s.Lookup != nil {
-		lookup := *s.Lookup
-		lookup.Cursors = maps.Clone(s.Lookup.Cursors)
-		lookup.IDs = maps.Clone(s.Lookup.IDs)
-		copy.Lookup = &lookup
-	}
-	return copy
 }
