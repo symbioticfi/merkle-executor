@@ -173,11 +173,10 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if err != nil {
 		return nil, err
 	}
-	out, err := runtime.Prepare(ctx, s)
+	out, err := runtime.selectQuote(ctx, s, func(candidate *provider.Output) error {
+		return request.trade.Bind(candidate.Actions[request.cfg.Action], 9, results, candidate)
+	})
 	if err != nil {
-		return nil, err
-	}
-	if err = request.trade.Bind(out.Actions[request.cfg.Action], 9, results, &out); err != nil {
 		return nil, err
 	}
 	return []provider.Output{out}, nil

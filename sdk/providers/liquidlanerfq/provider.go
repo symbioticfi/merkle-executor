@@ -119,6 +119,13 @@ func New(c Config, deps provider.Deps) (*Provider, error) {
 	return p, err
 }
 func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.Output, error) {
+	return p.selectQuote(ctx, s, nil)
+}
+
+// A binding check applies the committed recipe to each fully decoded candidate in backend order.
+type bindQuote func(*provider.Output) error
+
+func (p *Provider) selectQuote(ctx context.Context, s provider.Snapshot, bind bindQuote) (provider.Output, error) {
 	if err := protocolio.Snapshot(s); err != nil {
 		return provider.Output{}, err
 	}
@@ -126,7 +133,7 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if err != nil {
 		return provider.Output{}, err
 	}
-	return p.prepare(ctx, s, reads.At(0))
+	return p.prepare(ctx, s, reads.At(0), bind)
 }
 func (p *Provider) domain(s provider.Snapshot, result protocolio.ReadResult) (common.Hash, error) {
 	raw, err := result.CallData()
@@ -139,7 +146,7 @@ func (p *Provider) domain(s provider.Snapshot, result protocolio.ReadResult) (co
 	}
 	return protocolio.Domain("Reactor", "1", s.ChainID, p.reactor), nil
 }
-func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResult protocolio.ReadResult) (provider.Output, error) {
+func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResult protocolio.ReadResult, bind bindQuote) (provider.Output, error) {
 	if err := protocolio.Snapshot(s); err != nil {
 		return provider.Output{}, err
 	}
@@ -161,6 +168,7 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 	if response.Quotes == nil {
 		return provider.Output{}, errors.New("RFQ missing quotes array")
 	}
+	var ineligible error
 	for _, option := range response.Quotes {
 		if option.Solver.ID == "" {
 			return provider.Output{}, errors.New("RFQ missing solver identity")
@@ -179,6 +187,29 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 		if deadline < s.Timestamp || request.Outputs[0].Amount.Cmp(p.minimum) < 0 {
 			continue
 		}
+		payload, digest, err := authorization(domain, request)
+		if err != nil {
+			return provider.Output{}, err
+		}
+		out := provider.Output{Actions: map[string]hexutil.Bytes{p.cfg.Action: payload}, Inputs: map[uint]string{}}
+		if p.cfg.AmountInInput != nil {
+			out.Inputs[*p.cfg.AmountInInput] = request.AmountIn.String()
+		}
+		if p.cfg.AmountOutInput != nil {
+			out.Inputs[*p.cfg.AmountOutInput] = request.Outputs[0].Amount.String()
+		}
+		if p.cfg.DeadlineInput != nil {
+			out.Inputs[*p.cfg.DeadlineInput] = request.Deadline.String()
+		}
+		if p.cfg.NonceInput != nil {
+			out.Inputs[*p.cfg.NonceInput] = request.Nonce.String()
+		}
+		if bind != nil {
+			if err := bind(&out); err != nil {
+				ineligible = err
+				continue
+			}
+		}
 		reads, err := protocolio.ReadGroup(ctx, p.chain, protocolio.ContractRead(p.reactor, reactor.NewLiquidLaneReactor().PackIsUsedNonce(s.Account, request.Nonce), s.BlockNumber, true))
 		if err != nil {
 			return provider.Output{}, err
@@ -192,11 +223,8 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 			return provider.Output{}, errors.New("RFQ invalid nonce response")
 		}
 		if used {
-			return provider.Output{}, errors.New("RFQ quote nonce already consumed")
-		}
-		payload, digest, err := authorization(domain, request)
-		if err != nil {
-			return provider.Output{}, err
+			ineligible = errors.New("RFQ quote nonce already consumed")
+			continue
 		}
 		if err = protocolio.Canonical(ctx, p.chain, s); err != nil {
 			return provider.Output{}, err
@@ -206,21 +234,12 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 		if err != nil {
 			return provider.Output{}, err
 		}
-		out := provider.Output{Actions: map[string]hexutil.Bytes{p.cfg.Action: payload}, Inputs: map[uint]string{}, Data: saved}
-		if p.cfg.AmountInInput != nil {
-			out.Inputs[*p.cfg.AmountInInput] = request.AmountIn.String()
-		}
-		if p.cfg.AmountOutInput != nil {
-			out.Inputs[*p.cfg.AmountOutInput] = request.Outputs[0].Amount.String()
-		}
-		if p.cfg.DeadlineInput != nil {
-			out.Inputs[*p.cfg.DeadlineInput] = request.Deadline.String()
-		}
-		if p.cfg.NonceInput != nil {
-			out.Inputs[*p.cfg.NonceInput] = request.Nonce.String()
-		}
+		out.Data = saved
 		out.Task = p.task(d)
 		return out, nil
+	}
+	if ineligible != nil {
+		return provider.Output{}, ineligible
 	}
 	return provider.Output{}, provider.ErrNotReady
 }
