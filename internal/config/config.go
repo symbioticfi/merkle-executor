@@ -75,8 +75,14 @@ func Load(path string) (*Config, error) {
 	}
 	// Only operational endpoints are expanded. Secret-bearing provider configuration
 	// keeps environment variable names, never interpolated values.
-	cfg.Chain.RPCURL = os.ExpandEnv(cfg.Chain.RPCURL)
-	cfg.Chain.WriteRPCURL = os.ExpandEnv(cfg.Chain.WriteRPCURL)
+	cfg.Chain.RPCURL, err = expandEndpoint(cfg.Chain.RPCURL, "chain.rpcUrl")
+	if err != nil {
+		return nil, err
+	}
+	cfg.Chain.WriteRPCURL, err = expandEndpoint(cfg.Chain.WriteRPCURL, "chain.writeRpcUrl")
+	if err != nil {
+		return nil, err
+	}
 	if cfg.Mode == "" {
 		cfg.Mode = "simulate"
 	}
@@ -90,6 +96,21 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func expandEndpoint(raw, field string) (string, error) {
+	missing := false
+	expanded := os.Expand(raw, func(name string) string {
+		value := os.Getenv(name)
+		if value == "" {
+			missing = true
+		}
+		return value
+	})
+	if missing || raw != "" && expanded == "" {
+		return "", errors.Errorf("%s requires a nonempty value for each environment reference", field)
+	}
+	return expanded, nil
 }
 
 func (c *Config) Validate() error {

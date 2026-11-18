@@ -69,6 +69,8 @@ func newRPCFixture(t *testing.T, chainID string) *rpcFixture {
 			result = f.chainID
 		case "eth_call":
 			result = "0x"
+		case "eth_getCode":
+			result = "0x01"
 		case "eth_estimateGas":
 			result = "0x5208"
 		case "eth_getTransactionCount":
@@ -151,6 +153,40 @@ func TestRPCRoutesReadsAndWritesToTheirVerifiedEndpoints(t *testing.T) {
 	}
 }
 
+type wrappedTransport struct {
+	http.RoundTripper
+	closed bool
+	calls  int
+}
+
+func (w *wrappedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	w.calls++
+	return w.RoundTripper.RoundTrip(req)
+}
+
+func (w *wrappedTransport) CloseIdleConnections() { w.closed = true }
+
+func TestDialBorrowsWrappedDefaultTransport(t *testing.T) {
+	fixture := newRPCFixture(t, "0x1")
+	original := http.DefaultTransport
+	wrapper := &wrappedTransport{RoundTripper: original}
+	http.DefaultTransport = wrapper
+	t.Cleanup(func() { http.DefaultTransport = original })
+
+	client, err := Dial(t.Context(), fixture.server.URL, "", big.NewInt(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := client.CodeAt(t.Context(), common.Address{1}, big.NewInt(12))
+	client.Close()
+	if err != nil || len(code) != 1 || code[0] != 1 {
+		t.Fatal("contract code read failed")
+	}
+	if wrapper.calls != 2 || wrapper.closed {
+		t.Fatalf("calls = %d, closed shared transport = %v", wrapper.calls, wrapper.closed)
+	}
+}
+
 func TestRPCRejectsWrongChainOnEitherEndpoint(t *testing.T) {
 	for _, which := range []string{"read", "write"} {
 		t.Run(which, func(t *testing.T) {
@@ -187,6 +223,7 @@ func TestRPCFailuresRedactCredentialsAndBodiesButPreserveErrorIdentity(t *testin
 			_, e := client.CallContract(ctx, ethereum.CallMsg{To: &a}, nil)
 			return e
 		},
+		"code":          func(ctx context.Context) error { _, e := client.CodeAt(ctx, a, big.NewInt(12)); return e },
 		"header-number": func(ctx context.Context) error { _, e := client.HeaderByNumber(ctx, nil); return e },
 		"header-hash":   func(ctx context.Context) error { _, e := client.HeaderByHash(ctx, common.Hash{}); return e },
 		"logs":          func(ctx context.Context) error { _, e := client.FilterLogs(ctx, ethereum.FilterQuery{}); return e },

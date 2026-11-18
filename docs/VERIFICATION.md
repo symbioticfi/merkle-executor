@@ -99,7 +99,7 @@ Anvil success.
 The host and SDK use Go 1.27.4, go-ethereum/abigen 1.17.10 and golangci-lint
 2.15.0. CI uses Foundry 1.9.0 and the runtime image uses distroless Debian 13.
 Both Go modules refresh their direct and indirect requirements; external consumers
-pin an immutable SDK release. Re-run generation and the gates above
+pin an SDK commit or a tagged module version. Re-run generation and the gates above
 after updating either module. SDK simulation helpers and local fixtures use
 Solidity 0.8.38. Imported protocol bytecode retains its original compiler and
 source revision so the reference contracts remain unchanged.
