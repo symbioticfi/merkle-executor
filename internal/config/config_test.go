@@ -39,6 +39,47 @@ func TestConfigurationDefaultsAndPaths(t *testing.T) {
 		t.Fatal(c)
 	}
 }
+func TestRPCEnvironmentReferences(t *testing.T) {
+	const read = "http://127.0.0.1:8545"
+	const write = "http://127.0.0.1:9545"
+	t.Setenv("MERKLE_TEST_READ_RPC", read)
+	t.Setenv("MERKLE_TEST_WRITE_RPC", write)
+	t.Setenv("MERKLE_TEST_EMPTY_RPC", "")
+	t.Setenv("MERKLE_TEST_UNSET_RPC", "")
+	if err := os.Unsetenv("MERKLE_TEST_UNSET_RPC"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, readURL, writeURL, wantWrite, errField string
+	}{
+		{name: "omit write", readURL: "$MERKLE_TEST_READ_RPC"},
+		{name: "same endpoint", readURL: read, writeURL: "${MERKLE_TEST_READ_RPC}", wantWrite: read},
+		{name: "separate endpoint", readURL: read, writeURL: "$MERKLE_TEST_WRITE_RPC", wantWrite: write},
+		{name: "missing read", readURL: "$MERKLE_TEST_UNSET_RPC", errField: "chain.rpcUrl"},
+		{name: "empty read path variable", readURL: read + "/${MERKLE_TEST_EMPTY_RPC}", errField: "chain.rpcUrl"},
+		{name: "missing write", readURL: read, writeURL: "${MERKLE_TEST_UNSET_RPC}", errField: "chain.writeRpcUrl"},
+		{name: "empty write", readURL: read, writeURL: "$MERKLE_TEST_EMPTY_RPC", errField: "chain.writeRpcUrl"},
+		{name: "missing write path variable", readURL: read, writeURL: write + "/${MERKLE_TEST_UNSET_RPC}", errField: "chain.writeRpcUrl"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Replace(validConfig, read, tc.readURL, 1)
+			if tc.writeURL != "" {
+				raw = strings.Replace(raw, "signer:", "  writeRpcUrl: "+tc.writeURL+"\nsigner:", 1)
+			}
+			c, err := Load(writeConfig(t, raw))
+			if tc.errField != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.errField) || strings.Contains(err.Error(), "http") {
+					t.Fatal("expected a configuration error identifying only the RPC field")
+				}
+				return
+			}
+			if err != nil || c.Chain.RPCURL != read || c.Chain.WriteRPCURL != tc.wantWrite {
+				t.Fatal("unexpected endpoint resolution")
+			}
+		})
+	}
+}
+
 func TestRejectMalformedConfiguration(t *testing.T) {
 	t.Parallel()
 	for name, text := range map[string]string{

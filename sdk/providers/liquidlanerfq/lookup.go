@@ -3,12 +3,14 @@ package liquidlanerfq
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/url"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
@@ -32,17 +34,14 @@ func knownStatus(s string) bool {
 	}
 	return false
 }
-func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, st *progressState) (bool, bool, error) {
+func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, st *progressState, lookup *lookupState) (bool, bool, error) {
 	query := url.Values{"swapper": {s.Account.Hex()}, "limit": {"100"}, "sortKey": {"createdAt"}, "sort": {"asc"}}
 	if st.OrderID != "" {
 		query.Set("orderId", st.OrderID)
 	}
-	if st.Lookup == nil {
-		st.Lookup = &lookupState{Cursors: map[string]bool{}, IDs: map[string]bool{}}
-	} else {
-		query.Set("cursor", st.Lookup.Cursor)
+	if lookup.Cursor != "" {
+		query.Set("cursor", lookup.Cursor)
 	}
-	lookup := st.Lookup
 	for range p.cfg.MaxLookupPages {
 		var response wire.RfqOrdersResponse
 		if _, err := p.http.JSON(ctx, http.MethodGet, "/orders?"+query.Encode(), nil, &response); err != nil {
@@ -51,11 +50,13 @@ func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, 
 		if response.Orders == nil || len(response.Orders) > 100 || len(response.Cursor) == 0 {
 			return false, false, errors.New("RFQ incomplete order lookup")
 		}
+		next := *lookup
+		pageIDs := make(map[string]bool, len(response.Orders))
 		for _, o := range response.Orders {
-			if !uuid.MatchString(o.OrderID) || !uuid.MatchString(o.QuoteID) || lookup.IDs[o.OrderID] || o.Type != "Priority" || !knownStatus(o.OrderStatus) || !sameAddress(o.Swapper, s.Account) {
+			if !uuid.MatchString(o.OrderID) || !uuid.MatchString(o.QuoteID) || lookup.IDs[o.OrderID] || pageIDs[o.OrderID] || o.Type != "Priority" || !knownStatus(o.OrderStatus) || !sameAddress(o.Swapper, s.Account) {
 				return false, false, errors.New("RFQ invalid order lookup identity")
 			}
-			lookup.IDs[o.OrderID] = true
+			pageIDs[o.OrderID] = true
 			if st.OrderID != "" && o.OrderID != st.OrderID {
 				return false, false, errors.New("RFQ exact order lookup returned another order")
 			}
@@ -65,7 +66,7 @@ func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, 
 				}
 				continue
 			}
-			if lookup.Match != "" {
+			if next.Match != "" {
 				return false, false, errors.New("RFQ duplicate quote orders")
 			}
 			nonce, err := decimal(o.Nonce)
@@ -88,20 +89,23 @@ func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, 
 				if err != nil || len(raw) != common.HashLength || common.BytesToHash(raw) == (common.Hash{}) {
 					return false, false, errors.New("RFQ invalid order transaction hash")
 				}
-				lookup.TxHash = common.BytesToHash(raw)
+				next.TxHash = common.BytesToHash(raw)
 			}
-			lookup.Match = o.OrderID
-			lookup.Cancelled = o.OrderStatus == "cancelled"
+			next.Match = o.OrderID
+			next.Cancelled = o.OrderStatus == "cancelled"
 		}
 		if string(response.Cursor) == "null" {
-			st.Lookup = nil
-			if st.OrderID != "" && lookup.Match == "" {
+			if st.OrderID != "" && next.Match == "" {
 				return false, false, errors.New("RFQ saved order missing")
 			}
-			if lookup.Match != "" {
-				st.OrderID = lookup.Match
-				st.TxHash = lookup.TxHash
-				st.Cancelled = lookup.Cancelled
+			if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
+				return false, false, err
+			}
+			*lookup = lookupState{}
+			if next.Match != "" {
+				st.OrderID = next.Match
+				st.TxHash = next.TxHash
+				st.Cancelled = next.Cancelled
 				return true, true, nil
 			}
 			return false, true, nil
@@ -110,8 +114,19 @@ func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, 
 		if json.Unmarshal(response.Cursor, &cursor) != nil || !cursorPattern.MatchString(cursor) || lookup.Cursors[cursor] {
 			return false, false, errors.New("RFQ invalid or repeated order cursor")
 		}
-		lookup.Cursors[cursor] = true
-		lookup.Cursor = cursor
+		// Commit only complete validated pages, before a later request can time out.
+		// The cursor alone never permits publication or settlement.
+		if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
+			return false, false, err
+		}
+		if next.IDs == nil {
+			next.IDs = make(map[string]bool)
+			next.Cursors = make(map[string]bool)
+		}
+		maps.Copy(next.IDs, pageIDs)
+		next.Cursors[cursor] = true
+		next.Cursor = cursor
+		*lookup = next
 		query.Set("cursor", cursor)
 	}
 	return false, false, nil

@@ -15,6 +15,9 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
+// borrowedTransport leaves idle connection ownership with the host.
+type borrowedTransport struct{ http.RoundTripper }
+
 type Client struct {
 	*ethclient.Client
 	write     *ethclient.Client
@@ -35,7 +38,13 @@ func Dial(ctx context.Context, readURL, writeURL string, expected *big.Int, aggr
 		return nil, errors.New("positive expected chain ID required")
 	}
 
-	httpClient := &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	transport := http.DefaultTransport
+	if base, ok := transport.(*http.Transport); ok {
+		transport = base.Clone()
+	} else {
+		transport = borrowedTransport{transport}
+	}
+	httpClient := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	connected := false
 	defer func() {
 		if !connected {
@@ -99,6 +108,11 @@ func (c *Client) SendTransaction(ctx context.Context, tx *types.Transaction) err
 func (c *Client) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
 	value, err := c.Client.CallContract(ctx, msg, block)
 	return value, rpcFailure("call contract on read RPC", protocolio.CallFailure("eth_call", msg, block, err))
+}
+
+func (c *Client) CodeAt(ctx context.Context, account common.Address, block *big.Int) ([]byte, error) {
+	value, err := c.Client.CodeAt(ctx, account, block)
+	return value, rpcFailure("read RPC eth_getCode", err)
 }
 
 func (c *Client) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {

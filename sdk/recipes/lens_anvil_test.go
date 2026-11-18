@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 )
 
 type lensAnvilReader struct {
@@ -22,11 +23,20 @@ type lensAnvilReader struct {
 }
 
 func (r *lensAnvilReader) CallContractWithCode(ctx context.Context, msg ethereum.CallMsg, block *big.Int, code []byte) ([]byte, error) {
+	return r.CallContractWithCodeOverrides(ctx, msg, block, map[common.Address][]byte{*msg.To: code})
+}
+
+func (r *lensAnvilReader) CallContractWithCodeOverrides(ctx context.Context, msg ethereum.CallMsg, block *big.Int, code map[common.Address][]byte) ([]byte, error) {
 	r.calls++
+	overrides := make(map[common.Address]any, len(code))
+	for address, runtime := range code {
+		overrides[address] = map[string]any{"code": hexutil.Bytes(runtime)}
+	}
 	var raw hexutil.Bytes
-	err := r.Client.Client().CallContext(ctx, &raw, "eth_call", map[string]any{"from": msg.From, "to": *msg.To, "input": hexutil.Bytes(msg.Data), "gas": hexutil.Uint64(msg.Gas)}, hexutil.EncodeBig(block), map[string]any{msg.To.Hex(): map[string]any{"code": hexutil.Bytes(code)}})
+	err := r.Client.Client().CallContext(ctx, &raw, "eth_call", protocolio.CallArgument(msg), hexutil.EncodeBig(block), overrides)
 	return raw, err
 }
+
 func loadLensFixture(t *testing.T, name string) anvilFixture {
 	t.Helper()
 	raw, err := os.ReadFile("lens/" + name + ".json")
@@ -279,4 +289,92 @@ func TestAnvilLensStatefulPrefix(t *testing.T) {
 	if err = VerifyResults(encoded, original, ResultsWitness(resolved)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestAnvilAccessManagerUsesSignerOriginForPrefixAndAdmission(t *testing.T) {
+	if os.Getenv("MERKLE_ANVIL_TEST") != "1" {
+		t.Skip("local Anvil only")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	client := startAnvil(t, ctx)
+	var owners []common.Address
+	if err := client.Client().CallContext(ctx, &owners, "eth_accounts"); err != nil {
+		t.Fatal(err)
+	}
+	sender := owners[0]
+	deploy := func(artifact anvilFixture, args ...any) common.Address {
+		t.Helper()
+		bytecode := append(bytes.Clone(artifact.Bytecode), fixtureCalldata(t, artifact, "", args...)...)
+		return localTransaction(t, ctx, client, sender, nil, bytecode).ContractAddress
+	}
+	ma, aa, ea := loadAnvilFixture(t, "AccessManager"), loadAnvilFixture(t, "FixtureAccount"), loadAnvilFixture(t, "RecipeExecutor")
+	manager, account := deploy(ma, sender), deploy(aa)
+	executor := deploy(ea, sender, account)
+	probeFixture := loadLensFixture(t, "LensProbe")
+	probe := deploy(probeFixture, executor, sender)
+	selector := [4]byte(executorABI.GetABI().Methods["execute"].ID)
+	localTransaction(t, ctx, client, sender, &manager, fixtureCalldata(t, ma, "grantRole", uint64(3), sender, uint32(0)))
+	localTransaction(t, ctx, client, sender, &manager, fixtureCalldata(t, ma, "setTargetFunctionRole", executor, [][4]byte{selector}, uint64(3)))
+	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetCaller(manager))
+	root := common.Hash{1}
+	localTransaction(t, ctx, client, sender, &account, fixtureCalldata(t, aa, "configure", root, [][32]byte{}, executor))
+
+	recipe := Recipe{
+		Queries: [][]byte{
+			pack(t, queryArgs, probe, fixtureCalldata(t, probeFixture, "contextValue"), []*big.Int{}, big.NewInt(0)),
+			pack(t, queryArgs, manager, fixtureCalldata(t, ma, "getTargetFunctionRole", executor, selector), []*big.Int{}, big.NewInt(0)),
+		},
+		Steps: [][]byte{
+			step(Read, pack(t, readArgs, big.NewInt(0))),
+			step(Read, pack(t, readArgs, big.NewInt(1))),
+			step(Call, pack(t, callArgs, probe, fixtureCalldata(t, probeFixture, "contextValue"), []*big.Int{})),
+		},
+	}
+	localTransaction(t, ctx, client, sender, &executor, executorABI.PackSetRecipe(recipe.Queries, recipe.Steps))
+	reader := &lensAnvilReader{Client: client}
+	prepared, err := DiscoverBatch(ctx, reader, []common.Address{executor}, []common.Address{account}, manager, PreparationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := prepared[0].Snapshot
+	snapshot.Sender = sender
+	resolved, err := ResolveValues(ctx, reader, snapshot, recipe, []Value{{Source: Result, Value: new(big.Int)}, {Source: Result, Value: big.NewInt(1)}})
+	if err != nil || resolved[0].Int64() != 42 || resolved[1].Int64() != 3 {
+		t.Fatalf("forwarded prefix results %v, error %v", resolved, err)
+	}
+	payload, err := executorABI.TryPackExecute(recipe.Queries, recipe.Steps, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	single, err := RouteExecution(ctx, reader, snapshot, sender, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gas, err := client.EstimateGas(ctx, ethereum.CallMsg{From: sender, To: &single.Executor, Data: single.Data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packed, err := BatchExecution(ctx, reader, snapshot, payload, gas)
+	if err != nil || !bytes.Equal(packed, payload) {
+		t.Fatal("forwarded singleton was lost at its exact gas budget", err)
+	}
+	batch, err := Multicall([][]byte{payload, payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, data := range [][]byte{payload, batch} {
+		calls := []ExecutorCall{{Executor: executor, Data: data}}
+		if err = ValidatePreparedBatchForSender(ctx, reader, prepared, calls, [][]common.Hash{nil}, []map[uint]string{{0: "41"}}, manager, sender); err == nil {
+			t.Fatal("forwarded execution accepted a different witness")
+		}
+		if err = ValidatePreparedBatchForSender(ctx, reader, prepared, calls, [][]common.Hash{nil}, []map[uint]string{ResultsWitness(resolved)}, manager, sender); err != nil {
+			t.Fatal("forwarded execution rejected correct witness", err)
+		}
+	}
+	routed, err := RouteExecution(ctx, reader, snapshot, sender, batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localTransaction(t, ctx, client, sender, &routed.Executor, routed.Data)
 }

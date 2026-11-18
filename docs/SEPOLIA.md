@@ -16,8 +16,9 @@ Copy [the ordinary config](../config/example.yaml) to an operator-local file.
 Set `chain.chainId` to `11155111`, supply Sepolia read/write RPC URLs, set
 `curator.url` to the matching Sepolia backend including `/api/v1`, and put the
 actual RecipeExecutor address in `strategies`. Shared factory, implementation,
-connector and registry addresses are not strategy addresses. Keep a separate
-state directory for this chain and caller.
+connector and registry addresses are not strategy addresses. Run one active
+process per signing account and drain pending work before restarting. The daemon
+tracks submissions and settlement in RAM.
 
 Start with `mode: simulate`, then use the existing commands:
 

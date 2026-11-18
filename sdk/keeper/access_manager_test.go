@@ -51,6 +51,21 @@ func (r *forwardingReader) CallContract(ctx context.Context, msg ethereum.CallMs
 	return r.validationReader.CallContract(ctx, msg, block)
 }
 
+func (r *forwardingReader) CodeAt(_ context.Context, address common.Address, block *big.Int) ([]byte, error) {
+	if address != r.snapshot.Caller || block == nil || block.Cmp(r.header.Number) != 0 {
+		r.t.Fatal("forwarded result probe read code outside its pinned caller")
+	}
+	return []byte{0}, nil
+}
+
+func (r *forwardingReader) CallContractWithCode(_ context.Context, msg ethereum.CallMsg, block *big.Int, code []byte) ([]byte, error) {
+	if msg.From != r.sender || msg.To == nil || *msg.To != r.snapshot.Caller || block == nil || block.Cmp(r.header.Number) != 0 || len(code) == 0 {
+		r.t.Fatal("forwarded result probe changed sender, caller or block")
+	}
+	r.simulations++
+	return recipes.Arguments("bytes[]").Pack([][]byte{r.returned})
+}
+
 func TestForwardingAdmissionRetainsWitnessAndCanonicalChecks(t *testing.T) {
 	for _, mode := range []string{"valid", "denied", "delayed", "changed witness", "outer failure", "reorg"} {
 		t.Run(mode, func(t *testing.T) {
@@ -75,7 +90,7 @@ func TestForwardingAdmissionRetainsWitnessAndCanonicalChecks(t *testing.T) {
 			if mode == "valid" && (r.simulations != 1 || r.outerCalls != 1) {
 				t.Fatal("missing inner or outer simulation")
 			}
-			if (mode == "denied" || mode == "delayed" || mode == "changed witness") && r.outerCalls != 0 {
+			if (mode == "denied" || mode == "delayed") && r.outerCalls != 0 {
 				t.Fatal("invalid candidate reached outer simulation")
 			}
 		})

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -35,7 +36,20 @@ type Config struct {
 	ClaimableInputs []uint
 }
 
-func rewards(ctx context.Context, client *protocolio.Client, account common.Address, chainID *big.Int) ([]wire.MerklEntry, error) {
+type rewardSet map[common.Address]wire.MerklReward
+
+func (set rewardSet) tokens() []string {
+	tokens := make([]string, 0, len(set))
+	for token := range set {
+		tokens = append(tokens, token.Hex())
+	}
+	sort.Strings(tokens)
+	return tokens
+}
+
+var errAbsentReward = errors.Errorf("%w: Merkl reward absent", provider.ErrNotReady)
+
+func rewards(ctx context.Context, client *protocolio.Client, account common.Address, chainID *big.Int) (rewardSet, error) {
 	var v []wire.MerklEntry
 	_, e := client.JSON(ctx, http.MethodGet, "/v4/users/"+strings.ToLower(account.Hex())+"/rewards?chainId="+chainID.String(), nil, &v)
 	if e != nil {
@@ -44,12 +58,34 @@ func rewards(ctx context.Context, client *protocolio.Client, account common.Addr
 	if v == nil {
 		return nil, errors.New("Merkl response must be a rewards array")
 	}
-	for _, entry := range v {
+	return indexRewards(v, chainID.Int64())
+}
+
+func indexRewards(entries []wire.MerklEntry, chainID int64) (rewardSet, error) {
+	var selected rewardSet
+	for _, entry := range entries {
 		if entry.Chain.ID <= 0 || entry.Rewards == nil {
 			return nil, errors.New("Merkl malformed chain entry")
 		}
+		if entry.Chain.ID != chainID {
+			continue
+		}
+		if selected != nil {
+			return nil, errors.New("Merkl response contains duplicate chain entries")
+		}
+		selected = make(rewardSet, len(entry.Rewards))
+		for _, reward := range entry.Rewards {
+			token, err := parse.Address(reward.Token.Address)
+			if err != nil {
+				return nil, errors.New("Merkl malformed token address")
+			}
+			if _, duplicate := selected[token]; duplicate {
+				return nil, errors.New("Merkl duplicate reward token")
+			}
+			selected[token] = reward
+		}
 	}
-	return v, nil
+	return selected, nil
 }
 
 type Provider struct {
@@ -142,42 +178,10 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 }
 
 // prepareRewards returns the claim and its total cumulative-minus-claimed delta.
-func (p *Provider) prepareRewards(s provider.Snapshot, entries []wire.MerklEntry, read func() ([]multicall.Multicall3Result, error)) (provider.Output, *big.Int, error) {
-	var rewards []wire.MerklReward
-	found := false
-	for _, entry := range entries {
-		if entry.Chain.ID == s.ChainID.Int64() {
-			if found {
-				return provider.Output{}, nil, errors.New("Merkl response contains duplicate chain entries")
-			}
-			found = true
-			rewards = entry.Rewards
-		}
-	}
-	if !found {
-		return provider.Output{}, nil, errors.Errorf("%w: Merkl response has no configured chain", provider.ErrNotReady)
-	}
-	selected := map[common.Address]wire.MerklReward{}
-	wanted := map[common.Address]bool{}
-	for _, t := range p.tokens {
-		wanted[t] = true
-	}
-	for _, reward := range rewards {
-		t, e := parse.Address(reward.Token.Address)
-		if e != nil {
-			return provider.Output{}, nil, errors.New("Merkl malformed token address")
-		}
-		if !wanted[t] {
-			continue
-		}
-		if _, ok := selected[t]; ok {
-			return provider.Output{}, nil, errors.New("Merkl duplicate reward for configured token")
-		}
-		selected[t] = reward
-	}
+func (p *Provider) prepareRewards(s provider.Snapshot, selected rewardSet, read func() ([]multicall.Multicall3Result, error)) (provider.Output, *big.Int, error) {
 	for _, token := range p.tokens {
 		if _, ok := selected[token]; !ok {
-			return provider.Output{}, nil, errors.Errorf("%w: Merkl configured reward absent", provider.ErrNotReady)
+			return provider.Output{}, nil, errAbsentReward
 		}
 	}
 	a := binding.NewMerklDistributor()

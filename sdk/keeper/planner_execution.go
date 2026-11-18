@@ -85,7 +85,11 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 		root    common.Hash
 		path    string
 	}
-	trees := map[treeKey]*recipes.Tree{}
+	type treeResult struct {
+		tree *recipes.Tree
+		err  error
+	}
+	trees := map[treeKey]treeResult{}
 	var selected []recipes.PreparedRecipe
 	reserved := map[common.Address]bool{}
 	composition := newExecutionComposition()
@@ -128,16 +132,16 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 		}
 		snap := discovered[i].Prepared.Snapshot
 		key := treeKey{snap.Account, snap.Root, strategy.Config.Tree}
-		tree := trees[key]
-		if tree == nil {
-			tree, err = p.permissionTree(ctx, strategy.Config.Tree, snap)
-			if err != nil {
-				failures[strategy.Config.Name] = err
-				continue
-			}
-			trees[key] = tree
+		artifact, found := trees[key]
+		if !found {
+			artifact.tree, artifact.err = p.permissionTree(ctx, strategy.Config.Tree, snap)
+			trees[key] = artifact
 		}
-		plan, repeat, buildErr := p.buildPlan(ctx, strategy, snap, recipes.CloneRecipe(discovered[i].Prepared.Recipe), recipes.CloneTree(tree))
+		if artifact.err != nil {
+			failures[strategy.Config.Name] = artifact.err
+			continue
+		}
+		plan, repeat, buildErr := p.buildPlan(ctx, strategy, snap, recipes.CloneRecipe(discovered[i].Prepared.Recipe), recipes.CloneTree(artifact.tree))
 		if errors.Is(buildErr, provider.ErrNotReady) {
 			continue
 		}
@@ -146,7 +150,7 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 			continue
 		}
 		if repeat && supportsBatch {
-			repeated, batchErr := recipes.BatchExecution(ctx, reader, snap, plan.Calldata, gasLimit)
+			repeated, batchErr := recipes.BatchExecution(ctx, reader, plan.Recipe, plan.Calldata, gasLimit)
 			err = batchErr
 			if errors.Is(err, provider.ErrNotReady) {
 				if !delegated {
@@ -233,7 +237,16 @@ func candidateFailures(failures map[string]error) error {
 }
 
 func (p *Planner) fit(ctx context.Context, batch ExecutionPlan, selected []recipes.PreparedRecipe, strategies []Strategy, prior error) (ExecutionPlan, error) {
-	for len(batch.Members) > 0 {
+	// Keep the untested suffix while probing shorter prefixes. Once a member
+	// is specifically rejected, its siblings can be admitted without it.
+	candidates := batch.Members
+	outerTarget := batch.To
+	for count := len(candidates); count > 0; {
+		if err := ctx.Err(); err != nil {
+			return ExecutionPlan{}, err
+		}
+		batch.Members = candidates[:count]
+		batch.To = outerTarget
 		if len(batch.Members) == 1 && (p.Sender == (common.Address{}) || p.Sender == p.Caller) {
 			batch.To = batch.Members[0].Plan.Snapshot.Executor
 		}
@@ -241,7 +254,7 @@ func (p *Planner) fit(ctx context.Context, batch ExecutionPlan, selected []recip
 		err := prior
 		prior = nil
 		if err == nil {
-			err = recipes.ValidatePreparedBatchForSender(ctx, p.Chain, selected, calls, leaves, witnesses, p.Caller, p.Sender, p.MaxGas)
+			err = recipes.ValidatePreparedBatchForSender(ctx, p.Chain, selected[:count], calls, leaves, witnesses, p.Caller, p.Sender, p.MaxGas)
 		}
 		if err == nil {
 			return batch, nil
@@ -256,8 +269,8 @@ func (p *Planner) fit(ctx context.Context, batch ExecutionPlan, selected []recip
 			for _, index := range indices {
 				drop[index] = true
 			}
-			members, prepared := batch.Members[:0], selected[:0]
-			for i, entry := range batch.Members {
+			members, prepared := candidates[:0], selected[:0]
+			for i, entry := range candidates {
 				if drop[i] && !errors.Is(err, provider.ErrNotReady) {
 					if batch.Failures == nil {
 						batch.Failures = map[string]error{}
@@ -269,7 +282,8 @@ func (p *Planner) fit(ctx context.Context, batch ExecutionPlan, selected []recip
 					prepared = append(prepared, selected[i])
 				}
 			}
-			batch.Members, selected = members, prepared
+			candidates, selected = members, prepared
+			count = len(candidates)
 			continue
 		}
 		if !recipes.BatchRejected(err) {
@@ -278,9 +292,7 @@ func (p *Planner) fit(ctx context.Context, batch ExecutionPlan, selected []recip
 		if len(batch.Members) > 1 {
 			// EVM prefixes need not be monotone; test descending prefixes to retain
 			// the largest passing configured-order prefix within the operation budget.
-			count := len(batch.Members) - 1
-			batch.Members = batch.Members[:count]
-			selected = selected[:count]
+			count--
 			continue
 		}
 		plan := &batch.Members[0].Plan
@@ -290,21 +302,24 @@ func (p *Planner) fit(ctx context.Context, batch ExecutionPlan, selected []recip
 				batch.Failures = map[string]error{}
 			}
 			batch.Failures[batch.Members[0].Name] = err
-			batch.Members = nil
-			break
+			// Keep selected's backing array aligned for provisional reservations.
+			candidates = slices.Delete(candidates, 0, 1)
+			selected = slices.Delete(selected, 0, 1)
+			count = len(candidates)
+			continue
 		}
-		count := len(entries) - 1
-		if count == 1 {
+		entries = entries[:len(entries)-1]
+		if len(entries) == 1 {
 			plan.Calldata = entries[0]
 		} else {
-			plan.Calldata, e = recipes.Multicall(entries[:count])
+			plan.Calldata, e = recipes.Multicall(entries)
 			if e != nil {
 				return ExecutionPlan{}, e
 			}
 		}
 		for i, group := range plan.Outputs {
 			if len(group) > 1 {
-				plan.Outputs[i] = group[:count]
+				plan.Outputs[i] = group[:len(entries)]
 			}
 		}
 		if e = validateExecutionComposition(batch, strategies); e != nil {
