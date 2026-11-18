@@ -102,7 +102,8 @@ context follow the pinned Recipes implementation.
 The full original executor then simulates the complete immutable transaction. Its
 returned numeric values must equal the prepared witness for every dependency used
 by signed economics or the supporting prefix. This detects override-code
-introspection or other divergence. Preparation verifies this witness against the complete transaction.
+introspection or other divergence. For AccessManager forwarding, the ABI omits inner return values. Admission checks the exact
+outer transaction and obtains the inner results from a separate caller probe.
 A signed attempt retains its exact bytes in RAM until canonical confirmation.
 The lens targets Cancun and is reproducibly generated with pinned solc 0.8.38.
 `make generate` regenerates it; `make -C sdk verify-lens` checks exact artifacts.

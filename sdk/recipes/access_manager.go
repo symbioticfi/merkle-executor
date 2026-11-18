@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/accessmanager"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
@@ -92,6 +93,8 @@ func callRouted(ctx context.Context, reader Reader, snapshot Snapshot, data []by
 }
 
 var simulateCallsSelector = crypto.Keccak256([]byte("simulateCalls((address,bytes)[])"))[:4]
+var simulateForwardedSelector = crypto.Keccak256([]byte("simulateForwardedCalls(bytes,(address,bytes)[])"))[:4]
+var forwardedCalls = append(Arguments("bytes"), executorCalls...)
 
 func simulateCallerCalls(ctx context.Context, reader provider.Reader, sender, caller common.Address, calls []ExecutorCall, block *big.Int, gas uint64, overrides map[common.Address][]byte) ([][]byte, error) {
 	type simulationCall struct {
@@ -102,11 +105,26 @@ func simulateCallerCalls(ctx context.Context, reader provider.Reader, sender, ca
 	for i, call := range calls {
 		encoded[i] = simulationCall{call.Executor, call.Data}
 	}
-	args, err := executorCalls.Pack(encoded)
+	selector, arguments, values := simulateCallsSelector, executorCalls, []any{encoded}
+	if sender != caller {
+		codeReader, ok := reader.(contractCodeReader)
+		if !ok {
+			return nil, errors.New("forwarded simulation requires reading AccessManager code")
+		}
+		code, err := codeReader.CodeAt(ctx, caller, block)
+		if err != nil {
+			return nil, protocolio.Failure("read AccessManager code", err)
+		}
+		if len(code) == 0 || len(code) > 24576 {
+			return nil, errors.New("invalid AccessManager runtime size")
+		}
+		selector, arguments, values = simulateForwardedSelector, forwardedCalls, []any{code, encoded}
+	}
+	args, err := arguments.Pack(values...)
 	if err != nil {
 		return nil, err
 	}
-	msg := ethereum.CallMsg{From: sender, To: &caller, Data: append(bytes.Clone(simulateCallsSelector), args...), Gas: gas}
+	msg := ethereum.CallMsg{From: sender, To: &caller, Data: append(bytes.Clone(selector), args...), Gas: gas}
 	var raw []byte
 	if len(overrides) == 0 {
 		override, ok := reader.(provider.CodeOverrideReader)
@@ -125,7 +143,7 @@ func simulateCallerCalls(ctx context.Context, reader provider.Reader, sender, ca
 	if err != nil {
 		return nil, simulationFailure(ctx, err)
 	}
-	values, err := batchArguments.Unpack(raw)
+	values, err = batchArguments.Unpack(raw)
 	if err != nil {
 		return nil, errors.New("invalid caller simulation result")
 	}
@@ -170,5 +188,8 @@ func simulateForwarded(ctx context.Context, reader Reader, snapshot Snapshot, da
 	for i, entry := range entries {
 		calls[i] = ExecutorCall{snapshot.Executor, entry}
 	}
-	return simulateCallerCalls(ctx, reader, snapshot.Sender, snapshot.Caller, calls, new(big.Int).SetUint64(snapshot.BlockNumber), gas, nil)
+	if gas > ^uint64(0)-batchProbeOverhead {
+		return nil, errors.New("batch gas budget overflows probe allowance")
+	}
+	return simulateCallerCalls(ctx, reader, snapshot.Sender, snapshot.Caller, calls, new(big.Int).SetUint64(snapshot.BlockNumber), gas+batchProbeOverhead, nil)
 }

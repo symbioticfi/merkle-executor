@@ -173,10 +173,11 @@ executors remain eligible on later ticks. `ValidatePreparedBatchForSender` check
 fresh identity and roles, the immediate grant, and the exact outer envelope
 from the signing EOA. Because the manager ABI omits inner results, an RPC-only
 probe at the manager address collects the executor results for witness and
-work checks. Prefix and capacity probes use code overrides at both the manager
-and executor. These probes preserve the executor's caller and the EOA's
-`tx.origin`. Recipes that depend on the manager's own forwarding internals
-require separate compatibility validation. Admission closes the canonical
+work checks. Calls back into the manager use its original runtime and state.
+Prefix and capacity probes use code overrides at both the manager and executor.
+These probes preserve the executor's caller and the EOA's `tx.origin`. The
+probe's forwarding loop does not reproduce the manager's in-flight execution
+marker. Recipes that rely on this marker can observe different probe results. Admission closes the canonical
 block pins after the original simulation and result checks.
 Other SDK hosts retain their full outer transaction simulation and fresh identity checks.
 The helper does not infer an authority from arbitrary account bytecode, schedule

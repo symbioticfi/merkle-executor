@@ -44,6 +44,9 @@ one-element slices. The standalone discovery, preparation and validation helpers
 are removed, along with `PreparationOptions.VerifySimulation`; supply numerical
 witnesses to the shared validator. Both sizes receive the same commitment,
 identity, root, leaf-role, simulation and canonical-block checks.
+AccessManager forwarding uses the SDK chain client's pinned code reads and
+`eth_call` code overrides. A custom reader for forwarded numerical prefixes
+also implements `provider.CodeOverridesReader` for the two-address override.
 
 Providers implement `RecipeRequirements` and `PrepareRecipe`. They receive only
 an authenticated recipe/tree and snapshot. Outputs contain authorized inputs,

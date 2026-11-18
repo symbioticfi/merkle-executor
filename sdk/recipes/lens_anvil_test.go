@@ -321,9 +321,13 @@ func TestAnvilAccessManagerUsesSignerOriginForPrefixAndAdmission(t *testing.T) {
 	localTransaction(t, ctx, client, sender, &account, fixtureCalldata(t, aa, "configure", root, [][32]byte{}, executor))
 
 	recipe := Recipe{
-		Queries: [][]byte{pack(t, queryArgs, probe, fixtureCalldata(t, probeFixture, "contextValue"), []*big.Int{}, big.NewInt(0))},
+		Queries: [][]byte{
+			pack(t, queryArgs, probe, fixtureCalldata(t, probeFixture, "contextValue"), []*big.Int{}, big.NewInt(0)),
+			pack(t, queryArgs, manager, fixtureCalldata(t, ma, "getTargetFunctionRole", executor, selector), []*big.Int{}, big.NewInt(0)),
+		},
 		Steps: [][]byte{
 			step(Read, pack(t, readArgs, big.NewInt(0))),
+			step(Read, pack(t, readArgs, big.NewInt(1))),
 			step(Call, pack(t, callArgs, probe, fixtureCalldata(t, probeFixture, "contextValue"), []*big.Int{})),
 		},
 	}
@@ -335,13 +339,25 @@ func TestAnvilAccessManagerUsesSignerOriginForPrefixAndAdmission(t *testing.T) {
 	}
 	snapshot := prepared[0].Snapshot
 	snapshot.Sender = sender
-	resolved, err := ResolveValues(ctx, reader, snapshot, recipe, []Value{{Source: Result, Value: new(big.Int)}})
-	if err != nil || resolved[0].Int64() != 42 {
+	resolved, err := ResolveValues(ctx, reader, snapshot, recipe, []Value{{Source: Result, Value: new(big.Int)}, {Source: Result, Value: big.NewInt(1)}})
+	if err != nil || resolved[0].Int64() != 42 || resolved[1].Int64() != 3 {
 		t.Fatalf("forwarded prefix results %v, error %v", resolved, err)
 	}
 	payload, err := executorABI.TryPackExecute(recipe.Queries, recipe.Steps, nil, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	single, err := RouteExecution(ctx, reader, snapshot, sender, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gas, err := client.EstimateGas(ctx, ethereum.CallMsg{From: sender, To: &single.Executor, Data: single.Data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packed, err := BatchExecution(ctx, reader, snapshot, payload, gas)
+	if err != nil || !bytes.Equal(packed, payload) {
+		t.Fatal("forwarded singleton was lost at its exact gas budget", err)
 	}
 	batch, err := Multicall([][]byte{payload, payload})
 	if err != nil {
