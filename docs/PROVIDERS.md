@@ -153,9 +153,11 @@ type, input/output tokens, protocol and account recipient. The Reactor is the un
 committed approval/invalidation candidate whose EIP-712 domain matches
 `Reactor`, version `1`, the authenticated chain and target. Ambiguous domain
 ownership or missing candidate information is rejected; no deployment is guessed.
-The quote supplies only authorized amount/deadline/nonce/output words. The provider
-excludes expired quotes; duration constraints belong to the committed recipe and
-are enforced by the original full execution simulation before signing. The SDK has
+The provider considers quotes in backend rank order. It checks the typed request,
+live deadline, minimum proceeds, exact recipe bindings, permission bits and unused
+nonce before selecting a quote. A binding mismatch or consumed nonce moves selection
+to the next option. Malformed quote data and failed reads stop preparation. The
+original full execution simulation enforces recipe duration constraints before signing. The SDK has
 no minimum duration buffer or maximum lifetime setting. Signed discount production
 remains in vault-solver.
 
@@ -164,13 +166,16 @@ accepts one RFQ authorization and rejects multiple authorizations before HTTP,
 even when an extra authorization is inactive. Connector acquisition and issuer
 redemption remain in vault-solver, bound to the configured asset recipe.
 
-Confirmed account authorization precedes idempotent consumer submission. Request/quote
-identity, signatures, settlement progress and cursors remain in private RAM tasks. Fills require canonical matching input/output transfers and Reactor usage
-evidence. Cancelled orders use the backend's `/orders` status and pinned used nonce.
-No cancellation receipt or event scan is needed. Paginated lookup fails closed on
-missing or ambiguous evidence. Lookup pauses after 10 API pages per tick
-and resumes across in-process ticks, preserving duplicate checks and withholding publication
-until the scan completes. No new quote is obtained for an existing job.
+Confirmed account authorization precedes idempotent consumer submission. The RAM
+task keeps the original quote, signature and order identity through retries.
+For a fill, the SDK verifies a canonical successful receipt with exactly one
+matching Reactor `Fill` for the account and full request, outputs meeting the
+signed minima, and a consumed nonce at the pinned snapshot. This evidence assumes
+ordinary exact-transfer tokens. A backend `cancelled` status and a consumed nonce
+complete cancellation. Lookup checks at most 10 pages per tick and retains each
+validated nonterminal page after its canonical block check. A timeout resumes at
+the last accepted cursor with the same duplicate checks. Publication requires a
+complete absence check.
 [Consumer wire schema and evidence](../sdk/schemas/LIQUID_LANE_RFQ.md).
 
 ## Merkl cumulative account rewards
@@ -189,15 +194,21 @@ the overall calldata size is unchanged. Capacity overflow fails. The provider ne
 expands permission data or changes instructions, masks, targets or permission proofs.
 Existing recipe bindings and full transaction simulation remain authoritative.
 
-All claim actions are prepared together. A raw multi-token claim can contain idle
-members when another member is positive. For a dedicated single-token Manage,
-an Input gate is owned as the verified cumulative-minus-claimed delta, allowing an
-idle guarded claim to remain zero-gated alongside positive claims. A shared group
-or a different gate expression retains its committed recipe policy. The provider
-fills the existing cumulative/proof fields and their declared Inputs; it does not
-replace gates or skip steps. When all these optional claims are idle, their zero gates remain usable alongside
-other ready actions; the engine classifies idle work across the whole recipe.
-All-idle Merkl claims without dedicated optional gates remain not ready. The daemon Anvil fixture `TestAnvilCurrentFrontendMerklVariableProof` executes
+One preparation indexes the API inventory by token. Fixed slots reserve their
+tokens before runtime selection, including when a fixed slot occurs later in the
+recipe. Each present reward still requires a valid proof and pinned ledger reads.
+A raw multi-token claim can contain idle members alongside positive members.
+
+For a dedicated single-token Manage with an Input gate, the provider supplies
+the verified cumulative-minus-claimed delta as the gate. When the API omits that
+token, it can disable the optional call with a zero gate and its committed
+calldata. The gate may feed arithmetic and assertions that check the cash delta.
+If another call or query consumes the gate or a value derived from it, or another
+step consumes an unwitnessed claim field, preparation reports the missing reward.
+Mandatory claims require the witness. Malformed inventories and invalid selected
+proofs fail preparation. The original recipe and all its guards still run.
+
+The daemon Anvil fixture `TestAnvilCurrentFrontendMerklVariableProof` executes
 the current frontend claim with a runtime token and a 20-element proof inside
 the 64-element reservation. Separate nested-claim fixtures cover idle/positive
 combinations, changing roots, wrong proofs and original recipe cash-delta guards.
@@ -223,8 +234,10 @@ The recipe's derived minimum remains binding even when AUTO proposes a lower val
 
 Advance verifies the exact confirmed account sign call before order POST. Idempotent
 lookup/POST preserves the UID through in-process ambiguity using the original
-prepared order and canonical execution evidence. Partial fills stay owned,
-and terminal completion requires on-chain settlement evidence as well as API state.
+prepared order and canonical execution evidence. A full on-chain fill completes
+as `settled`. At a canonical timestamp strictly past `validTo`, an unfilled order
+completes as `expired` and the on-chain invalidation sentinel completes as
+`invalidated`. The keeper retains early invalidations and anomalous partial fills.
 
 ## Liquid Lane connector host boundary
 
