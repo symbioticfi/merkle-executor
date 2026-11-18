@@ -78,15 +78,24 @@ func (k *Keeper) Tick(ctx context.Context) error {
 		defer cancel()
 		plan, err := k.Planner.PrepareExecution(operation, k.Strategies)
 		var failures []error
+		selected := make(map[string]bool, len(plan.Members))
+		for _, member := range plan.Members {
+			selected[member.Name] = true
+		}
 		for _, s := range k.Strategies {
-			memberErr := err
-			if memberErr == nil {
-				memberErr = plan.Failures[s.Config.Name]
-				if memberErr != nil {
-					failures = append(failures, memberErr)
+			name := s.Config.Name
+			failure := plan.Failures[name]
+			switch {
+			case failure != nil:
+				k.observe(name, failure)
+				if !errors.Is(err, failure) {
+					failures = append(failures, failure)
 				}
+			case err == nil && selected[name]:
+				k.observe(name, nil)
+			case errors.Is(err, provider.ErrNotReady):
+				k.observe(name, err)
 			}
-			k.observe(s.Config.Name, memberErr)
 		}
 		if errors.Is(err, provider.ErrNotReady) {
 			return nil
@@ -238,15 +247,26 @@ func (k *Keeper) complete(result *transaction.ExecutionResult) error {
 	if err := result.Execution.Validate(); err != nil {
 		return err
 	}
+	var evidence *provider.Execution
 	for _, member := range k.active.Members {
 		if result.Reverted {
 			k.halted[member.Name] = true
 			k.observe(member.Name, errors.New("execution reverted"))
 			continue
 		}
-		work := &settlement{plan: member.Plan, execution: result.Execution.Clone(), done: make([][]bool, len(member.Plan.Outputs))}
+		work := &settlement{plan: member.Plan, done: make([][]bool, len(member.Plan.Outputs))}
 		for i, group := range member.Plan.Outputs {
-			work.done[i] = make([]bool, len(group))
+			for _, out := range group {
+				if out.Task != nil {
+					// Keep one private receipt per envelope. Each task receives a clone.
+					if evidence == nil {
+						evidence = result.Execution.Clone()
+					}
+					work.execution = evidence
+					work.done[i] = make([]bool, len(group))
+					break
+				}
+			}
 		}
 		k.settlements[member.Name] = work
 	}
@@ -258,13 +278,7 @@ func (k *Keeper) complete(result *transaction.ExecutionResult) error {
 }
 
 func (k *Keeper) advance(ctx context.Context, work *settlement) error {
-	hasTask := false
-	for _, group := range work.plan.Outputs {
-		for _, out := range group {
-			hasTask = hasTask || out.Task != nil
-		}
-	}
-	if !hasTask {
+	if work.execution == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, k.OperationTimeout)
