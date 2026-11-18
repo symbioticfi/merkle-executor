@@ -356,4 +356,9 @@ func TestAnvilAccessManagerUsesSignerOriginForPrefixAndAdmission(t *testing.T) {
 			t.Fatal("forwarded execution rejected correct witness", err)
 		}
 	}
+	routed, err := RouteExecution(ctx, reader, snapshot, sender, batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	localTransaction(t, ctx, client, sender, &routed.Executor, routed.Data)
 }

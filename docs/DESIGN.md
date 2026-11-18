@@ -39,7 +39,8 @@ callers retain all-or-error semantics. Healthy plans carry candidate failures
 back to the keeper for reporting; errors are never silently discarded.
 
 The planner obtains each unique permission artifact within its account/root scope
-once per cycle. The SDK decodes and verifies every leaf and proof, checks chain,
+once per cycle. A failed fetch is shared within that cycle and retried on a
+later cycle. The SDK decodes and verifies every leaf and proof, checks chain,
 account and active root, and checks provider ownership before acquiring runtime
 data. Remote metadata never grants authority.
 
@@ -77,7 +78,8 @@ rejected task cannot starve its sibling. Prepared evidence and task identity are
 reused; the final selected envelope still receives full admission.
 Receipt ownership conflicts and stale state-dependent witnesses defer work.
 Oversized call inventories shrink to an executable prefix, leaving the rest for
-later cycles. After an envelope rejection, descending prefixes consider every
+later cycles. A candidate that fails individual admission can be removed so
+independent siblings receive their own simulation in configured order. After an envelope rejection, descending prefixes consider every
 intermediate size within the operation deadline; arbitrary EVM execution does
 not guarantee monotone success. Repetition uses exponential and boundary probes bounded by gas,
 progress and context rather than simulating lengths 1 through N.

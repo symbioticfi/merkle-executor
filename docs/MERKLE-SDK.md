@@ -47,8 +47,9 @@ identity, root, leaf-role, simulation and canonical-block checks.
 
 Providers implement `RecipeRequirements` and `PrepareRecipe`. They receive only
 an authenticated recipe/tree and snapshot. Outputs contain authorized inputs,
-masked actions, witnesses and optionally a process-local `provider.Task`.
-Stateless providers return no task. A task implements
+masked actions, witnesses and optionally a process-local `provider.Task`. Each
+output's input indices and action keys must appear in that provider's declared
+`RecipeRequirements`. Stateless providers return no task. A task implements
 `Advance(context.Context, provider.Snapshot) (provider.Progress, error)` and owns
 its typed progress in RAM. It runs only after canonical authorization, retaining
 exact order identity across in-process retries. Account reservations last until
