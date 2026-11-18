@@ -141,3 +141,43 @@ func TestReceiptPollingPrioritizesNewSignaturesWithoutResettingRotation(t *testi
 		}
 	})
 }
+
+func TestReceiptSweepLeavesTimeForPendingTransaction(t *testing.T) {
+	for _, mode := range []string{"rebroadcast", "replacement", "consumed nonce"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager, backend, txs := receiptPollingManager(t, 9)
+				latest := txs[len(txs)-1]
+				w := &work{req: Request{To: common.Address{1}}, signed: true, strict: true, errors: make(chan error, 1)}
+				manager.current = w
+				manager.pending.attempts[len(txs)-1].work = w
+				switch mode {
+				case "replacement":
+					backend.advanceLocked("new fee decision block")
+				case "consumed nonce":
+					backend.nonce = 1
+				}
+				reads := 0
+				backend.read = func(ctx context.Context, _ common.Hash) (*types.Receipt, error) {
+					reads++
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				manager.step(t.Context(), true)
+				if reads == 0 || reads >= len(txs) || manager.current != w || manager.pending == nil {
+					t.Fatalf("receipt budget or pending ownership changed: reads=%d", reads)
+				}
+				relayed := backend.attempts()
+				if mode == "consumed nonce" {
+					if len(relayed) != 0 {
+						t.Fatal("rebroadcast despite advanced nonce")
+					}
+					return
+				}
+				if len(relayed) != 1 || relayed[0].Nonce() != latest.Nonce() || (relayed[0].Hash() == latest.Hash()) != (mode == "rebroadcast") {
+					t.Fatal("slow receipts starved relay or changed replacement identity")
+				}
+			})
+		})
+	}
+}
