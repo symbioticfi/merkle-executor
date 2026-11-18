@@ -84,10 +84,11 @@ func derive(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (*borrow, er
 	}
 	var found *borrow
 	var allowed map[uint]bool
+	membership := map[uint]bool{}
 	for _, action := range actions {
 		candidate := false
 		for _, binding := range action.Bindings {
-			has, e := capacityChain(r, binding.Value, map[uint]bool{})
+			has, e := capacityChain(r, binding.Value, membership)
 			if e != nil {
 				return nil, e
 			}
@@ -172,6 +173,9 @@ func capacityChain(r recipes.Recipe, v recipes.Value, nodes map[uint]bool) (bool
 	if i >= uint(len(r.Steps)) {
 		return false, errors.New("invalid Aave amount result")
 	}
+	if has, visited := nodes[i]; visited {
+		return has, nil
+	}
 	if r.Steps[i][0] != recipes.Min {
 		return false, nil
 	}
@@ -187,10 +191,8 @@ func capacityChain(r recipes.Recipe, v recipes.Value, nodes map[uint]bool) (bool
 	if err != nil {
 		return false, err
 	}
-	if a || b {
-		nodes[i] = true
-	}
-	return a || b, nil
+	nodes[i] = a || b
+	return nodes[i], nil
 }
 
 // Native permissions pin the pool and every argument except the amount. The
