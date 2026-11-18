@@ -315,11 +315,8 @@ func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared,
 	if err != nil {
 		return provider.Progress{}, err
 	}
-	if err = protocolio.Canonical(ctx, p.chain, s); err != nil {
-		return provider.Progress{}, err
-	}
 	if !complete {
-		return finish("lookup-scanning", false)
+		return provider.Progress{Outcome: "lookup-scanning", Reference: st.OrderID}, nil
 	}
 	if st.Cancelled {
 		if !used {

@@ -95,10 +95,13 @@ func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, 
 			next.Cancelled = o.OrderStatus == "cancelled"
 		}
 		if string(response.Cursor) == "null" {
-			*lookup = lookupState{}
 			if st.OrderID != "" && next.Match == "" {
 				return false, false, errors.New("RFQ saved order missing")
 			}
+			if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
+				return false, false, err
+			}
+			*lookup = lookupState{}
 			if next.Match != "" {
 				st.OrderID = next.Match
 				st.TxHash = next.TxHash
