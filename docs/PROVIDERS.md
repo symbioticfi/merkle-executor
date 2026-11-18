@@ -90,20 +90,21 @@ checks.
 
 The planner unions every adapter's dependencies. Adapters requiring no numerical
 results prepare first, allowing a root-verified Merkl claim to supply an earlier
-runtime action. One `eth_call` replaces only the original executor's code with the
-pinned numerical lens, uses the real caller as `From`, and runs at the pinned block.
-It resolves all required values and replays preceding authenticated Manage, Approve
+runtime action. The prefix replaces the executor's code with the pinned numerical
+lens during `eth_call`. A direct prefix sets `From` to the executor's caller. An
+AccessManager prefix also overrides the caller temporarily, preserving the manager
+as executor caller and the signing EOA as `tx.origin`. Both use the pinned block.
+The lens resolves all required values and replays preceding authenticated Manage, Approve
 and Call effects, including bindings, proof checks, gates and allowance resets.
 Those effects exist only inside this call. A later balance READ can therefore
 observe an earlier claim. Prior exact Inputs may also feed preview
 reads. Packed uint216 operands, checked arithmetic, division by zero and caller
 context follow the pinned Recipes implementation.
 
-The full original executor then simulates the complete immutable transaction. Its
-returned numeric values must equal the prepared witness for every dependency used
-by signed economics or the supporting prefix. This detects override-code
-introspection or other divergence. For AccessManager forwarding, the ABI omits inner return values. Admission checks the exact
-outer transaction and obtains the inner results from a separate caller probe.
+Admission simulates the complete immutable transaction against the original code
+and compares the executor's numerical results with the prepared witness. Where the
+outer ABI omits inner return values, including AccessManager forwarding, a separate
+caller probe collects the results for witness and work checks.
 A signed attempt retains its exact bytes in RAM until canonical confirmation.
 The lens targets Cancun and is reproducibly generated with pinned solc 0.8.38.
 `make generate` regenerates it; `make -C sdk verify-lens` checks exact artifacts.

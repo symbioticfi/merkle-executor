@@ -80,6 +80,17 @@ fixture verifies canonical input/output transfers and nonce usage; its protocol
 authentication is simplified. [RFQ fixture limitations](../sdk/providers/liquidlanerfq/testdata/README.md)
 and [wire provenance](../sdk/schemas/LIQUID_LANE_RFQ.md) record that boundary.
 
+## Local planning benchmarks
+
+```sh
+cd sdk
+GOWORK=off go test ./providers/merkl ./providers/aave -run '^$' -bench 'Benchmark(RewardInventory|SharedCapacityDependencies)' -benchmem
+```
+
+The Merkl benchmark assembles claims from fixture inventories with up to 512
+reward proofs. The Aave benchmark resolves shared numerical dependencies with
+up to 12 levels. The results measure local processing without HTTP or RPC latency.
+
 ## Generated contract sources
 
 The core ABI source is adapters `codex/bailsec-normalized` at
