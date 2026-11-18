@@ -167,10 +167,15 @@ existing execute-only grant also authorizes batching.
 The daemon sets `Planner.Sender` from the optional `signer.address` (defaulting
 to the discovered caller) and checks the sending key against it. Forwarded plans
 admit one executor per transaction, retaining same-executor batches; other ready
-executors remain eligible on later ticks. `ValidatePreparedBatchForSender` keeps
-numeric witnesses, work detection and fresh identity/role checks, checks the
-immediate grant, simulates the unchanged outer call from the signing EOA, and
-closes the canonical block pins. Direct and delegated execution are unchanged.
+executors remain eligible on later ticks. `ValidatePreparedBatchForSender` checks
+fresh identity and roles, the immediate grant, and the exact outer envelope
+from the signing EOA. Because the manager ABI omits inner results, an RPC-only
+probe at the manager address collects the executor results for witness and
+work checks. Prefix and capacity probes use code overrides at both the manager
+and executor. These probes preserve the executor's caller and the EOA's
+`tx.origin`. Recipes that depend on the manager's own forwarding internals
+require separate compatibility validation. Admission closes the canonical
+block pins after the original simulation and result checks.
 Other SDK hosts retain their full outer transaction simulation and fresh identity checks.
 The helper does not infer an authority from arbitrary account bytecode, schedule
 delayed calls, grant roles, or change any recipe instruction or permission.

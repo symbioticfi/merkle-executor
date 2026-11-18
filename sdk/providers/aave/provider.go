@@ -66,7 +66,7 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, r rec
 		return nil, err
 	}
 	query := append(selector("maxBorrow(address,address,address,uint256)"), args...)
-	raw, witness, err := recipes.ProbePrefix(ctx, p.reader, recipes.Snapshot{BlockNumber: s.BlockNumber.Uint64(), Executor: s.Executor, Account: s.Account, Caller: s.Caller}, r, b.Before, recipes.PrefixRuntime{Tree: t}, artifact.Runtime, query)
+	raw, witness, err := recipes.ProbePrefix(ctx, p.reader, recipes.Snapshot{BlockNumber: s.BlockNumber.Uint64(), Executor: s.Executor, Account: s.Account, Caller: s.Caller, Sender: s.Sender}, r, b.Before, recipes.PrefixRuntime{Tree: t}, artifact.Runtime, query)
 	if err != nil {
 		return nil, err
 	}

@@ -197,6 +197,9 @@ func simulateBatch(ctx context.Context, reader BatchReader, snapshot Snapshot, c
 			return nil, errors.New("batch recipe differs from authenticated snapshot")
 		}
 	}
+	if snapshot.forwarded() {
+		return simulateForwarded(ctx, reader, snapshot, calldata, calls, gas)
+	}
 	block := new(big.Int).SetUint64(snapshot.BlockNumber)
 	if code == nil {
 		code, err = originalExecutorRuntime(ctx, reader, snapshot)
@@ -252,9 +255,12 @@ func BatchExecution(ctx context.Context, reader BatchReader, snapshot Snapshot, 
 	if len(decoded.inputs) != 0 || len(decoded.inspection.Inputs) != 0 {
 		return bytes.Clone(call), nil
 	}
-	code, err := originalExecutorRuntime(ctx, reader, snapshot)
-	if err != nil {
-		return nil, err
+	var code []byte
+	if !snapshot.forwarded() {
+		code, err = originalExecutorRuntime(ctx, reader, snapshot)
+		if err != nil {
+			return nil, err
+		}
 	}
 	finish := func(count int) ([]byte, error) {
 		calls := repeatedCalls(call, count)
@@ -262,8 +268,8 @@ func BatchExecution(ctx context.Context, reader BatchReader, snapshot Snapshot, 
 		if err != nil {
 			return nil, err
 		}
-		if _, err = reader.CallContract(ctx, ethereum.CallMsg{From: snapshot.Caller, To: &snapshot.Executor, Data: data, Gas: gas}, new(big.Int).SetUint64(snapshot.BlockNumber)); err != nil {
-			return nil, simulationFailure(ctx, err)
+		if err = callRouted(ctx, reader, snapshot, data, gas); err != nil {
+			return nil, err
 		}
 		return data, nil
 	}

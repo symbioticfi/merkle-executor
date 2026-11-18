@@ -50,6 +50,7 @@ type Snapshot struct {
 	BlockHash                 common.Hash
 	Timestamp                 uint64
 	Executor, Account, Caller common.Address
+	Sender                    common.Address // Optional transaction origin for simulation.
 	RecipeHash, Root          common.Hash
 	RecipeBlock               uint64
 }

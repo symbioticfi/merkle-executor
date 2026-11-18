@@ -89,8 +89,9 @@ func (p *Planner) buildPlan(ctx context.Context, strategy Strategy, snap recipes
 			break
 		}
 	}
+	snap.Sender = p.Sender
 	plan.Recipe = snap
-	plan.Snapshot = provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snap.BlockNumber), BlockHash: snap.BlockHash, Timestamp: snap.Timestamp, Executor: snap.Executor, Account: snap.Account, Caller: snap.Caller, RecipeHash: snap.RecipeHash, Root: snap.Root}
+	plan.Snapshot = provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snap.BlockNumber), BlockHash: snap.BlockHash, Timestamp: snap.Timestamp, Executor: snap.Executor, Account: snap.Account, Caller: snap.Caller, Sender: snap.Sender, RecipeHash: snap.RecipeHash, Root: snap.Root}
 	inputs := make(map[uint]string)
 	derivedInputs := make(map[uint]string)
 	actions := make(map[string]hexutil.Bytes)

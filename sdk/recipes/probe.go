@@ -4,7 +4,6 @@ import (
 	"context"
 	"math/big"
 
-	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -25,10 +24,6 @@ func ProbePrefix(ctx context.Context, reader provider.Reader, snapshot Snapshot,
 	if err != nil {
 		return nil, nil, err
 	}
-	override, ok := reader.(provider.CodeOverrideReader)
-	if !ok {
-		return nil, nil, errors.New("recipe probe requires RPC code-override support")
-	}
 	indices, resolve, err := lensCall(snapshot, prefix, program, runtime.Inputs)
 	if err != nil {
 		return nil, nil, err
@@ -38,12 +33,9 @@ func ProbePrefix(ctx context.Context, reader provider.Reader, snapshot Snapshot,
 		return nil, nil, err
 	}
 	data := append(crypto.Keccak256([]byte("probe(bytes,bytes)"))[:4], args...)
-	raw, err := override.CallContractWithCode(ctx, ethereum.CallMsg{From: snapshot.Caller, To: &snapshot.Executor, Data: data, Gas: 30_000_000}, new(big.Int).SetUint64(snapshot.BlockNumber), code)
+	raw, err := callPrefix(ctx, reader, snapshot, data, code)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, nil, ctx.Err()
-		}
-		return nil, nil, errors.New("recipe prefix probe simulation failed")
+		return nil, nil, errors.Errorf("recipe prefix probe simulation failed: %w", err)
 	}
 	decoded, err := probeResults.Unpack(raw)
 	if err != nil || len(decoded) != 2 {

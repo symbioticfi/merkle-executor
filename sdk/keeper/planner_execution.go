@@ -146,7 +146,7 @@ func (p *Planner) PrepareExecution(ctx context.Context, strategies []Strategy) (
 			continue
 		}
 		if repeat && supportsBatch {
-			repeated, batchErr := recipes.BatchExecution(ctx, reader, snap, plan.Calldata, gasLimit)
+			repeated, batchErr := recipes.BatchExecution(ctx, reader, plan.Recipe, plan.Calldata, gasLimit)
 			err = batchErr
 			if errors.Is(err, provider.ErrNotReady) {
 				if !delegated {

@@ -11,10 +11,9 @@ contract BatchSimulation {
         bytes data;
     }
 
-    /// @dev Installed at the delegated caller only during eth_call. All targets
-    /// retain their original code; each call sees the actual keeper address.
+    /// @dev Installed at the recipe caller only during eth_call. The outer
+    /// sender can be the caller itself or the EOA using AccessManager.
     function simulateCalls(ExecutorCall[] calldata calls) external returns (bytes[] memory results) {
-        require(msg.sender == address(this), "caller must be self");
         results = new bytes[](calls.length);
         for (uint256 i; i < calls.length; ++i) {
             bool success;
