@@ -274,7 +274,7 @@ func decodeBatchSnapshots(snapshots []Snapshot, header *types.Header, reads *pro
 // The optional maxGas budget defaults to 16,777,216 when omitted or zero and is
 // bounded by the fresh block gas limit. More than one budget is invalid.
 func ValidatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller common.Address, maxGas ...uint64) error {
-	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, common.Address{}, nil, maxGas)
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, common.Address{}, nil, true, maxGas)
 }
 
 // ValidatePreparedBatchForSender retains result and work validation, then checks
@@ -282,7 +282,7 @@ func ValidatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 // the same fresh block. Forwarded plans contain one executor (which may batch
 // several executions); independent executors are admitted on subsequent ticks.
 func ValidatePreparedBatchForSender(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller, sender common.Address, maxGas ...uint64) error {
-	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, sender, nil, maxGas)
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, sender, nil, true, maxGas)
 }
 
 // PreparedBatchSimulationRequest contains independent copies of authenticated
@@ -307,10 +307,21 @@ func ValidatePreparedBatchWithSimulation(ctx context.Context, reader Reader, pre
 	if simulate == nil {
 		return errors.New("external prepared batch simulation required")
 	}
-	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, nil, caller, common.Address{}, simulate, maxGas)
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, nil, caller, common.Address{}, simulate, true, maxGas)
 }
 
-func validatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller, sender common.Address, simulate PreparedBatchSimulation, maxGas []uint64) error {
+// ValidatePreparedRoutesWithSimulation authenticates each recipe's own caller at
+// the same fresh block and simulates the complete external transaction once.
+// The callback receives the outer executor as Caller and must exercise every
+// selected recipe, including any AccessManager forwarding.
+func ValidatePreparedRoutesWithSimulation(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, executor common.Address, simulate PreparedBatchSimulation, maxGas ...uint64) error {
+	if simulate == nil {
+		return errors.New("external prepared batch simulation required")
+	}
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, nil, executor, common.Address{}, simulate, false, maxGas)
+}
+
+func validatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller, sender common.Address, simulate PreparedBatchSimulation, uniformCaller bool, maxGas []uint64) error {
 	if len(maxGas) > 1 {
 		return errors.New("one transaction gas budget allowed")
 	}
@@ -324,7 +335,7 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 	snapshots := make([]Snapshot, len(prepared))
 	for i, member := range prepared {
 		snapshot := member.Snapshot
-		if snapshot.Caller != caller || snapshot.Executor != calls[i].Executor || snapshot.Account == (common.Address{}) {
+		if snapshot.Caller == (common.Address{}) || (uniformCaller && snapshot.Caller != caller) || snapshot.Executor != calls[i].Executor || snapshot.Account == (common.Address{}) {
 			return errors.New("prepared batch identity mismatch")
 		}
 		hash, err := HashRecipe(member.Recipe)
@@ -399,7 +410,7 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 		return err
 	}
 	for i, snapshot := range snapshots {
-		if fresh[i].Account != snapshot.Account || fresh[i].Caller != caller || fresh[i].RecipeHash != snapshot.RecipeHash || fresh[i].RecipeBlock != snapshot.RecipeBlock || fresh[i].Root != snapshot.Root {
+		if fresh[i].Account != snapshot.Account || fresh[i].Caller != snapshot.Caller || fresh[i].RecipeHash != snapshot.RecipeHash || fresh[i].RecipeBlock != snapshot.RecipeBlock || fresh[i].Root != snapshot.Root {
 			return &MemberError{Index: i, Err: errors.New("executor identity, caller, recipe or root changed; prepare again")}
 		}
 	}
