@@ -31,6 +31,7 @@ type testChain struct {
 	times                         map[uint64]uint64
 	t                             *testing.T
 	used, approved                bool
+	usedNonce                     *big.Int
 	balance, allowance            int64
 	logs                          []types.Log
 	receipts                      map[common.Hash]*types.Receipt
@@ -88,7 +89,7 @@ func (c *testChain) CallContract(ctx context.Context, m ethereum.CallMsg, n *big
 		if v[0].(common.Address) != addr(0x22) {
 			c.t.Fatal("wrong nonce owner")
 		}
-		return method.Outputs.Pack(c.used)
+		return method.Outputs.Pack(c.used || (c.usedNonce != nil && c.usedNonce.Cmp(v[1].(*big.Int)) == 0))
 	case "signatures":
 		return method.Outputs.Pack(c.approved)
 	case "balanceOf":
@@ -125,6 +126,7 @@ type harness struct {
 	s                   provider.Snapshot
 	cfg                 Config
 	option              map[string]any
+	additionalQuotes    []map[string]any
 	quotes, gets, posts int
 	requests            [][]byte
 	lookups             []url.Values
@@ -154,7 +156,7 @@ func newHarness(t *testing.T) *harness {
 				_ = json.NewEncoder(w).Encode(map[string]any{"quotes": []any{}})
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"quotes": []any{h.option}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"quotes": append([]map[string]any{h.option}, h.additionalQuotes...)})
 		case "/api/v1/orders":
 			h.gets++
 			h.lookups = append(h.lookups, r.URL.Query())
@@ -647,7 +649,7 @@ func TestPrepareRejectsAPIIntegerOverflowBeforeHTTP(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = h.p.prepare(t.Context(), s, protocolio.ReadResult{Data: raw})
+			_, err = h.p.prepare(t.Context(), s, protocolio.ReadResult{Data: raw}, nil)
 			if err == nil || h.quotes != 0 {
 				t.Fatal("overflow reached API", err)
 			}

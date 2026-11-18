@@ -7,7 +7,6 @@ import (
 	"math/big"
 	"slices"
 
-	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/parse"
@@ -45,16 +44,9 @@ func ResolveValuesWithRuntime(ctx context.Context, reader provider.Reader, snaps
 	if err != nil {
 		return nil, err
 	}
-	override, ok := reader.(provider.CodeOverrideReader)
-	if !ok {
-		return nil, errors.New("recipe-derived amounts require RPC code-override support")
-	}
-	raw, err := override.CallContractWithCode(ctx, ethereum.CallMsg{From: snapshot.Caller, To: &snapshot.Executor, Data: data, Gas: 30_000_000}, new(big.Int).SetUint64(snapshot.BlockNumber), lensRuntime)
+	raw, err := callPrefix(ctx, reader, snapshot, data, lensRuntime)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, errors.New("recipe prefix simulation failed")
+		return nil, errors.Errorf("recipe prefix simulation failed: %w", err)
 	}
 	decoded, err := lensResults.Unpack(raw)
 	if err != nil || len(decoded) != 1 {

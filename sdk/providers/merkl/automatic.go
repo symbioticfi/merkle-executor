@@ -3,7 +3,6 @@ package merkl
 import (
 	"context"
 	"math/big"
-	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -11,7 +10,6 @@ import (
 	multicall "github.com/symbioticfi/merkle-executor/sdk/bindings/multicall3"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
-	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/derived"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -143,7 +141,7 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 		return nil, err
 	}
 	if len(r.Queries) == 0 && len(r.Steps) == 1 && len(claims) == 1 && len(claims[0].action.Bindings) == 0 && len(claims[0].layout.tokens) == 1 && claims[0].action.Slot.Gate.Source == recipes.Literal && claims[0].action.Slot.Gate.Value.Cmp(big.NewInt(1)) == 0 {
-		return p.prepareAll(s, claims[0], entries, newRewardReads(ctx, p.deps, s, claims, entries))
+		return p.prepareAll(ctx, s, claims[0], entries)
 	}
 	// Fixed rewards share a read plan. Runtime tokens add their getters only as
 	// selection visits them, rather than reading the entire unused inventory.
@@ -152,15 +150,37 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	anyClaimable := false
 	allOptional := true
 	used := map[string]bool{}
+	// Runtime slots may only select tokens left available by every committed fixed slot.
+	for _, claim := range claims {
+		for _, token := range claim.layout.tokens {
+			if token != (common.Address{}) {
+				used[claim.cfg.Distributor+token.Hex()] = true
+			}
+		}
+	}
 	for _, claim := range claims {
 		allOptional = allOptional && len(claim.cfg.ClaimableInputs) == 1
 		selected, prepared, claimable, err := p.prepareClaim(s, claim.cfg, entries, used, reads)
-		if err != nil {
-			return nil, err
+		var payload []byte
+		if errors.Is(err, errAbsentReward) {
+			idle, checkErr := canIdleAbsentClaim(r, claim)
+			if checkErr != nil {
+				return nil, checkErr
+			}
+			if !idle {
+				return nil, err
+			}
+			// Other recipe effects are independent of this gate and its calldata bindings.
+			// Supply only the committed template's words and waive no instruction or proof.
+			payload = claim.action.Leaf.Data
+			prepared = provider.Output{Inputs: map[uint]string{claim.cfg.ClaimableInputs[0]: "0"}}
+		} else {
+			if err != nil {
+				return nil, err
+			}
+			anyClaimable = anyClaimable || claimable.Sign() != 0
+			payload = claim.layout.payload(claim.action.Leaf.Data, prepared.Actions[claim.cfg.Action])
 		}
-		anyClaimable = anyClaimable || claimable.Sign() != 0
-		payload := claim.layout.payload(claim.action.Leaf.Data, prepared.Actions[claim.cfg.Action])
-		prepared.Actions[claim.cfg.Action] = payload
 		if err = derived.BindOutput(derived.SignTemplate{Action: claim.action}, payload, results, &prepared); err != nil {
 			return nil, err
 		}
@@ -170,7 +190,7 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 			}
 			out.Inputs[index] = value
 		}
-		out.Actions[claim.cfg.Action] = payload
+		out.Actions[claim.cfg.Action] = append(hexutil.Bytes(nil), payload...)
 		for _, token := range selected.Tokens {
 			used[selected.Distributor+token] = true
 		}
@@ -181,9 +201,50 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	return []provider.Output{out}, nil
 }
 
+// The zero optional gate may flow through recipe arithmetic and assertions
+// (the frontend uses it to check the cash delta). It may not drive another call
+// or query. Other unwitnessed claim fields must be private to this single call.
+func canIdleAbsentClaim(r recipes.Recipe, claim recipeClaim) (bool, error) {
+	if len(claim.cfg.ClaimableInputs) != 1 {
+		return false, nil
+	}
+	gate := claim.cfg.ClaimableInputs[0]
+	owned := map[uint]bool{}
+	for _, index := range claim.requirements.Inputs {
+		owned[index] = true
+	}
+	gateResults := map[uint]bool{}
+	for i, step := range r.Steps {
+		if uint(i) == claim.action.Step {
+			continue
+		}
+		operands, err := recipes.Operands(r, uint(i))
+		if err != nil {
+			return false, err
+		}
+		for _, operand := range operands {
+			index := uint(operand.Value.Uint64())
+			if operand.Source == recipes.Input && owned[index] && index != gate {
+				return false, nil
+			}
+			if (operand.Source != recipes.Input || index != gate) && (operand.Source != recipes.Result || !gateResults[index]) {
+				continue
+			}
+			switch step[0] {
+			case recipes.Add, recipes.Sub, recipes.SaturatingSub, recipes.Min, recipes.Max, recipes.MulDiv:
+				gateResults[uint(i)] = true
+			case recipes.Equal, recipes.LessOrEqual:
+			default:
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
 // A runtime reward token is chosen from proven, unclaimed API entries. The recipe
 // and permission mask still decide whether the supplied token is authorized.
-func (p *Automatic) prepareClaim(s provider.Snapshot, cfg Config, entries []wire.MerklEntry, used map[string]bool, reads *rewardReads) (Config, provider.Output, *big.Int, error) {
+func (p *Automatic) prepareClaim(s provider.Snapshot, cfg Config, entries rewardSet, used map[string]bool, reads *rewardReads) (Config, provider.Output, *big.Int, error) {
 	candidates := []string{""}
 	for _, token := range cfg.Tokens {
 		if common.HexToAddress(token) != (common.Address{}) {
@@ -193,18 +254,11 @@ func (p *Automatic) prepareClaim(s provider.Snapshot, cfg Config, entries []wire
 			return cfg, provider.Output{}, nil, errors.New("Merkl runtime token requires a single-entry claim")
 		}
 		candidates = nil
-		for _, entry := range entries {
-			if entry.Chain.ID != s.ChainID.Int64() {
-				continue
-			}
-			for _, reward := range entry.Rewards {
-				token := common.HexToAddress(reward.Token.Address).Hex()
-				if !used[cfg.Distributor+token] {
-					candidates = append(candidates, token)
-				}
+		for _, token := range entries.tokens() {
+			if !used[cfg.Distributor+token] {
+				candidates = append(candidates, token)
 			}
 		}
-		sort.Strings(candidates)
 	}
 	var out provider.Output
 	var claimable *big.Int
@@ -222,7 +276,7 @@ func (p *Automatic) prepareClaim(s provider.Snapshot, cfg Config, entries []wire
 		}
 	}
 	if len(candidates) == 0 {
-		return cfg, out, nil, errors.Errorf("%w: no Merkl reward token available", provider.ErrNotReady)
+		return cfg, out, nil, errAbsentReward
 	}
 	return cfg, out, claimable, nil
 }

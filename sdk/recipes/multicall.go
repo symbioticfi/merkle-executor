@@ -38,8 +38,14 @@ func artifactRuntime(raw []byte) []byte {
 type BatchReader interface {
 	Reader
 	provider.CodeOverrideReader
+	contractCodeReader
+}
+
+type contractCodeReader interface {
 	CodeAt(context.Context, common.Address, *big.Int) ([]byte, error)
 }
+
+const batchProbeOverhead = uint64(8_000_000)
 
 // A rejected extension does not invalidate its already simulated prefix.
 // Transport and decoding failures must never be treated as an idle recipe.
@@ -197,6 +203,9 @@ func simulateBatch(ctx context.Context, reader BatchReader, snapshot Snapshot, c
 			return nil, errors.New("batch recipe differs from authenticated snapshot")
 		}
 	}
+	if snapshot.forwarded() {
+		return simulateForwarded(ctx, reader, snapshot, calldata, calls, gas)
+	}
 	block := new(big.Int).SetUint64(snapshot.BlockNumber)
 	if code == nil {
 		code, err = originalExecutorRuntime(ctx, reader, snapshot)
@@ -211,11 +220,10 @@ func simulateBatch(ctx context.Context, reader BatchReader, snapshot Snapshot, c
 	data := append(crypto.Keccak256([]byte("simulate(bytes,bytes[])"))[:4], args...)
 	// The probe creates one runtime copy. Its overhead is not part of the real
 	// transaction budget, which the unchanged multicall enforces separately.
-	const overhead = uint64(8_000_000)
-	if gas > ^uint64(0)-overhead {
+	if gas > ^uint64(0)-batchProbeOverhead {
 		return nil, errors.New("batch gas budget overflows probe allowance")
 	}
-	raw, err := reader.CallContractWithCode(ctx, ethereum.CallMsg{From: snapshot.Caller, To: &snapshot.Executor, Data: data, Gas: gas + overhead}, block, batchRuntime)
+	raw, err := reader.CallContractWithCode(ctx, ethereum.CallMsg{From: snapshot.Caller, To: &snapshot.Executor, Data: data, Gas: gas + batchProbeOverhead}, block, batchRuntime)
 	if err != nil {
 		return nil, simulationFailure(ctx, err)
 	}
@@ -252,9 +260,12 @@ func BatchExecution(ctx context.Context, reader BatchReader, snapshot Snapshot, 
 	if len(decoded.inputs) != 0 || len(decoded.inspection.Inputs) != 0 {
 		return bytes.Clone(call), nil
 	}
-	code, err := originalExecutorRuntime(ctx, reader, snapshot)
-	if err != nil {
-		return nil, err
+	var code []byte
+	if !snapshot.forwarded() {
+		code, err = originalExecutorRuntime(ctx, reader, snapshot)
+		if err != nil {
+			return nil, err
+		}
 	}
 	finish := func(count int) ([]byte, error) {
 		calls := repeatedCalls(call, count)
@@ -262,8 +273,8 @@ func BatchExecution(ctx context.Context, reader BatchReader, snapshot Snapshot, 
 		if err != nil {
 			return nil, err
 		}
-		if _, err = reader.CallContract(ctx, ethereum.CallMsg{From: snapshot.Caller, To: &snapshot.Executor, Data: data, Gas: gas}, new(big.Int).SetUint64(snapshot.BlockNumber)); err != nil {
-			return nil, simulationFailure(ctx, err)
+		if err = callRouted(ctx, reader, snapshot, data, gas); err != nil {
+			return nil, err
 		}
 		return data, nil
 	}
@@ -272,7 +283,12 @@ func BatchExecution(ctx context.Context, reader BatchReader, snapshot Snapshot, 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		results, err := simulateBatch(ctx, reader, snapshot, repeatedCalls(call, count), gas, code)
+		var results [][]byte
+		if snapshot.forwarded() && count == 1 {
+			results, err = simulateForwarded(ctx, reader, snapshot, call, [][]byte{call}, gas)
+		} else {
+			results, err = simulateBatch(ctx, reader, snapshot, repeatedCalls(call, count), gas, code)
+		}
 		if err != nil {
 			if !BatchRejected(err) || good == 0 {
 				return nil, err

@@ -354,3 +354,99 @@ func TestPlannerDelegatedIdleSurvivorsPreserveDiscoveryFailure(t *testing.T) {
 		t.Fatalf("idle survivors hid candidate failure: probes=%v error=%v", r.probes, err)
 	}
 }
+
+type rejectedPrefixReader struct {
+	*plannerScaleReader
+	first            common.Address
+	rejected         map[string]bool
+	singletonFailure string
+}
+
+func (r *rejectedPrefixReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	if msg.To != nil && *msg.To == r.members[0].Snapshot.Caller && r.rejected[string(msg.Data)] {
+		return nil, errors.New("out of gas")
+	}
+	if msg.To != nil && *msg.To == r.first && bytes.HasPrefix(msg.Data, executor.NewRecipeExecutor().GetABI().Methods["execute"].ID) {
+		switch r.singletonFailure {
+		case "indexed":
+			// An empty result violates this recipe's one-step witness.
+			return executor.NewRecipeExecutor().GetABI().Methods["execute"].Outputs.Pack([]*big.Int{})
+		case "transport":
+			return nil, errors.New("network unavailable")
+		default:
+			return nil, errors.New("out of gas")
+		}
+	}
+	return r.plannerScaleReader.CallContract(ctx, msg, block)
+}
+
+func TestPlannerRetriesSuffixAfterIsolatingRejectedPrefix(t *testing.T) {
+	for _, failure := range []string{"rejected", "indexed", "transport"} {
+		t.Run(failure, func(t *testing.T) {
+			p, r, strategies, batch := scaleFixture(t, 3)
+			r.accepted = map[int]bool{2: true}
+			reader := &rejectedPrefixReader{plannerScaleReader: r, first: r.members[0].Snapshot.Executor, singletonFailure: failure, rejected: map[string]bool{}}
+			var calls []recipes.ExecutorCall
+			for i, m := range batch.Members {
+				strategies[i].Providers = []Provider{&reservationProvider{}}
+				calls = append(calls, recipes.ExecutorCall{Executor: m.Plan.Snapshot.Executor, Data: m.Plan.Calldata})
+				if len(calls) > 1 {
+					raw, err := recipes.DelegatedMulticall(calls)
+					if err != nil {
+						t.Fatal(err)
+					}
+					reader.rejected[string(raw)] = true
+				}
+			}
+			p.Chain = reader
+			plan, err := p.PrepareExecution(t.Context(), strategies)
+			if failure == "transport" {
+				if err == nil || len(plan.Members) != 0 {
+					t.Fatalf("shared error produced a plan: %+v %v", plan, err)
+				}
+				return
+			}
+			if err != nil || len(plan.Members) != 2 || plan.To != p.Caller || plan.Failures[strategies[0].Config.Name] == nil {
+				t.Fatalf("did not isolate failed prefix: %+v %v", plan, err)
+			}
+			for i, member := range plan.Members {
+				if member.Name != strategies[i+1].Config.Name {
+					t.Fatalf("wrong suffix member %d: %s", i, member.Name)
+				}
+			}
+			if _, _, err := plan.Transaction(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestPlannerCachesFailedPermissionSourceWithinCycle(t *testing.T) {
+	p, r, strategies, _ := scaleFixture(t, 3)
+	p.Chain = struct{ Backend }{r}
+	// The first two strategies share a source key; the third has another path.
+	strategies[2].Config.Tree = "other-tree"
+	cause := errors.New("permission source unavailable")
+	original := p.PermissionSource
+	calls := 0
+	p.PermissionSource = permissionSourceFunc(func(ctx context.Context, id *big.Int, s recipes.Snapshot) ([]byte, error) {
+		calls++
+		if calls == 1 {
+			return nil, cause
+		}
+		return original.PermissionTree(ctx, id, s)
+	})
+	plan, err := p.PrepareExecution(t.Context(), strategies)
+	if err != nil || calls != 2 || len(plan.Members) != 1 || plan.Members[0].Name != strategies[2].Config.Name || len(plan.Failures) != 2 {
+		t.Fatalf("failed key or independent key handled incorrectly: calls=%d members=%d failures=%v error=%v", calls, len(plan.Members), plan.Failures, err)
+	}
+	for _, s := range strategies[:2] {
+		if !errors.Is(plan.Failures[s.Config.Name], cause) {
+			t.Fatalf("missing causal error for %s", s.Config.Name)
+		}
+	}
+	plan, err = p.PrepareExecution(t.Context(), strategies)
+	if err != nil || calls != 3 || len(plan.Members) != 1 || plan.Members[0].Name != strategies[0].Config.Name {
+		t.Fatalf("new cycle reused failed permission result: calls=%d plan=%+v error=%v", calls, plan, err)
+	}
+}

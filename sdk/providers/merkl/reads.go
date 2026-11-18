@@ -8,7 +8,6 @@ import (
 	binding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkldistributor"
 	multicall "github.com/symbioticfi/merkle-executor/sdk/bindings/multicall3"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
-	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
@@ -34,7 +33,7 @@ type rewardReads struct {
 }
 
 // entries preplans runtime tokens only when every reward will be considered.
-func newRewardReads(ctx context.Context, deps provider.Deps, s provider.Snapshot, claims []recipeClaim, entries []wire.MerklEntry) *rewardReads {
+func newRewardReads(ctx context.Context, deps provider.Deps, s provider.Snapshot, claims []recipeClaim, inventory []string) *rewardReads {
 	reads := &rewardReads{ctx: ctx, deps: deps, snapshot: s, seen: map[rewardReadKey]bool{}, results: map[rewardReadKey]rewardReadResult{}}
 	for _, claim := range claims {
 		var tokens []common.Address
@@ -44,13 +43,8 @@ func newRewardReads(ctx context.Context, deps provider.Deps, s provider.Snapshot
 				tokens = append(tokens, token)
 				continue
 			}
-			for _, entry := range entries {
-				if entry.Chain.ID != s.ChainID.Int64() {
-					continue
-				}
-				for _, reward := range entry.Rewards {
-					tokens = append(tokens, common.HexToAddress(reward.Token.Address))
-				}
+			for _, candidate := range inventory {
+				tokens = append(tokens, common.HexToAddress(candidate))
 			}
 		}
 		reads.add(rewardCalls(common.HexToAddress(claim.cfg.Distributor), s.Account, tokens))

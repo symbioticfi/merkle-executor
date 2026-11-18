@@ -328,6 +328,29 @@ func TestClaimReadPreservesContextCancellationCause(t *testing.T) {
 	}
 }
 
+type failedClaimRead struct{}
+
+func (*failedClaimRead) Error() string  { return "rate limit exceeded secret-provider-message" }
+func (*failedClaimRead) ErrorCode() int { return -32005 }
+
+func TestClaimReadNamesGetterAndPreservesSafeRPCDiagnostics(t *testing.T) {
+	s, r, tree := fixture(t, "claimWithdrawal", new(big.Int))
+	cause := new(failedClaimRead)
+	p := &Provider{&chain{t: t, readError: cause}}
+	_, err := p.PrepareRecipe(t.Context(), s, r, tree, nil)
+	if err == nil || !errors.Is(err, cause) {
+		t.Fatalf("failed claim read lost its cause: %v", err)
+	}
+	for _, want := range []string{"getUserNextRequestId", "eth_call", "0x8d29d30e", "rpc_code=-32005", "rate limit"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("claim diagnostic missing %q: %s", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "secret-") {
+		t.Fatal("claim diagnostic exposed provider text")
+	}
+}
+
 func TestPinnedIDDoesNotPreventOtherReadyIDsFromBeingScanned(t *testing.T) {
 	s, r, tree := fixture(t, "claimWithdrawal", big.NewInt(3))
 	clear(tree.Leaves[0].DataMask)

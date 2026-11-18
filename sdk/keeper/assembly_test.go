@@ -2,8 +2,10 @@ package keeper
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -13,7 +15,8 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-func TestProviderExecutionsUseNormalAssembly(t *testing.T) {
+func mutableInputFixture(t *testing.T) (recipes.Recipe, *recipes.Tree) {
+	t.Helper()
 	leaf := recipes.Leaf{Target: common.HexToAddress("0x77"), Value: new(big.Int), Data: make([]byte, 36), DataMask: make([]byte, 36)}
 	copy(leaf.Data, []byte{1, 2, 3, 4})
 	for i := 4; i < 36; i++ {
@@ -29,6 +32,12 @@ func TestProviderExecutionsUseNormalAssembly(t *testing.T) {
 	raw, _ := args.Pack(gate, [][32]byte{leaf.Hash}, [][]*big.Int{{}})
 	recipe := recipes.Recipe{Steps: [][]byte{append([]byte{recipes.Manage}, raw...)}}
 	tree := &recipes.Tree{Root: leaf.Hash, Leaves: []recipes.Leaf{leaf}}
+	return recipe, tree
+}
+
+func TestProviderExecutionsUseNormalAssembly(t *testing.T) {
+	recipe, tree := mutableInputFixture(t)
+	leaf := tree.Leaves[0]
 	first, second := bytes.Clone(leaf.Data), bytes.Clone(leaf.Data)
 	second[35] = 9
 	outputs := [][]provider.Output{{
@@ -67,6 +76,55 @@ func TestProviderExecutionsUseNormalAssembly(t *testing.T) {
 			}
 			if _, _, err := assembleOutputs(recipe, tree, nil, changed); err == nil {
 				t.Fatal("invalid runtime accepted")
+			}
+		})
+	}
+}
+
+type declaredProvider struct {
+	requirements RecipeRequirements
+	outputs      []provider.Output
+}
+
+func (p declaredProvider) RecipeRequirements(provider.Snapshot, recipes.Recipe, *recipes.Tree) (RecipeRequirements, error) {
+	return p.requirements, nil
+}
+
+func (p declaredProvider) PrepareRecipe(context.Context, provider.Snapshot, recipes.Recipe, *recipes.Tree, map[uint]*big.Int) ([]provider.Output, error) {
+	return p.outputs, nil
+}
+
+func TestBuildPlanChecksEachProvidersDeclaredOutputKeys(t *testing.T) {
+	for _, mode := range []string{"declared", "wrong input owner", "wrong action owner", "undeclared later action"} {
+		t.Run(mode, func(t *testing.T) {
+			r, tree := mutableInputFixture(t)
+			s := recipes.Snapshot{Executor: common.Address{1}, Account: common.Address{2}, Caller: common.Address{3}, BlockNumber: 12, Root: tree.Root}
+			input := map[uint]string{0: "1"}
+			data := bytes.Clone(tree.Leaves[0].Data)
+			data[35] = 7
+			action := map[string]hexutil.Bytes{"0:0": data}
+			first := declaredProvider{requirements: RecipeRequirements{Inputs: []uint{0}, Actions: []string{"0:0"}}, outputs: []provider.Output{{Inputs: input, Actions: action}}}
+			other := declaredProvider{outputs: []provider.Output{{}}}
+			var want string
+			switch mode {
+			case "wrong input owner":
+				first.outputs[0].Inputs = nil
+				other.outputs[0].Inputs = input
+				want = "undeclared input"
+			case "wrong action owner":
+				first.outputs[0].Actions = nil
+				other.outputs[0].Actions = action
+				want = "undeclared action"
+			case "undeclared later action":
+				first.requirements.Actions = nil
+				first.outputs[0].Actions = nil
+				first.outputs = append(first.outputs, provider.Output{Inputs: input, Actions: action})
+				want = "undeclared action"
+			}
+			p := &Planner{ChainID: big.NewInt(1)}
+			_, _, err := p.buildPlan(t.Context(), Strategy{Providers: []Provider{first, other}}, s, r, tree)
+			if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+				t.Fatalf("unexpected output ownership result: %v", err)
 			}
 		})
 	}

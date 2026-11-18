@@ -149,7 +149,7 @@ func ContractRead(target common.Address, data []byte, block *big.Int, safe bool)
 // CallData preserves the protocol read error boundary for batched member failures.
 func (r ReadResult) CallData() ([]byte, error) {
 	if r.Err != nil {
-		return nil, errors.New("protocol chain read failed")
+		return nil, Failure("protocol chain read", r.Err)
 	}
 	return r.Data, nil
 }

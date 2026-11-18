@@ -22,7 +22,7 @@ func rewardBatch(t *testing.T) ([]wire.MerklReward, common.Hash, [][][32]byte) {
 	return rewardInventory(t, addr(3), 32)
 }
 
-func rewardInventory(t *testing.T, account common.Address, count int) ([]wire.MerklReward, common.Hash, [][][32]byte) {
+func rewardInventory(t testing.TB, account common.Address, count int) ([]wire.MerklReward, common.Hash, [][][32]byte) {
 	t.Helper()
 	levels := [][]common.Hash{make([]common.Hash, count)}
 	for i := range count {

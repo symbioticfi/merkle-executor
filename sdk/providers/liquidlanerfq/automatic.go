@@ -3,7 +3,6 @@ package liquidlanerfq
 import (
 	"bytes"
 	"context"
-	"maps"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -174,11 +173,10 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 	if err != nil {
 		return nil, err
 	}
-	out, err := runtime.Prepare(ctx, s)
+	out, err := runtime.selectQuote(ctx, s, func(candidate *provider.Output) error {
+		return request.trade.Bind(candidate.Actions[request.cfg.Action], 9, results, candidate)
+	})
 	if err != nil {
-		return nil, err
-	}
-	if err = request.trade.Bind(out.Actions[request.cfg.Action], 9, results, &out); err != nil {
 		return nil, err
 	}
 	return []provider.Output{out}, nil
@@ -189,6 +187,7 @@ type settlementTask struct {
 	provider *Provider
 	prepared prepared
 	state    progressState
+	lookup   lookupState
 }
 
 func (p *Provider) task(d prepared) provider.Task {
@@ -198,21 +197,10 @@ func (p *Provider) task(d prepared) provider.Task {
 }
 
 func (t *settlementTask) Advance(ctx context.Context, s provider.Snapshot) (provider.Progress, error) {
-	next := t.state.clone()
-	progress, err := t.provider.advance(ctx, s, t.prepared, &next)
+	next := t.state
+	progress, err := t.provider.advance(ctx, s, t.prepared, &next, &t.lookup)
 	if err == nil {
 		t.state = next
 	}
 	return progress, err
-}
-
-func (s progressState) clone() progressState {
-	copy := s
-	if s.Lookup != nil {
-		lookup := *s.Lookup
-		lookup.Cursors = maps.Clone(s.Lookup.Cursors)
-		lookup.IDs = maps.Clone(s.Lookup.IDs)
-		copy.Lookup = &lookup
-	}
-	return copy
 }

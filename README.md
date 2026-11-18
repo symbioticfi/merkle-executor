@@ -26,7 +26,9 @@ Simulation is the default and needs no key. Send mode requires a finite positive
 `txManager.maxFeeGwei` and a private key supplied through `signer.keyEnv` (default
 `MERKLE_EXECUTOR_PRIVATE_KEY`). YAML contains environment variable names, never
 secret values. Read and write RPC endpoints must be HTTP(S) on the configured
-chain. Redirects are refused. Executor accounts and their common caller are
+chain. Set every environment variable referenced by these URLs to a nonempty value.
+Omit `chain.writeRpcUrl` to use the read endpoint for submission. Redirects are
+refused. Executor accounts and their common caller are
 validated at startup. `signer.address` defaults to that caller; set it to the
 keeper EOA when the caller is an AccessManager. The signing key must match this
 address, and forwarding requires an immediate grant for the selected function.
@@ -42,6 +44,13 @@ stopping discards RAM tracking when the process exits.
 When configured, `/healthz`, `/readyz` and `/metrics` expose process health and
 keeper outcomes. Readiness reflects the latest iteration. `version` prints build
 metadata. There are no offline checkpoint commands.
+
+RPC failures include the method and, for contract calls, target, four-byte
+selector and block. Diagnostics retain HTTP status, JSON-RPC code and fixed
+failure classifications; URLs, credentials, headers, full calldata, provider
+messages and error data are never rendered. Unknown causes remain classified as
+unknown. Shared preparation failures are reported at runtime level; only failures
+attributed by the planner are logged against a strategy.
 
 ## Execution
 
@@ -90,7 +99,8 @@ make generate    # pinned abigen v2 bindings, wire types and RPC-only lenses
 ```
 
 This checkout's daemon builds against its local `sdk/` through a module replace,
-including container builds. External consumers pin `sdk/vX.Y.Z` releases. Runtime
+including container builds. External hosts can pin a repository commit as a Go
+pseudo-version using the [SDK installation commands](docs/MERKLE-SDK.md#install-in-an-external-host). Runtime
 APIs changed with this RAM rewrite; migrate callers rather than using old journal
 interfaces. Remove `stateDir` from existing YAML; strict decoding rejects the
 removed field. Existing state files are ignored and are not deleted automatically.

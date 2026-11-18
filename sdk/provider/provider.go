@@ -36,6 +36,12 @@ type CodeOverrideReader interface {
 	CallContractWithCode(context.Context, ethereum.CallMsg, *big.Int, []byte) ([]byte, error)
 }
 
+// CodeOverridesReader runs a pinned eth_call with temporary code at specific
+// addresses. A forwarded prefix needs code at both the caller and executor.
+type CodeOverridesReader interface {
+	CallContractWithCodeOverrides(context.Context, ethereum.CallMsg, *big.Int, map[common.Address][]byte) ([]byte, error)
+}
+
 // Execution identifies a canonically confirmed recipe transaction.
 type Execution struct {
 	TxHash      common.Hash `json:"txHash"`
@@ -87,6 +93,7 @@ type Snapshot struct {
 	Executor    common.Address `json:"executor"`
 	Account     common.Address `json:"account"`
 	Caller      common.Address `json:"caller"`
+	Sender      common.Address `json:"-"` // Zero means the caller also originates the transaction.
 	RecipeHash  common.Hash    `json:"recipeHash"`
 	Root        common.Hash    `json:"root"`
 	Execution   *Execution     `json:"execution,omitempty"`

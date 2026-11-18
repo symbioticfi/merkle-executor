@@ -321,25 +321,29 @@ func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared)
 	if e != nil {
 		return provider.Progress{}, errors.New("invalid CoW filled amount response")
 	}
+	finish := func(outcome string) (provider.Progress, error) {
+		if err := protocolio.Canonical(ctx, p.deps.Chain, s); err != nil {
+			return provider.Progress{}, err
+		}
+		return progress(d, outcome, true), nil
+	}
+	expired := uint64(d.Order.ValidTo) < s.Timestamp
 	invalidated := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 	if filled.Cmp(invalidated) == 0 {
+		if expired {
+			return finish("invalidated")
+		}
 		return progress(d, "invalidated", false), errors.New("CoW order invalidated on-chain")
 	}
 	orderSell, _ := parse.Uint256(d.Order.SellAmount)
 	if filled.Cmp(orderSell) == 0 {
-		if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
-			return provider.Progress{}, e
-		}
-		return progress(d, "settled", true), nil
+		return finish("settled")
 	}
 	if filled.Sign() != 0 {
 		return progress(d, "invalidated-or-unexpected-fill", false), errors.New("CoW order invalidated or has unexpected partial fill")
 	}
-	if uint64(d.Order.ValidTo) < s.Timestamp {
-		if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
-			return provider.Progress{}, e
-		}
-		return progress(d, "expired", true), nil
+	if expired {
+		return finish("expired")
 	}
 	raw, e = reads.At(2).CallData()
 	if e != nil {

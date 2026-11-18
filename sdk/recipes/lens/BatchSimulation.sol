@@ -11,10 +11,19 @@ contract BatchSimulation {
         bytes data;
     }
 
-    /// @dev Installed at the delegated caller only during eth_call. All targets
-    /// retain their original code; each call sees the actual keeper address.
-    function simulateCalls(ExecutorCall[] calldata calls) external returns (bytes[] memory results) {
+    /// @dev Installed at the delegated caller only during eth_call.
+    function simulateCalls(ExecutorCall[] calldata calls) external returns (bytes[] memory) {
         require(msg.sender == address(this), "caller must be self");
+        return callAll(calls);
+    }
+
+    /// @dev Reads back into the AccessManager use its original runtime and storage.
+    function simulateForwardedCalls(bytes calldata runtime, ExecutorCall[] calldata calls) external returns (bytes[] memory) {
+        install(runtime);
+        return callAll(calls);
+    }
+
+    function callAll(ExecutorCall[] calldata calls) private returns (bytes[] memory results) {
         results = new bytes[](calls.length);
         for (uint256 i; i < calls.length; ++i) {
             bool success;
@@ -26,14 +35,17 @@ contract BatchSimulation {
         }
     }
 
-    function simulate(bytes calldata runtime, bytes[] calldata calls) external returns (bytes[] memory results) {
+    function install(bytes calldata runtime) private returns (address implementation) {
         // Constructor returning the supplied runtime verbatim.
         bytes memory creation = abi.encodePacked(hex"61", uint16(runtime.length), hex"80600a3d393df3", runtime);
-        address implementation;
         assembly { implementation := create(0, add(creation, 32), mload(creation)) }
         require(implementation != address(0), "runtime deployment failed");
         bytes32 slot = IMPLEMENTATION;
         assembly { tstore(slot, implementation) }
+    }
+
+    function simulate(bytes calldata runtime, bytes[] calldata calls) external returns (bytes[] memory results) {
+        address implementation = install(runtime);
         results = new bytes[](calls.length);
         for (uint256 i; i < calls.length; ++i) {
             bool success;

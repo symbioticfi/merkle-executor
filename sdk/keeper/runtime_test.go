@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 	"math/big"
+	"slices"
 	"testing"
 	"time"
 
@@ -389,7 +390,7 @@ func TestRAMIdleAndInvalidPreparationRemainDistinct(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		want string
-	}{{provider.ErrNotReady, "idle"}, {errors.New("bad proof"), "error"}} {
+	}{{provider.ErrNotReady, "idle"}, {errors.New("bad proof"), ""}} {
 		k, p, s := runtimeHarness(t)
 		p.err = tc.err
 		outcome := ""
@@ -435,5 +436,44 @@ func TestRAMPendingTransactionDoesNotStarveExternalSettlement(t *testing.T) {
 	}
 	if calls != 2 || len(sender.requests) != 2 {
 		t.Fatal("pending signer starved earlier external task")
+	}
+}
+
+func TestSimulateObservesOnlySelectedAndFailedStrategies(t *testing.T) {
+	k, p, _ := runtimeHarness(t)
+	k.Mode = "simulate"
+	addRuntimeStrategy(t, k, p, "two", 0x11, 0x21)
+	var outcomes []string
+	k.Observe = func(name, outcome string) {
+		outcomes = append(outcomes, name+"/"+outcome)
+	}
+	if err := k.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(outcomes, []string{"one/ok"}) {
+		t.Fatalf("unexpected per-strategy simulation outcomes: %v", outcomes)
+	}
+}
+
+func TestConfirmedMembersRetainReceiptOnlyForSettlementTasks(t *testing.T) {
+	k, p, _ := runtimeHarness(t)
+	k.settlements = map[string]*settlement{}
+	addRuntimeStrategy(t, k, p, "two", 0x11, 0x21)
+	addRuntimeStrategy(t, k, p, "three", 0x12, 0x22)
+	k.active = &ExecutionPlan{}
+	for i, s := range k.Strategies {
+		plan := p.plans[s.Config.Name]
+		if i > 0 {
+			plan.Outputs[0][0].Task = provider.TaskFunc(func(context.Context, provider.Snapshot) (provider.Progress, error) { return provider.Progress{}, nil })
+		}
+		k.active.Members = append(k.active.Members, PlanMember{Name: s.Config.Name, Plan: plan})
+	}
+	result := confirmedResult()
+	if err := k.complete(result); err != nil {
+		t.Fatal(err)
+	}
+	a, b := k.settlements["two"].execution, k.settlements["three"].execution
+	if k.settlements["one"].execution != nil || a == nil || a != b || a == result.Execution {
+		t.Fatal("expected one privately owned receipt shared by the two task members")
 	}
 }
