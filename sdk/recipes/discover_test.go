@@ -205,8 +205,6 @@ func TestSnapshotDriftAndRoleChecks(t *testing.T) {
 		"recipe":       func(r *fakeReader) { r.recipeHash = common.HexToHash("0x4444") },
 		"recipe block": func(r *fakeReader) { r.recipeBlock = 9 },
 		"root":         func(r *fakeReader) { r.root = common.HexToHash("0x4444") },
-		"reorg":        func(r *fakeReader) { copy := *r.headers[10]; copy.Extra = []byte{1}; r.headers[10] = &copy },
-		"stale head":   func(r *fakeReader) { r.head = 8 },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -263,7 +261,7 @@ func (r headerFaultReader) HeaderByNumber(ctx context.Context, block *big.Int) (
 }
 
 func TestSharedDiscoveryRejectsMalformedHeaders(t *testing.T) {
-	for _, phase := range []string{"head", "event", "closing"} {
+	for _, phase := range []string{"head", "event"} {
 		for _, fault := range []string{"null", "missing number", "negative", "overflow", "wrong height"} {
 			if phase == "head" && fault == "wrong height" {
 				continue // A latest head has no externally requested height.
@@ -271,7 +269,7 @@ func TestSharedDiscoveryRejectsMalformedHeaders(t *testing.T) {
 			t.Run(phase+"/"+fault, func(t *testing.T) {
 				base := fakeChain(t, admissionRecipe(t))
 				reader := headerFaultReader{Reader: base, fault: func(block *big.Int, header *types.Header) *types.Header {
-					selected := phase == "head" && block == nil || phase == "event" && block != nil && block.Uint64() == 8 || phase == "closing" && block != nil && block.Uint64() == 10
+					selected := phase == "head" && block == nil || phase == "event" && block != nil && block.Uint64() == 8
 					if !selected {
 						return header
 					}

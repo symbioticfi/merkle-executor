@@ -237,14 +237,8 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 					requests, arrays, methods = 0, 0, 0
 					mu.Unlock()
 					plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []keeper.Provider{p}})
-					wantMethods := 12
-					if advanced {
-						wantMethods = 14
-					}
-					wantRequests, wantArrays := 9, 2
-					if advanced {
-						wantArrays++
-					}
+					// A moved head adds no reads: block hashes are not re-proven.
+					wantMethods, wantRequests, wantArrays := 9, 8, 1
 					if warm {
 						wantMethods--
 						wantArrays--
@@ -262,12 +256,7 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 					mu.Lock()
 					requests, arrays, methods = 0, 0, 0
 					mu.Unlock()
-					wantMethods = 5
-					wantArrays = 1
-					if advanced {
-						wantMethods = 7
-						wantArrays = 2
-					}
+					wantMethods, wantArrays = 3, 0
 					err = recipes.ValidatePreparedBatch(t.Context(), planner.Chain,
 						[]recipes.PreparedRecipe{{Snapshot: plan.Recipe, Recipe: recipe}},
 						[]recipes.ExecutorCall{{Executor: target, Data: plan.Calldata}},

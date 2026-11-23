@@ -41,7 +41,7 @@ func validationWork(t *testing.T, ready bool) (recipes.Recipe, []byte, []byte) {
 	return recipe, calldata, returned
 }
 
-func TestReadinessAfterCanonicalGuards(t *testing.T) {
+func TestReadiness(t *testing.T) {
 	for _, mode := range []string{"ready", "idle", "idle reorg", "idle simulation failure", "malformed results"} {
 		t.Run(mode, func(t *testing.T) {
 			header := &types.Header{Number: big.NewInt(12), GasLimit: 30_000_000}
@@ -66,7 +66,8 @@ func TestReadinessAfterCanonicalGuards(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			} else if mode == "idle" {
+			} else if mode == "idle" || mode == "idle reorg" {
+				// A head that moves while nothing would be sent is still just idle.
 				if !errors.Is(err, provider.ErrNotReady) {
 					t.Fatalf("expected idle: %v", err)
 				}
