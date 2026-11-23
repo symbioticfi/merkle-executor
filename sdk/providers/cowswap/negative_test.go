@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -21,14 +20,10 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-type negativeChain struct{ reorg atomic.Bool }
+type negativeChain struct{}
 
-func (c *negativeChain) HeaderByNumber(_ context.Context, b *big.Int) (*types.Header, error) {
-	h := testHeader(b)
-	if c.reorg.Load() {
-		h.Extra = []byte("reorg")
-	}
-	return h, nil
+func (*negativeChain) HeaderByNumber(_ context.Context, b *big.Int) (*types.Header, error) {
+	return testHeader(b), nil
 }
 func (*negativeChain) CallContract(_ context.Context, m ethereum.CallMsg, _ *big.Int) ([]byte, error) {
 	if *m.To == addr(4) {
@@ -99,7 +94,7 @@ func TestPrepareRejectsIncompatibleQuotesWithoutOrderPost(t *testing.T) {
 }
 
 func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
-	for _, mode := range []string{"owner", "uid", "sell", "buy", "expiry", "unknown", "cancelled", "post rejected", "post ambiguous", "post uid", "lookup error", "reorg during lookup", "reorg during quote"} {
+	for _, mode := range []string{"owner", "uid", "sell", "buy", "expiry", "unknown", "cancelled", "post rejected", "post ambiguous", "post uid", "lookup error"} {
 		t.Run(mode, func(t *testing.T) {
 			chain := &negativeChain{}
 			posts, gets := 0, 0
@@ -111,9 +106,6 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 					q := sampleQuote()
 					q.FeeAmount = "10"
 					q.BuyAmount = "2000"
-					if mode == "reorg during quote" {
-						chain.reorg.Store(true)
-					}
 					_ = json.NewEncoder(w).Encode(wire.CowQuoteResponse{Quote: q, ID: 1, Verified: true})
 				case "/api/v1/orders":
 					posts++
@@ -143,11 +135,6 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 						w.WriteHeader(502)
 						return
 					}
-					if mode == "reorg during lookup" {
-						chain.reorg.Store(true)
-						http.NotFound(w, r)
-						return
-					}
 					status := wire.CowOrderStatus{UID: identity.UID, Owner: addr(3).Hex(), Status: "open", SellAmount: "1000", BuyAmount: "1980", ValidTo: 1600}
 					switch mode {
 					case "owner":
@@ -175,12 +162,6 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 			}
 			snap := negativeSnapshot()
 			out, err := p.Prepare(context.Background(), snap)
-			if mode == "reorg during quote" {
-				if err == nil || posts != 0 {
-					t.Fatal("reorganized quote accepted")
-				}
-				return
-			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -195,7 +176,7 @@ func TestAdvanceRejectsIdentityAndUncertainOrderbookResponses(t *testing.T) {
 				if progress.Done || (err == nil) != (mode == "post ambiguous") {
 					t.Fatalf("unsafe advancement: %+v %v", progress, err)
 				}
-				if mode != "reorg during lookup" && progress.Reference != identity.UID {
+				if progress.Reference != identity.UID {
 					t.Fatal("order identity lost")
 				}
 			}

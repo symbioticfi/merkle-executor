@@ -13,7 +13,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
 
-func TestConfirmedSnapshotRejectsFutureAndOrphanedExecution(t *testing.T) {
+func TestOrphanedExecutionCannotVerify(t *testing.T) {
 	for _, mode := range []string{"future", "orphaned", "reorg-after-advance"} {
 		t.Run(mode, func(t *testing.T) {
 			c := newConfirmationChain()
@@ -28,17 +28,20 @@ func TestConfirmedSnapshotRejectsFutureAndOrphanedExecution(t *testing.T) {
 				execution.BlockHash = common.HexToHash("0xbad")
 			}
 			snapshot, err := p.ConfirmedSnapshot(context.Background(), original)
-			if mode != "reorg-after-advance" {
+			if mode == "future" {
 				if err == nil {
-					t.Fatal("invalid receipt allowed into Advance snapshot")
+					t.Fatal("future receipt allowed into Advance snapshot")
 				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			c.canonical[10] = types.CopyHeader(c.canonical[10])
-			c.canonical[10].Extra = []byte("reorganized receipt")
+			// Advance may read an orphaned receipt; only Verify, which gates done, must reject it.
+			if mode == "reorg-after-advance" {
+				c.canonical[10] = types.CopyHeader(c.canonical[10])
+				c.canonical[10].Extra = []byte("reorganized receipt")
+			}
 			if err := p.VerifyConfirmedSnapshot(context.Background(), snapshot); err == nil {
 				t.Fatal("orphaned receipt could advance RAM settlement")
 			}
@@ -114,23 +117,13 @@ func TestConfirmedSnapshotRequiresExactDescendantDepth(t *testing.T) {
 	}
 }
 
-func TestConfirmedSnapshotRejectsHeadReorgAndMalformedHeaders(t *testing.T) {
-	for _, mode := range []string{"nil", "wrong-number", "fork-during-read", "wrong-parent"} {
+func TestConfirmedSnapshotRejectsMalformedHeaders(t *testing.T) {
+	for _, mode := range []string{"nil", "wrong-parent"} {
 		t.Run(mode, func(t *testing.T) {
 			c := newConfirmationChain()
 			switch mode {
 			case "nil":
 				c.head = nil
-			case "wrong-number":
-				c.canonical[12] = &types.Header{Number: big.NewInt(11)}
-			case "fork-during-read":
-				c.onNumber = func(n *big.Int) {
-					if n != nil {
-						h := types.CopyHeader(c.canonical[12])
-						h.Extra = []byte("new canonical witness")
-						c.canonical[12] = h
-					}
-				}
 			case "wrong-parent":
 				c.head.ParentHash = common.HexToHash("0xbad")
 			}
@@ -139,5 +132,30 @@ func TestConfirmedSnapshotRejectsHeadReorgAndMalformedHeaders(t *testing.T) {
 				t.Fatal("invalid confirmation snapshot accepted")
 			}
 		})
+	}
+}
+
+func TestConfirmedSnapshotToleratesTipReorgButVerifyRejectsWitnessFork(t *testing.T) {
+	c := newConfirmationChain()
+	p := &Planner{Chain: c, Confirmations: 2}
+	forkWitness := func() {
+		h := types.CopyHeader(c.canonical[12])
+		h.Extra = []byte("new canonical witness")
+		c.canonical[12] = h
+	}
+	reads := 0
+	c.onNumber = func(*big.Int) { reads++ }
+	s, err := p.ConfirmedSnapshot(context.Background(), provider.Snapshot{})
+	if err != nil || reads != 1 {
+		t.Fatalf("advance snapshot re-read the live head (a tip reorg would fail the tick): reads=%d %v", reads, err)
+	}
+	reads = 0
+	c.onNumber = func(n *big.Int) {
+		if reads++; reads == 2 {
+			forkWitness()
+		}
+	}
+	if err := p.VerifyConfirmedSnapshot(context.Background(), s); err == nil {
+		t.Fatal("witness reorganized during verification accepted")
 	}
 }

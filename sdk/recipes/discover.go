@@ -18,40 +18,41 @@ type Reader interface {
 	FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error)
 }
 
-func recipeFromLogs(snapshot Snapshot, eventHeader *types.Header, logs []types.Log) (Recipe, common.Hash, error) {
+// recipeFromLogs needs no block-hash binding: HashRecipe must equal the RecipeHash read at the pin.
+func recipeFromLogs(snapshot Snapshot, logs []types.Log) (Recipe, error) {
 	eventID := executorABI.GetABI().Events["SetRecipe"].ID
 	if len(logs) == 0 {
-		return Recipe{}, common.Hash{}, errors.New("SetRecipe event missing")
+		return Recipe{}, errors.New("SetRecipe event missing")
 	}
 	sort.Slice(logs, func(i, j int) bool { return logs[i].Index < logs[j].Index })
 	for i, log := range logs {
-		if log.Removed || log.Address != snapshot.Executor || log.BlockNumber != snapshot.RecipeBlock || log.BlockHash != eventHeader.Hash() || len(log.Topics) != 2 || log.Topics[0] != eventID {
-			return Recipe{}, common.Hash{}, errors.New("invalid or noncanonical SetRecipe log")
+		if log.Removed || log.Address != snapshot.Executor || log.BlockNumber != snapshot.RecipeBlock || len(log.Topics) != 2 || log.Topics[0] != eventID {
+			return Recipe{}, errors.New("invalid SetRecipe log")
 		}
 		if i > 0 && logs[i-1].Index == log.Index {
-			return Recipe{}, common.Hash{}, errors.New("duplicate SetRecipe log index")
+			return Recipe{}, errors.New("duplicate SetRecipe log index")
 		}
 	}
 	latest := &logs[len(logs)-1]
 	if latest.Topics[1] != snapshot.RecipeHash {
-		return Recipe{}, common.Hash{}, errors.New("latest SetRecipe event differs from current commitment")
+		return Recipe{}, errors.New("latest SetRecipe event differs from current commitment")
 	}
 	event, err := executorABI.UnpackSetRecipeEvent(latest)
 	if err != nil {
-		return Recipe{}, common.Hash{}, errors.Errorf("decode SetRecipe: %w", err)
+		return Recipe{}, errors.Errorf("decode SetRecipe: %w", err)
 	}
 	recipe := Recipe{Queries: event.Queries, Steps: event.Steps}
 	hash, err := HashRecipe(recipe)
 	if err != nil {
-		return Recipe{}, common.Hash{}, err
+		return Recipe{}, err
 	}
 	if hash != snapshot.RecipeHash {
-		return Recipe{}, common.Hash{}, errors.New("SetRecipe body hash mismatch")
+		return Recipe{}, errors.New("SetRecipe body hash mismatch")
 	}
 	if _, err = Inspect(recipe); err != nil {
-		return Recipe{}, common.Hash{}, errors.Errorf("invalid committed recipe: %w", err)
+		return Recipe{}, errors.Errorf("invalid committed recipe: %w", err)
 	}
-	return recipe, eventHeader.Hash(), nil
+	return recipe, nil
 }
 
 func validateRecipeMetadata(snapshot Snapshot) error {

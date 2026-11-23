@@ -171,7 +171,7 @@ func (p *Automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r re
 func (p *Provider) confirmedTask(out provider.Output, saved prepared) provider.Task {
 	authorization := bytes.Clone(out.Actions[p.cfg.Action])
 	return provider.TaskFunc(func(ctx context.Context, s provider.Snapshot) (provider.Progress, error) {
-		if err := protocolio.Execution(ctx, p.deps.Chain, s); err != nil {
+		if err := protocolio.Execution(s); err != nil {
 			return provider.Progress{}, err
 		}
 		if err := derived.AuthorizingSign(s.Execution, s.Account, saved.Digest, authorization); err != nil {

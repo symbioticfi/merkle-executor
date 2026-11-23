@@ -30,14 +30,13 @@ arbitrary issuer getters or token implementations for aggregation.
 
 ## Exclusions
 
-SDK direct data RPC reads (`From=snapshot.Account`), arbitrary ERC1271 signatures, full execution simulations and unknown external getter implementations retain original isolated eth_call context. JSON batching still eliminates independent network round trips. Closing canonical header reads can share a JSON array after execution; hash-linked ancestry walks remain ordered. Writes, signing and nonce admission are excluded.
+SDK direct data RPC reads (`From=snapshot.Account`), arbitrary ERC1271 signatures, full execution simulations and unknown external getter implementations retain original isolated eth_call context. JSON batching still eliminates independent network round trips. Confirmation header reads can share a JSON array; hash-linked ancestry walks remain ordered. Writes, signing and nonce admission are excluded.
 
 ## Attempt-wide preparation
 
 `recipes.DiscoverBatch` opens one block for all executors, groups metadata and
-deduplicates account roots and recipe-event headers. Cold event logs share the
-event-evidence stage; authenticated RAM cache hits omit log discovery. A shared
-closing header authenticates discovery before any provider acquisition starts.
+deduplicates account roots. Cold event logs share the
+event-evidence stage; RAM cache hits omit log discovery.
 Only final admission publishes new cache entries.
 
 `ValidatePreparedBatch` rereads selected executor metadata at one fresh block,

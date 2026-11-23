@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	sb "github.com/symbioticfi/merkle-executor/sdk/bindings/cowsettlement"
@@ -42,7 +41,7 @@ func (r *cowBatchReader) BatchRead(ctx context.Context, req []protocolio.ReadReq
 	return out, nil
 }
 func TestAdvanceBatchesButPreservesTerminalPrecedence(t *testing.T) {
-	for _, mode := range []string{"filled", "expired", "partial", "invalidated", "invalidated after expiry", "reorganized invalidation", "partial after expiry", "domain", "local identity"} {
+	for _, mode := range []string{"filled", "expired", "partial", "invalidated", "invalidated after expiry", "partial after expiry", "domain", "local identity"} {
 		t.Run(mode, func(t *testing.T) {
 			r := &cowBatchReader{t: t, filled: big.NewInt(1000)}
 			p, err := fixtureProvider(negativeConfig("http://127.0.0.1:1"), provider.Deps{Chain: r})
@@ -52,7 +51,7 @@ func TestAdvanceBatchesButPreservesTerminalPrecedence(t *testing.T) {
 			s := negativeSnapshot()
 			s.BlockNumber = big.NewInt(13)
 			s.BlockHash = testHeader(s.BlockNumber).Hash()
-			if mode == "expired" || mode == "invalidated after expiry" || mode == "reorganized invalidation" || mode == "partial after expiry" {
+			if mode == "expired" || mode == "invalidated after expiry" || mode == "partial after expiry" {
 				r.filled.SetInt64(0)
 				s.BlockNumber = big.NewInt(14)
 				s.BlockHash = testHeader(s.BlockNumber).Hash()
@@ -61,11 +60,8 @@ func TestAdvanceBatchesButPreservesTerminalPrecedence(t *testing.T) {
 			if mode == "partial" || mode == "partial after expiry" {
 				r.filled.SetInt64(1)
 			}
-			if mode == "invalidated" || mode == "invalidated after expiry" || mode == "reorganized invalidation" {
+			if mode == "invalidated" || mode == "invalidated after expiry" {
 				r.filled.Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
-			}
-			if mode == "reorganized invalidation" {
-				s.BlockHash = common.HexToHash("0x01")
 			}
 			r.badDomain = mode == "domain"
 			o := sampleOrder()

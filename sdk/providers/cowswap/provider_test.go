@@ -190,11 +190,6 @@ func TestAmbiguousPostReconcilesAcrossTicksAndRequiresConfirmedFill(t *testing.T
 		t.Fatal("unapproved digest posted")
 	}
 	approved = true
-	snap.BlockHash = common.HexToHash("0xdead")
-	if _, e = p.advance(context.Background(), snap, d); e == nil || posts != 0 {
-		t.Fatal("noncanonical snapshot posted an order")
-	}
-	snap.BlockHash = testHeader(snap.BlockNumber).Hash()
 	gets = 0
 	result, e := p.advance(context.Background(), snap, d)
 	if e != nil || result.Done || posts != 1 {

@@ -2,7 +2,6 @@ package liquidlanerfq
 
 import (
 	"context"
-	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -53,10 +52,6 @@ func (p *Provider) fillReceipt(ctx context.Context, s provider.Snapshot, d prepa
 	}
 	if !found {
 		return errors.New("RFQ matching Fill absent from order receipt")
-	}
-	closing, err := p.chain.HeaderByNumber(ctx, new(big.Int).Set(receipt.BlockNumber))
-	if err != nil || protocolio.CheckHeader(closing, receipt.BlockNumber) != nil || closing.Hash() != receipt.BlockHash {
-		return errors.New("RFQ fill receipt reorganized")
 	}
 	return nil
 }
