@@ -19,7 +19,6 @@ type preparedReader struct {
 	members            []*fakeReader
 	groups             [][]protocolio.ReadRequest
 	heads, simulations int
-	afterSimulation    func()
 	afterBatch         func(int)
 }
 
@@ -89,7 +88,6 @@ func TestPreparedBatchAttributesFinalMetadataAndRoleFailures(t *testing.T) {
 type idleEnvelopeReader struct {
 	*preparedReader
 	envelopes, overrides int
-	reorg                bool
 }
 
 func (r *idleEnvelopeReader) CodeAt(context.Context, common.Address, *big.Int) ([]byte, error) {
@@ -137,61 +135,46 @@ func (r *idleEnvelopeReader) CallContractWithCode(_ context.Context, call ethere
 			return nil, err
 		}
 	}
-	if r.reorg {
-		h := types.CopyHeader(r.members[0].headers[10])
-		h.Extra = []byte{1}
-		r.members[0].headers[10] = h
-	}
 	return batchArguments.Pack(results)
 }
 
-func TestPreparedBatchCollectsEveryIdleMemberAfterCanonicalClosing(t *testing.T) {
-	for _, reorg := range []bool{false, true} {
-		t.Run(map[bool]string{false: "all idle", true: "idle reorg"}[reorg], func(t *testing.T) {
-			base, executors, accounts := preparedFixture(t, 50)
-			reader := &idleEnvelopeReader{preparedReader: base, reorg: reorg}
-			calls := make([]ExecutorCall, len(executors))
-			recipe := Recipe{Steps: [][]byte{manageStep(t, common.Hash{1}, literal(0), nil)}}
-			hash, _ := HashRecipe(recipe)
-			for i, member := range reader.members {
-				member.recipeHash = hash
-				member.logs = []types.Log{member.recipeLog(t, recipe, 4)}
-				data, err := executorABI.TryPackExecute(recipe.Queries, recipe.Steps, nil, [][]byte{{}})
-				if err != nil {
-					t.Fatal(err)
-				}
-				calls[i] = ExecutorCall{Executor: member.executor, Data: data}
-			}
-			cache := NewRecipeCache(len(executors), 1<<20)
-			prepared, err := DiscoverBatch(t.Context(), reader, executors, accounts, reader.members[0].caller, PreparationOptions{ChainID: big.NewInt(1), Cache: cache})
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = ValidatePreparedBatch(t.Context(), reader, prepared, calls, make([][]common.Hash, len(calls)), make([]map[uint]string, len(calls)), reader.members[0].caller)
-			for _, executor := range executors {
-				if (cache.load(evidenceKey{chainID: "1", executor: executor}) != nil) != !reorg {
-					t.Fatal("validated idle evidence cache did not follow canonical guards")
-				}
-			}
-			if reorg {
-				if err == nil || errors.Is(err, provider.ErrNotReady) {
-					t.Fatalf("reorg became idle: %v", err)
-				}
-				return
-			}
-			var member *MemberError
-			if !errors.As(err, &member) || !errors.Is(err, provider.ErrNotReady) || member.Index != 0 || len(member.Indices) != len(calls) {
-				t.Fatalf("idle members lost: %v", err)
-			}
-			for i, index := range member.Indices {
-				if index != i {
-					t.Fatal("idle indices lost execution order")
-				}
-			}
-			if reader.envelopes != 1 || reader.overrides != 1 {
-				t.Fatalf("quadratic idle probing: exact=%d override=%d", reader.envelopes, reader.overrides)
-			}
-		})
+func TestPreparedBatchCollectsEveryIdleMember(t *testing.T) {
+	base, executors, accounts := preparedFixture(t, 50)
+	reader := &idleEnvelopeReader{preparedReader: base}
+	calls := make([]ExecutorCall, len(executors))
+	recipe := Recipe{Steps: [][]byte{manageStep(t, common.Hash{1}, literal(0), nil)}}
+	hash, _ := HashRecipe(recipe)
+	for i, member := range reader.members {
+		member.recipeHash = hash
+		member.logs = []types.Log{member.recipeLog(t, recipe, 4)}
+		data, err := executorABI.TryPackExecute(recipe.Queries, recipe.Steps, nil, [][]byte{{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls[i] = ExecutorCall{Executor: member.executor, Data: data}
+	}
+	cache := NewRecipeCache(len(executors), 1<<20)
+	prepared, err := DiscoverBatch(t.Context(), reader, executors, accounts, reader.members[0].caller, PreparationOptions{ChainID: big.NewInt(1), Cache: cache})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ValidatePreparedBatch(t.Context(), reader, prepared, calls, make([][]common.Hash, len(calls)), make([]map[uint]string, len(calls)), reader.members[0].caller)
+	for _, executor := range executors {
+		if cache.load(evidenceKey{chainID: "1", executor: executor}) == nil {
+			t.Fatal("validated idle evidence was not cached")
+		}
+	}
+	var member *MemberError
+	if !errors.As(err, &member) || !errors.Is(err, provider.ErrNotReady) || member.Index != 0 || len(member.Indices) != len(calls) {
+		t.Fatalf("idle members lost: %v", err)
+	}
+	for i, index := range member.Indices {
+		if index != i {
+			t.Fatal("idle indices lost execution order")
+		}
+	}
+	if reader.envelopes != 1 || reader.overrides != 1 {
+		t.Fatalf("quadratic idle probing: exact=%d override=%d", reader.envelopes, reader.overrides)
 	}
 }
 
@@ -230,9 +213,6 @@ func (r *preparedReader) CallContract(ctx context.Context, call ethereum.CallMsg
 				r.simulations++
 				if block == nil || call.From != member.caller {
 					member.t.Fatal("simulation lost pinned caller")
-				}
-				if r.afterSimulation != nil {
-					r.afterSimulation()
 				}
 				return executorABI.GetABI().Methods["execute"].Outputs.Pack([]*big.Int{new(big.Int)})
 			}
@@ -281,7 +261,7 @@ func TestDiscoverBatchSharesHeadRootAndEventHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.heads != 1 || len(r.groups) != 3 || len(r.groups[0]) != 13 || len(r.groups[1]) != 4 || len(r.groups[2]) != 1 {
+	if r.heads != 1 || len(r.groups) != 2 || len(r.groups[0]) != 13 || len(r.groups[1]) != 4 {
 		t.Fatalf("heads=%d groups=%v", r.heads, r.groups)
 	}
 	for i, member := range prepared {
@@ -292,7 +272,7 @@ func TestDiscoverBatchSharesHeadRootAndEventHeader(t *testing.T) {
 }
 
 func TestDiscoverCandidatesIsolatesInvalidMembersAtSharedPin(t *testing.T) {
-	for _, failure := range []string{"first caller", "last caller", "first recipe", "last recipe", "missing events", "reorganized shared pin"} {
+	for _, failure := range []string{"first caller", "last caller", "first recipe", "last recipe", "missing events"} {
 		t.Run(failure, func(t *testing.T) {
 			r, executors, accounts := preparedFixture(t, 3)
 			caller := r.members[0].caller
@@ -307,22 +287,8 @@ func TestDiscoverCandidatesIsolatesInvalidMembersAtSharedPin(t *testing.T) {
 				r.members[bad].recipeHash = common.Hash{}
 			case "missing events":
 				r.members[bad].logs = nil
-			case "reorganized shared pin":
-				r.afterBatch = func(stage int) {
-					if stage == 2 {
-						h := types.CopyHeader(r.members[0].headers[10])
-						h.Extra = []byte{1}
-						r.members[0].headers[10] = h
-					}
-				}
 			}
 			results, err := DiscoverCandidates(t.Context(), r, executors, accounts, caller, PreparationOptions{})
-			if failure == "reorganized shared pin" {
-				if err == nil || len(results) != 0 {
-					t.Fatal("partial discovery bypassed common canonical guard")
-				}
-				return
-			}
 			if err != nil || len(results) != 3 {
 				t.Fatalf("shared discovery failed: %v", err)
 			}
@@ -334,7 +300,7 @@ func TestDiscoverCandidatesIsolatesInvalidMembersAtSharedPin(t *testing.T) {
 					t.Fatal("healthy candidate lost identity or shared pin")
 				}
 			}
-			if r.heads != 1 || len(r.groups) != 3 || len(r.groups[0]) != 13 || len(r.groups[2]) != 1 {
+			if r.heads != 1 || len(r.groups) != 2 || len(r.groups[0]) != 13 {
 				t.Fatalf("partial discovery retried independent RPCs: heads=%d groups=%d", r.heads, len(r.groups))
 			}
 			if _, err := DiscoverBatch(t.Context(), r, executors, accounts, caller, PreparationOptions{}); err == nil {
@@ -344,26 +310,12 @@ func TestDiscoverCandidatesIsolatesInvalidMembersAtSharedPin(t *testing.T) {
 	}
 }
 
-func TestDiscoverBatchClosesSharedPinBeforeReturning(t *testing.T) {
-	r, executors, accounts := preparedFixture(t, 2)
-	r.afterBatch = func(stage int) {
-		if stage == 2 {
-			h := types.CopyHeader(r.members[0].headers[10])
-			h.Extra = []byte{1}
-			r.members[0].headers[10] = h
-		}
-	}
-	if _, err := DiscoverBatch(t.Context(), r, executors, accounts, r.members[0].caller, PreparationOptions{}); err == nil {
-		t.Fatal("discovery returned reorganized metadata")
-	}
-}
-
 func TestDiscoverBatchChunksLargeGroupsAndRejectsInvalidIdentity(t *testing.T) {
 	r, executors, accounts := preparedFixture(t, 70)
 	if _, err := DiscoverBatch(t.Context(), r, executors, accounts, r.members[0].caller, PreparationOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if r.heads != 1 || len(r.groups) != 4 || len(r.groups[0]) != protocolio.MaxReadBatch {
+	if r.heads != 1 || len(r.groups) != 3 || len(r.groups[0]) != protocolio.MaxReadBatch {
 		t.Fatalf("large discovery heads=%d groups=%d", r.heads, len(r.groups))
 	}
 	for _, group := range r.groups {
@@ -426,7 +378,7 @@ func TestDiscoverBatchCacheReauthenticatesEventAndIsolatesBodies(t *testing.T) {
 }
 
 func TestPreparedBatchPublishesCacheOnlyAfterFinalGuards(t *testing.T) {
-	for _, failure := range []string{"", "reorg", "role", "witness", "mutated recipe"} {
+	for _, failure := range []string{"", "role", "witness", "mutated recipe"} {
 		t.Run(failure, func(t *testing.T) {
 			r, executors, accounts := preparedFixture(t, 1)
 			cache := NewRecipeCache(2, 1<<20)
@@ -444,12 +396,6 @@ func TestPreparedBatchPublishesCacheOnlyAfterFinalGuards(t *testing.T) {
 			}
 			witness := map[uint]string(nil)
 			switch failure {
-			case "reorg":
-				r.afterSimulation = func() {
-					h := types.CopyHeader(r.members[0].headers[10])
-					h.Extra = []byte{1}
-					r.members[0].headers[10] = h
-				}
 			case "role":
 				r.members[0].allowed = false
 			case "witness":

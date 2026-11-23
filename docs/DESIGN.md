@@ -84,16 +84,18 @@ intermediate size within the operation deadline; arbitrary EVM execution does
 not guarantee monotone success. Repetition uses exponential and boundary probes bounded by gas,
 progress and context rather than simulating lengths 1 through N.
 
-`ValidatePreparedBatch` groups fresh metadata, roles and canonical opening pins,
+`ValidatePreparedBatch` groups fresh metadata and roles at one fresh head,
 then validates intermediate results and the exact unchanged-code envelope with
 the transaction gas budget. The host supplies the same YAML `txManager.maxGas`
 to the planner and sender; the default is 16,777,216, with the fresh block gas
-limit also bounding admission. Closing guards cover every distinct pin. Probe
+limit also bounding admission. Block hashes are not re-read: the recipe is bound
+by its on-chain hash, the executor re-checks every commitment on inclusion, and a
+head that moves after admission costs at most a reverted send. Probe
 code is never deployed and never substitutes for the final exact simulation.
 
 External envelopes use `ValidatePreparedBatchWithSimulation` through the same
-admission core. Fresh recipe/identity/role checks, original and fresh opening and
-closing pins, and cache publication rules remain shared. A mandatory host callback
+admission core. Fresh recipe/identity/role checks and cache publication rules
+remain shared. A mandatory host callback
 receives copied selected calls, caller, fresh block and gas limit and simulates
 the exact calls inside the unchanged complete external envelope. The host owns
 that envelope's usefulness and settlement semantics; this entry point takes no

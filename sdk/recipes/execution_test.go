@@ -52,21 +52,8 @@ func (r *executionReader) HeaderByNumber(ctx context.Context, block *big.Int) (*
 		return header, err
 	}
 	r.headerReads++
-	if block == nil {
-		switch r.mode {
-		case "stale latest":
-			return r.headers[8], nil
-		case "missing latest":
-			return nil, ethereum.NotFound
-		case "opening equal conflict":
-			header = types.CopyHeader(header)
-			header.Extra = []byte("conflicting current pin")
-		}
-	} else if (r.mode == "opening original" && block.Uint64() == 10 && r.simulations == 0) ||
-		(r.mode == "closing original" && block.Uint64() == 10 && r.simulations != 0) ||
-		(r.mode == "closing latest" && block.Uint64() == r.head && r.simulations != 0) {
-		header = types.CopyHeader(header)
-		header.Extra = []byte("reorg")
+	if block == nil && r.mode == "missing latest" {
+		return nil, ethereum.NotFound
 	}
 	return header, err
 }
@@ -76,11 +63,6 @@ func (r *executionReader) CallContract(ctx context.Context, msg ethereum.CallMsg
 		r.executed = bytes.Clone(msg.Data)
 		if msg.From != common.HexToAddress("0x3333") || msg.To == nil || *msg.To != r.executor || block == nil || block.Uint64() != r.head || msg.Gas != min(r.headers[r.head].GasLimit, uint64(16_777_216)) {
 			r.t.Fatalf("simulation context changed: %+v block%v", msg, block)
-		}
-		if r.mode == "during simulation" {
-			header := types.CopyHeader(r.headers[r.head])
-			header.Extra = []byte("simulation reorg")
-			r.headers[r.head] = header
 		}
 		if strings.Contains(r.mode, "simulation error") {
 			return nil, errors.New("speculative simulation failure")
@@ -193,44 +175,30 @@ func TestPreparedAdmissionChecksEveryRoleAcrossChunks(t *testing.T) {
 						t.Fatal("duplicate role checked twice")
 					}
 				}
-				pins := 1
-				if advanced {
-					pins = 2
-				}
-				remaining := 5 + count + pins + 1
+				remaining := 5 + count + 1
 				wantChunks := (remaining + protocolio.MaxReadBatch - 1) / protocolio.MaxReadBatch
-				if len(batch.groups) != wantChunks+1 {
-					t.Fatalf("groups=%d want%d", len(batch.groups), wantChunks+1)
+				if len(batch.groups) != wantChunks {
+					t.Fatalf("groups=%d want%d", len(batch.groups), wantChunks)
 				}
-				for _, group := range batch.groups[:wantChunks] {
+				for _, group := range batch.groups {
 					want := min(remaining, protocolio.MaxReadBatch)
 					if len(group) != want {
 						t.Fatalf("chunk %d want%d", len(group), want)
 					}
 					remaining -= want
 				}
-				closing := batch.groups[len(batch.groups)-1]
-				if len(closing) != pins {
-					t.Fatal("closing pins not deduplicated")
-				}
-				for _, request := range closing {
-					if request.Kind != protocolio.ReadHeader || request.Block == nil {
-						t.Fatal("closing fence not after all contract chunks")
-					}
-				}
 			})
 		}
 	}
 }
 
-func TestPreparedAdmissionClosesBothPinsAndPreservesErrorOrder(t *testing.T) {
+func TestPreparedAdmissionPreservesErrorOrder(t *testing.T) {
 	for _, tc := range []struct {
 		mode     string
 		advanced bool
 		want     string
 	}{
-		{"opening original", true, "reorganized"}, {"opening equal conflict", false, "conflicting"}, {"stale latest", false, "invalid prepared block"}, {"missing latest", false, "not found"},
-		{"closing original", true, "reorganized"}, {"closing latest", true, "reorganized"}, {"during simulation", true, "reorganized"},
+		{"missing latest", false, "not found"},
 		{"false role", true, "lacks leaf"}, {"role error simulation error", true, "role"}, {"simulation error metadata error", true, "root"}, {"metadata error", true, "root"},
 	} {
 		for _, batched := range []bool{false, true} {
@@ -362,35 +330,5 @@ func TestBatchDiscoverySingleAndBatchReturnSamePreparation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(snapshots[0], snapshots[1]) {
 		t.Fatal("batching changed prepared snapshot")
-	}
-}
-
-func TestSharedPathRetainsPostReadCanonicalGuard(t *testing.T) {
-	for _, phase := range []string{"discovery", "metadata", "roles"} {
-		t.Run(phase, func(t *testing.T) {
-			reader := newExecutionReader(t)
-			prepared, err := DiscoverBatch(t.Context(), reader, []common.Address{reader.executor}, []common.Address{reader.account}, reader.caller, PreparationOptions{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			call := assembledCall(t, prepared[0])
-			reader.afterCall = func(data []byte) {
-				if phase == "roles" && !bytes.Equal(data[:4], accountABI.PackHasRole(common.Hash{}, reader.executor)[:4]) {
-					return
-				}
-				header := types.CopyHeader(reader.headers[10])
-				header.Extra = []byte("post-read reorg")
-				reader.headers[10] = header
-			}
-			if phase == "discovery" {
-				_, err = DiscoverBatch(t.Context(), reader, []common.Address{reader.executor}, []common.Address{reader.account}, reader.caller, PreparationOptions{})
-			} else {
-				reader.validating = true
-				err = ValidatePreparedBatch(t.Context(), reader, prepared, []ExecutorCall{call}, [][]common.Hash{{{1}}}, []map[uint]string{nil}, reader.caller)
-			}
-			if err == nil {
-				t.Fatal("post-read canonical guard removed")
-			}
-		})
 	}
 }

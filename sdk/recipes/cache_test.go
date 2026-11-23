@@ -208,8 +208,8 @@ func TestRecipeCacheMissesAndRequiredHeaderFailures(t *testing.T) {
 		})
 	}
 }
-func TestRecipeCacheStoresOnlyAfterSuccessfulClosingGuards(t *testing.T) {
-	for _, mode := range []string{"build", "simulation error", "closing original"} {
+func TestRecipeCacheStoresOnlyAfterSuccessfulAdmission(t *testing.T) {
+	for _, mode := range []string{"build", "simulation error"} {
 		t.Run(mode, func(t *testing.T) {
 			r, c := cacheFixture(t, Recipe{})
 			r.mode = mode

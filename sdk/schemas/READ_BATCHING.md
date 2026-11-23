@@ -41,15 +41,13 @@ closing header authenticates discovery before any provider acquisition starts.
 Only final admission publishes new cache entries.
 
 `ValidatePreparedBatch` rereads selected executor metadata at one fresh block,
-groups roles by account, executor and leaf, checks original pins and simulates
+groups roles by account, executor and leaf, and simulates
 the exact caller-bound transaction. A direct execution shares the JSON array
 with independent getters while retaining isolated EVM state. Same-executor and
 delegated multicalls retain their sequential result probes plus an unchanged-code
-exact envelope simulation. Closing headers are deduplicated by block number/hash
-and execute after simulation. Neither cached metadata nor cached role state may
+exact envelope simulation. Neither cached metadata nor cached role state may
 skip these reads. An inactive member or changed numerical witness carries its
-member index; all inactive indices come from one successful envelope and are
-reported only after canonical closing guards. Transport failures never become an
+member index; all inactive indices come from one successful envelope. Transport failures never become an
 idle member.
 
 Native repeat selection grows candidate lengths exponentially and searches a

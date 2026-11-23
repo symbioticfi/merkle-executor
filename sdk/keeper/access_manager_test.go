@@ -22,7 +22,6 @@ type forwardingReader struct {
 	immediate  bool
 	delay      uint32
 	outerCalls int
-	reorg      bool
 	reject     bool
 }
 
@@ -39,10 +38,6 @@ func (r *forwardingReader) CallContract(ctx context.Context, msg ethereum.CallMs
 			r.t.Fatal("changed forwarding envelope")
 		}
 		r.outerCalls++
-		if r.reorg {
-			r.header = types.CopyHeader(r.header)
-			r.header.Extra = []byte("reorg")
-		}
 		if r.reject {
 			return nil, errors.New("outer transport failed")
 		}
@@ -66,8 +61,8 @@ func (r *forwardingReader) CallContractWithCode(_ context.Context, msg ethereum.
 	return recipes.Arguments("bytes[]").Pack([][]byte{r.returned})
 }
 
-func TestForwardingAdmissionRetainsWitnessAndCanonicalChecks(t *testing.T) {
-	for _, mode := range []string{"valid", "denied", "delayed", "changed witness", "outer failure", "reorg"} {
+func TestForwardingAdmissionRetainsWitnessChecks(t *testing.T) {
+	for _, mode := range []string{"valid", "denied", "delayed", "changed witness", "outer failure"} {
 		t.Run(mode, func(t *testing.T) {
 			recipe, payload, returned := validationWork(t, true)
 			hash, _ := recipes.HashRecipe(recipe)
@@ -77,7 +72,6 @@ func TestForwardingAdmissionRetainsWitnessAndCanonicalChecks(t *testing.T) {
 			if mode == "delayed" {
 				r.delay = 60
 			}
-			r.reorg = mode == "reorg"
 			r.reject = mode == "outer failure"
 			witness := map[uint]string{}
 			if mode == "changed witness" {
