@@ -349,7 +349,7 @@ func TestPrepareRejectsUntrustedQuoteAuthority(t *testing.T) {
 	}
 }
 func TestAdvanceRequiresExactAuthorizationAndImmutableOutput(t *testing.T) {
-	for _, mode := range []string{"missing sign", "sign digest", "sign data", "reorg", "unapproved", "balance", "allowance"} {
+	for _, mode := range []string{"missing sign", "sign digest", "sign data", "unapproved", "balance", "allowance"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
@@ -360,8 +360,6 @@ func TestAdvanceRequiresExactAuthorizationAndImmutableOutput(t *testing.T) {
 				s.Execution.Logs[0].Topics[1] = common.Hash{}
 			case "sign data":
 				s.Execution.Logs[0].Data = []byte{1}
-			case "reorg":
-				h.c.reorg[11] = true
 			case "unapproved":
 				h.c.approved = false
 			case "balance":
@@ -600,7 +598,7 @@ func TestPublicationAcceptanceAndCompletePagination(t *testing.T) {
 	}
 }
 func TestEventReceiptCorruptionFailsClosed(t *testing.T) {
-	for _, mode := range []string{"receipt member", "receipt block", "receipt tx index", "receipt duplicate", "receipt topic", "event orphan"} {
+	for _, mode := range []string{"receipt member", "receipt block", "receipt tx index", "receipt duplicate", "receipt topic", "event orphan", "receipt reorg"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
@@ -623,6 +621,8 @@ func TestEventReceiptCorruptionFailsClosed(t *testing.T) {
 				r.Logs[0] = &l
 			case "event orphan":
 				r.Logs[0].BlockHash = common.HexToHash("0xbad")
+			case "receipt reorg":
+				h.c.reorg[12] = true
 			}
 			p, err := out.Task.Advance(t.Context(), s)
 			if err == nil || p.Done || h.posts != 0 {

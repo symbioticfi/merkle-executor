@@ -201,12 +201,13 @@ func TestAnvilReadBatchAggregatesMetadataAndRolesButIsolatesCalls(t *testing.T) 
 			if !bytes.Equal(current.Calldata, plan.Calldata) || !reflect.DeepEqual(current.Leaves, plan.Leaves) {
 				t.Fatal("warm cache/head advance changed authorized bytes or leaves")
 			}
-			// A moved head adds no reads: block hashes are not re-proven.
-			wantRequests, wantArrays, wantMethods := 7, 1, 8
+			// A moved head adds no reads: block hashes are not re-proven, and a warm
+			// cache hit skips the recipe event logs.
+			wantRequests, wantArrays, wantMethods := 7, 0, 7
 			wantAggregates := []int{5, 7}
 			if warm {
 				wantMethods--
-				wantArrays--
+				wantRequests--
 			}
 			mu.Lock()
 			if requests != wantRequests || arrays != wantArrays || methods != wantMethods || !reflect.DeepEqual(aggregateSizes, wantAggregates) {

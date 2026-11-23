@@ -348,7 +348,8 @@ func (p *Planner) ConfirmedSnapshot(ctx context.Context, original provider.Snaps
 	if number.Sign() < 0 {
 		return original, errors.New("insufficient blocks for confirmations")
 	}
-	header, err := p.confirmedAncestor(ctx, witness, number)
+	// No stable re-read of the live head: VerifyConfirmedSnapshot repeats it before progress is committed.
+	header, err := protocolio.Ancestor(ctx, p.Chain, witness, number)
 	if err != nil {
 		return original, err
 	}
@@ -356,7 +357,7 @@ func (p *Planner) ConfirmedSnapshot(ctx context.Context, original provider.Snaps
 	original.BlockHash = header.Hash()
 	original.Timestamp = header.Time
 	if original.Execution != nil {
-		if err := protocolio.Execution(ctx, p.Chain, original); err != nil {
+		if err := protocolio.Execution(original); err != nil {
 			return original, err
 		}
 	}
@@ -384,8 +385,16 @@ func (p *Planner) VerifyConfirmedSnapshot(ctx context.Context, snapshot provider
 	if header.Hash() != snapshot.BlockHash || header.Time != snapshot.Timestamp {
 		return errors.New("confirmed snapshot was reorganized")
 	}
-	if snapshot.Execution != nil {
-		return protocolio.Execution(ctx, p.Chain, snapshot)
+	if snapshot.Execution == nil {
+		return nil
+	}
+	if err := protocolio.Execution(snapshot); err != nil {
+		return err
+	}
+	// The authorizing receipt must still be canonical before its task can be marked done.
+	executed, err := p.Chain.HeaderByNumber(ctx, snapshot.Execution.BlockNumber)
+	if err != nil || protocolio.CheckHeader(executed, snapshot.Execution.BlockNumber) != nil || executed.Hash() != snapshot.Execution.BlockHash {
+		return errors.New("execution receipt block is no longer canonical")
 	}
 	return nil
 }

@@ -226,9 +226,6 @@ func (p *Provider) prepare(ctx context.Context, s provider.Snapshot, domainResul
 			ineligible = errors.New("RFQ quote nonce already consumed")
 			continue
 		}
-		if err = protocolio.Canonical(ctx, p.chain, s); err != nil {
-			return provider.Output{}, err
-		}
 		d := prepared{ChainID: s.ChainID.String(), Account: s.Account, Reactor: p.reactor, Protocol: p.protocol, PreparedBlock: s.BlockNumber.Uint64(), Quote: append(json.RawMessage(nil), option.Quote...), QuoteID: quote.QuoteID, Request: request, Digest: digest, Signature: "0x00"}
 		saved, err := json.Marshal(d)
 		if err != nil {
@@ -251,7 +248,7 @@ func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared,
 		return provider.Progress{}, errors.New("RFQ prepared chain/account mismatch")
 	}
 	domain := protocolio.Domain("Reactor", "1", s.ChainID, p.reactor)
-	if err := protocolio.Execution(ctx, p.chain, s); err != nil {
+	if err := protocolio.Execution(s); err != nil {
 		return provider.Progress{}, err
 	}
 	payload, _, err := authorization(domain, d.Request)
@@ -280,9 +277,6 @@ func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared,
 		return provider.Progress{}, errors.New("RFQ invalid nonce response")
 	}
 	finish := func(name string, done bool) (provider.Progress, error) {
-		if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
-			return provider.Progress{}, err
-		}
 		return provider.Progress{Done: done, Outcome: name, Reference: st.OrderID}, nil
 	}
 	if !used && new(big.Int).SetUint64(s.Timestamp).Cmp(d.Request.Deadline) <= 0 {

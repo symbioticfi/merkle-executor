@@ -258,9 +258,6 @@ func (p *Provider) Prepare(ctx context.Context, s provider.Snapshot) (provider.O
 	if e != nil {
 		return provider.Output{}, errors.New("encode CoW account authorization")
 	}
-	if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
-		return provider.Output{}, e
-	}
 	d := prepared{ChainID: s.ChainID.String(), Account: s.Account, PreparedBlock: s.BlockNumber.String(), Order: o, Digest: digest, UID: uid, FullAppData: fullAppData, SlippageBPS: slippageBPS}
 	data, e := json.Marshal(d)
 	if e != nil {
@@ -321,29 +318,23 @@ func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared)
 	if e != nil {
 		return provider.Progress{}, errors.New("invalid CoW filled amount response")
 	}
-	finish := func(outcome string) (provider.Progress, error) {
-		if err := protocolio.Canonical(ctx, p.deps.Chain, s); err != nil {
-			return provider.Progress{}, err
-		}
-		return progress(d, outcome, true), nil
-	}
 	expired := uint64(d.Order.ValidTo) < s.Timestamp
 	invalidated := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 	if filled.Cmp(invalidated) == 0 {
 		if expired {
-			return finish("invalidated")
+			return progress(d, "invalidated", true), nil
 		}
 		return progress(d, "invalidated", false), errors.New("CoW order invalidated on-chain")
 	}
 	orderSell, _ := parse.Uint256(d.Order.SellAmount)
 	if filled.Cmp(orderSell) == 0 {
-		return finish("settled")
+		return progress(d, "settled", true), nil
 	}
 	if filled.Sign() != 0 {
 		return progress(d, "invalidated-or-unexpected-fill", false), errors.New("CoW order invalidated or has unexpected partial fill")
 	}
 	if expired {
-		return finish("expired")
+		return progress(d, "expired", true), nil
 	}
 	raw, e = reads.At(2).CallData()
 	if e != nil {
@@ -357,9 +348,6 @@ func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared)
 		return progress(d, "authorization-missing", false), errors.New("CoW account digest is not approved at confirmed snapshot")
 	}
 	remote, status, e := p.client.Get(ctx, d.UID)
-	if canonicalErr := protocolio.Canonical(ctx, p.deps.Chain, s); canonicalErr != nil {
-		return provider.Progress{}, canonicalErr
-	}
 	if e == nil {
 		if remote.UID != d.UID || !sameAddress(remote.Owner, s.Account) || remote.SellAmount != d.Order.SellAmount || remote.BuyAmount != d.Order.BuyAmount || remote.ValidTo != d.Order.ValidTo {
 			return progress(d, "response-mismatch", false), errors.New("CoW orderbook identity or order fields mismatch")
@@ -377,9 +365,6 @@ func (p *Provider) advance(ctx context.Context, s provider.Snapshot, d prepared)
 	}
 	if status != http.StatusNotFound {
 		return progress(d, "lookup-uncertain", false), e
-	}
-	if e := protocolio.Canonical(ctx, p.deps.Chain, s); e != nil {
-		return provider.Progress{}, e
 	}
 	postOrder := d.Order
 	if d.FullAppData != "" {

@@ -137,7 +137,7 @@ type requestTransport func(*http.Request) (*http.Response, error)
 func (f requestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestTimedOutLookupResumesAtLastValidatedPage(t *testing.T) {
-	for _, mode := range []string{"timeout", "timeout with duplicate", "final page guard"} {
+	for _, mode := range []string{"timeout", "timeout with duplicate"} {
 		t.Run(mode, func(t *testing.T) {
 			h := newHarness(t)
 			out, s := h.authorized(t)
@@ -153,11 +153,6 @@ func TestTimedOutLookupResumesAtLastValidatedPage(t *testing.T) {
 			client := &http.Client{Transport: requestTransport(func(r *http.Request) (*http.Response, error) {
 				if r.URL.Query().Get("cursor") == "oc_next" && !timedOut {
 					timedOut = true
-					if mode == "final page guard" {
-						saved, err := h.server.Client().Transport.RoundTrip(r)
-						h.c.reorg[s.BlockNumber.Uint64()] = true
-						return saved, err
-					}
 					return nil, context.DeadlineExceeded
 				}
 				return h.server.Client().Transport.RoundTrip(r)
@@ -167,10 +162,9 @@ func TestTimedOutLookupResumesAtLastValidatedPage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = out.Task.Advance(t.Context(), s); err == nil || (mode != "final page guard" && !errors.Is(err, context.DeadlineExceeded)) || h.posts != 0 {
+			if _, err = out.Task.Advance(t.Context(), s); !errors.Is(err, context.DeadlineExceeded) || h.posts != 0 {
 				t.Fatalf("interrupted lookup: posts=%d err=%v", h.posts, err)
 			}
-			delete(h.c.reorg, s.BlockNumber.Uint64())
 			progress, err := out.Task.Advance(t.Context(), s)
 			if len(h.lookups) < 2 || h.lookups[len(h.lookups)-1].Get("cursor") != "oc_next" {
 				t.Fatalf("retried wrong page: %v", h.lookups)

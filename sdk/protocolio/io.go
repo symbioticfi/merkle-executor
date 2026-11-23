@@ -16,7 +16,6 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 
@@ -181,26 +180,4 @@ func Domain(name, version string, chainID *big.Int, contract common.Address) com
 }
 func Digest(domain, structure common.Hash) common.Hash {
 	return crypto.Keccak256Hash([]byte{0x19, 0x01}, domain.Bytes(), structure.Bytes())
-}
-
-// Canonical checks the pinned hash after external I/O and before external mutations.
-// Numeric-block eth_call alone cannot detect an intervening reorganization.
-func Canonical(ctx context.Context, r provider.Reader, s provider.Snapshot) error {
-	if err := Snapshot(s); err != nil {
-		return err
-	}
-	reader, ok := r.(interface {
-		HeaderByNumber(context.Context, *big.Int) (*types.Header, error)
-	})
-	if !ok {
-		return errors.New("protocol external phase requires canonical header reader")
-	}
-	if s.BlockHash == (common.Hash{}) {
-		return errors.New("protocol snapshot block hash is required")
-	}
-	h, err := reader.HeaderByNumber(ctx, s.BlockNumber)
-	if err != nil || h == nil || h.Number == nil || h.Number.Cmp(s.BlockNumber) != 0 || h.Hash() != s.BlockHash || h.Time != s.Timestamp {
-		return errors.New("protocol pinned snapshot is no longer canonical")
-	}
-	return nil
 }

@@ -67,7 +67,7 @@ describe this stateless integration; generic admission and full simulation still
 validates every leaf/proof plus chain/account/root identity itself. The built-in
 source resolves the pinned account adapter and retrieves the backend certificate.
 SDK hosts can instead use a local immutable tree file. Neither source can bypass
-closing metadata, role, simulation or canonical guards.
+fresh metadata, role or simulation guards.
 
 Liquid Lane connector acquisition and calldata construction, and host-specific
 3F auction feeds/sizing, remain in vault-solver. Contract validation of external

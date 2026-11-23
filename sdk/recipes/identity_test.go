@@ -36,20 +36,8 @@ func (r *discoveryReader) HeaderByNumber(ctx context.Context, b *big.Int) (*type
 			return &types.Header{Number: new(big.Int).Lsh(big.NewInt(1), 65)}, nil
 		}
 	}
-	if b != nil && b.Uint64() != 12 {
-		r.t.Fatal("closing unpinned header")
-	}
-	if r.headers > 1 {
-		h := types.CopyHeader(r.head)
-		switch r.mode {
-		case "reorg":
-			h.Extra = []byte("reorg")
-		case "wrong closing height":
-			h.Number = big.NewInt(13)
-		case "closing error":
-			return nil, errors.New("rpc private")
-		}
-		return h, nil
+	if b != nil {
+		r.t.Fatal("discovery reads only the head")
 	}
 	return r.head, nil
 }
@@ -118,8 +106,8 @@ func (r discoveryBatch) BatchRead(ctx context.Context, qs []protocolio.ReadReque
 	}
 	return results, nil
 }
-func TestStartupAccountsAreAtomicDeduplicatedAndCanonicallyClosed(t *testing.T) {
-	for _, mode := range []string{"valid", "chunked", "zero executor", "null head", "negative head", "overflow head", "member", "malformed", "zero account", "zero caller", "malformed caller", "caller member", "reorg", "wrong closing height", "closing error", "transport", "shape", "canceled"} {
+func TestStartupAccountsAreAtomicAndDeduplicated(t *testing.T) {
+	for _, mode := range []string{"valid", "chunked", "zero executor", "null head", "negative head", "overflow head", "member", "malformed", "zero account", "zero caller", "malformed caller", "caller member", "transport", "shape", "canceled"} {
 		t.Run(mode, func(t *testing.T) {
 			r := &discoveryReader{t: t, head: &types.Header{Number: big.NewInt(12)}, mode: mode}
 			targets := []common.Address{common.HexToAddress("0x01"), common.HexToAddress("0x02"), common.HexToAddress("0x01")}
@@ -141,7 +129,7 @@ func TestStartupAccountsAreAtomicDeduplicatedAndCanonicallyClosed(t *testing.T) 
 			}
 			result, err := DiscoverExecutors(ctx, discoveryBatch{r}, targets)
 			if mode == "valid" || mode == "chunked" {
-				if err != nil || len(result) != want || r.calls != 2*want || r.headers != 2 || r.batches != (2*want+255)/256 {
+				if err != nil || len(result) != want || r.calls != 2*want || r.headers != 1 || r.batches != (2*want+255)/256 {
 					t.Fatalf("discovery result%v calls%d headers%d batches%d: %v", result, r.calls, r.headers, r.batches, err)
 				}
 				for _, target := range targets {
@@ -162,7 +150,7 @@ func TestStartupAccountsAreAtomicDeduplicatedAndCanonicallyClosed(t *testing.T) 
 func TestStartupAccountsSingleReaderKeepsSamePin(t *testing.T) {
 	r := &discoveryReader{t: t, head: &types.Header{Number: big.NewInt(12)}}
 	got, err := DiscoverExecutors(t.Context(), r, []common.Address{common.HexToAddress("0x01")})
-	if err != nil || len(got) != 1 || r.calls != 2 || r.headers != 2 {
+	if err != nil || len(got) != 1 || r.calls != 2 || r.headers != 1 {
 		t.Fatal(got, err)
 	}
 }

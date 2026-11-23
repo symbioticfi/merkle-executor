@@ -16,8 +16,7 @@ type ExecutorIdentity struct {
 	Caller  common.Address
 }
 
-// DiscoverExecutors reads every distinct executor at one block and checks that
-// block again before returning. The host owns the deadline and caller policy.
+// DiscoverExecutors reads every distinct executor at one block. The host owns the deadline and caller policy.
 func DiscoverExecutors(ctx context.Context, reader Reader, executors []common.Address) (map[common.Address]ExecutorIdentity, error) {
 	header, err := reader.HeaderByNumber(ctx, nil)
 	if err != nil {
@@ -68,10 +67,6 @@ func DiscoverExecutors(ctx context.Context, reader Reader, executors []common.Ad
 			return nil, errors.New("invalid executor caller")
 		}
 		identities[target] = ExecutorIdentity{Account: account, Caller: caller}
-	}
-	closing, err := reader.HeaderByNumber(ctx, pin)
-	if err != nil || protocolio.CheckHeader(closing, pin) != nil || closing.Hash() != header.Hash() {
-		return nil, errors.New("executor discovery block changed")
 	}
 	return identities, nil
 }

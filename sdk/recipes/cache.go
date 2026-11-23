@@ -14,13 +14,12 @@ type evidenceKey struct {
 	executor common.Address
 }
 type recipeEvidence struct {
-	key       evidenceKey
-	recipe    Recipe
-	hash      common.Hash
-	block     uint64
-	eventHash common.Hash
-	version   uint64
-	cost      int64
+	key     evidenceKey
+	recipe  Recipe
+	hash    common.Hash
+	block   uint64
+	version uint64
+	cost    int64
 }
 
 const recipeCacheOverhead int64 = 256
