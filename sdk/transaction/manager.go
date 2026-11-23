@@ -538,12 +538,15 @@ func (m *Manager) step(ctx context.Context, replace bool) {
 	if m.pending == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	blocked := m.observe(ctx)
+	// Slow receipt lookups must not consume the next nonce check or fee decision.
+	receipts, stopReceipts := context.WithTimeout(ctx, 15*time.Second)
+	m.observe(receipts)
+	stopReceipts()
 	if m.current == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	w := m.current
 	if !w.req.Deadline.IsZero() {
 		var cancel context.CancelFunc
@@ -559,7 +562,13 @@ func (m *Manager) step(ctx context.Context, replace bool) {
 		}
 		return
 	}
-	if blocked {
+	nonce, err := m.backend.NonceAt(ctx, m.signer.Address(), nil)
+	if err != nil {
+		m.report(w, protocolio.Failure("read active nonce", err))
+		return
+	}
+	if nonce > m.pending.nonce {
+		m.report(w, ErrNonceConsumed)
 		return
 	}
 	var latest *types.Transaction
@@ -598,7 +607,7 @@ func (m *Manager) step(ctx context.Context, replace bool) {
 	if kind == "rebroadcast" && time.Since(m.pending.lastBroadcast) < interval {
 		return
 	}
-	err := m.broadcast(ctx, latest, w.req, kind)
+	err = m.broadcast(ctx, latest, w.req, kind)
 	m.pending.lastBroadcast = time.Now()
 	m.pending.retryBroadcast = err != nil
 	if !definiteRejection(err) {
@@ -690,15 +699,6 @@ func (m *Manager) observe(ctx context.Context) bool {
 		m.floor = fees{}
 		m.mu.Unlock()
 		return true
-	}
-	nonce, err := m.backend.NonceAt(ctx, m.signer.Address(), nil)
-	if m.current != nil {
-		if err != nil {
-			m.report(m.current, protocolio.Failure("read active nonce", err))
-		} else if nonce > m.pending.nonce {
-			m.report(m.current, ErrNonceConsumed)
-			return true
-		}
 	}
 	return false
 }

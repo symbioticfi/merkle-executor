@@ -1,7 +1,9 @@
 # Merkle execution SDK
 
-Module `github.com/symbioticfi/merkle-executor/sdk`, independently versioned with
-`sdk/vX.Y.Z` tags. Hosts supply dependencies and explicitly drive execution.
+Module `github.com/symbioticfi/merkle-executor/sdk` is independently versioned.
+Hosts can pin a commit as a Go pseudo-version. See the
+[external host installation commands](../docs/MERKLE-SDK.md#install-in-an-external-host).
+Hosts supply dependencies and explicitly drive execution.
 The SDK reads no environment variables, starts no services and stores no runtime
 state on disk.
 

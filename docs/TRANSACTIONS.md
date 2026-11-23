@@ -51,7 +51,9 @@ that nonce. A keeper ticket instead stays busy and observes its signed work
 through expiry, without further signing.
 
 Receipt polling rotates through retained hashes, interleaving recent attempts.
-A failed lookup does not prevent checking the remaining hashes. Receipt evidence
+A failed lookup does not prevent checking the remaining hashes. Receipt sweeps
+have a separate deadline from the mined-nonce check and any relay attempt.
+Receipt evidence
 must match the owned hash,
 canonical inclusion block, ancestry and configured confirmation depth, including
 for reverts. Missing or reorganized receipts and foreign nonce advancement do

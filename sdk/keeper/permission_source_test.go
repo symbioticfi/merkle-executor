@@ -53,7 +53,7 @@ func (p *permissionProvider) PrepareRecipe(context.Context, provider.Snapshot, r
 	return []provider.Output{{}}, nil
 }
 func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
-	for _, mode := range []string{"valid", "local tree", "source error", "empty", "missing chain", "null chain", "wrong chain", "root", "account", "invalid unused leaf", "invalid unused proof", "mutate chain", "root during HTTP", "reorg during HTTP"} {
+	for _, mode := range []string{"valid", "local tree", "source error", "empty", "missing chain", "null chain", "wrong chain", "root", "account", "invalid unused leaf", "invalid unused proof", "mutate chain", "root during HTTP"} {
 		t.Run(mode, func(t *testing.T) {
 			header := &types.Header{Number: big.NewInt(12), GasLimit: 30_000_000}
 			recipe := recipes.Recipe{}
@@ -106,9 +106,6 @@ func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 					id.SetInt64(99)
 				case "root during HTTP":
 					r.snapshot.Root = common.HexToHash("0x99")
-				case "reorg during HTTP":
-					r.header = types.CopyHeader(r.header)
-					r.header.Extra = []byte("reorg")
 				}
 				return raw, nil
 			})}
@@ -135,7 +132,7 @@ func TestPlannerPermissionSourceVerifiesAllBytesBeforeProviders(t *testing.T) {
 			if mode == "source error" && !errors.Is(err, context.Canceled) {
 				t.Fatal("source cancellation cause lost")
 			}
-			if !ok && mode != "root during HTTP" && mode != "reorg during HTTP" && pr.calls != 0 {
+			if !ok && mode != "root during HTTP" && pr.calls != 0 {
 				t.Fatal("invalid tree reached provider")
 			}
 			if mode != "local tree" && calls != 1 {

@@ -1,10 +1,14 @@
 package liquidlanerfq
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 )
 
@@ -125,5 +129,59 @@ func TestMalformedOrderTransactionHashCannotSettleOrPublish(t *testing.T) {
 		if err == nil || progress.Done || h.posts != 0 || h.c.receiptReads != 0 {
 			t.Fatal("malformed transaction hash reached settlement", progress, err)
 		}
+	}
+}
+
+type requestTransport func(*http.Request) (*http.Response, error)
+
+func (f requestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestTimedOutLookupResumesAtLastValidatedPage(t *testing.T) {
+	for _, mode := range []string{"timeout", "timeout with duplicate", "final page guard"} {
+		t.Run(mode, func(t *testing.T) {
+			h := newHarness(t)
+			out, s := h.authorized(t)
+			row := wire.RfqOrder{Type: "Priority", OrderID: orderID, QuoteID: "00000000-2222-4222-8222-222222222222", OrderStatus: "expired", Swapper: s.Account.Hex()}
+			h.pages = []wire.RfqOrdersResponse{
+				{Orders: []wire.RfqOrder{row}, Cursor: json.RawMessage(`"oc_next"`)},
+				{Orders: []wire.RfqOrder{}, Cursor: json.RawMessage("null")},
+			}
+			if mode == "timeout with duplicate" {
+				h.pages[1].Orders = []wire.RfqOrder{row}
+			}
+			timedOut := false
+			client := &http.Client{Transport: requestTransport(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Query().Get("cursor") == "oc_next" && !timedOut {
+					timedOut = true
+					if mode == "final page guard" {
+						saved, err := h.server.Client().Transport.RoundTrip(r)
+						h.c.reorg[s.BlockNumber.Uint64()] = true
+						return saved, err
+					}
+					return nil, context.DeadlineExceeded
+				}
+				return h.server.Client().Transport.RoundTrip(r)
+			})}
+			var err error
+			h.p.http, err = protocolio.NewHTTP(h.cfg.HTTP, client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = out.Task.Advance(t.Context(), s); err == nil || (mode != "final page guard" && !errors.Is(err, context.DeadlineExceeded)) || h.posts != 0 {
+				t.Fatalf("interrupted lookup: posts=%d err=%v", h.posts, err)
+			}
+			delete(h.c.reorg, s.BlockNumber.Uint64())
+			progress, err := out.Task.Advance(t.Context(), s)
+			if len(h.lookups) < 2 || h.lookups[len(h.lookups)-1].Get("cursor") != "oc_next" {
+				t.Fatalf("retried wrong page: %v", h.lookups)
+			}
+			if mode == "timeout with duplicate" {
+				if err == nil || h.posts != 0 {
+					t.Fatalf("lost duplicate check: posts=%d err=%v", h.posts, err)
+				}
+			} else if err != nil || h.posts != 1 || progress.Reference != orderID {
+				t.Fatalf("valid resumed lookup: %+v, posts=%d err=%v", progress, h.posts, err)
+			}
+		})
 	}
 }

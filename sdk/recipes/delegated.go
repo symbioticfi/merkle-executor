@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	delegated "github.com/symbioticfi/merkle-executor/sdk/bindings/delegatedaccount"
 )
@@ -121,29 +120,9 @@ func SimulateExecutors(ctx context.Context, reader BatchReader, caller common.Ad
 			flat = append(flat, ExecutorCall{Executor: call.Executor, Data: data})
 		}
 	}
-	probeCalls := make([]struct {
-		Executor common.Address
-		Data     []byte
-	}, len(flat))
-	for i, call := range flat {
-		probeCalls[i].Executor, probeCalls[i].Data = call.Executor, bytes.Clone(call.Data)
-	}
-	args, err := executorCalls.Pack(probeCalls)
+	results, err := simulateCallerCalls(ctx, reader, caller, caller, flat, block, gas, nil)
 	if err != nil {
 		return nil, err
-	}
-	data := append(crypto.Keccak256([]byte("simulateCalls((address,bytes)[])"))[:4], args...)
-	raw, err := reader.CallContractWithCode(ctx, ethereum.CallMsg{From: caller, To: &caller, Data: data, Gas: gas}, block, batchRuntime)
-	if err != nil {
-		return nil, simulationFailure(ctx, err)
-	}
-	values, err := batchArguments.Unpack(raw)
-	if err != nil {
-		return nil, errors.New("invalid delegated simulation result")
-	}
-	results := values[0].([][]byte)
-	if len(results) != len(flat) {
-		return nil, errors.New("delegated simulation result count mismatch")
 	}
 	grouped := make([][]byte, len(calls))
 	index := 0

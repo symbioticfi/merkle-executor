@@ -80,6 +80,17 @@ fixture verifies canonical input/output transfers and nonce usage; its protocol
 authentication is simplified. [RFQ fixture limitations](../sdk/providers/liquidlanerfq/testdata/README.md)
 and [wire provenance](../sdk/schemas/LIQUID_LANE_RFQ.md) record that boundary.
 
+## Local planning benchmarks
+
+```sh
+cd sdk
+GOWORK=off go test ./providers/merkl ./providers/aave -run '^$' -bench 'Benchmark(RewardInventory|SharedCapacityDependencies)' -benchmem
+```
+
+The Merkl benchmark assembles claims from fixture inventories with up to 512
+reward proofs. The Aave benchmark resolves shared numerical dependencies with
+up to 12 levels. The results measure local processing without HTTP or RPC latency.
+
 ## Generated contract sources
 
 The core ABI source is adapters `codex/bailsec-normalized` at
@@ -99,7 +110,7 @@ Anvil success.
 The host and SDK use Go 1.27.4, go-ethereum/abigen 1.17.10 and golangci-lint
 2.15.0. CI uses Foundry 1.9.0 and the runtime image uses distroless Debian 13.
 Both Go modules refresh their direct and indirect requirements; external consumers
-pin an immutable SDK release. Re-run generation and the gates above
+pin an SDK commit or a tagged module version. Re-run generation and the gates above
 after updating either module. SDK simulation helpers and local fixtures use
 Solidity 0.8.38. Imported protocol bytecode retains its original compiler and
 source revision so the reference contracts remain unchanged.

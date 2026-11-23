@@ -89,15 +89,17 @@ func (p *Planner) buildPlan(ctx context.Context, strategy Strategy, snap recipes
 			break
 		}
 	}
+	snap.Sender = p.Sender
 	plan.Recipe = snap
-	plan.Snapshot = provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snap.BlockNumber), BlockHash: snap.BlockHash, Timestamp: snap.Timestamp, Executor: snap.Executor, Account: snap.Account, Caller: snap.Caller, RecipeHash: snap.RecipeHash, Root: snap.Root}
+	plan.Snapshot = provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snap.BlockNumber), BlockHash: snap.BlockHash, Timestamp: snap.Timestamp, Executor: snap.Executor, Account: snap.Account, Caller: snap.Caller, Sender: snap.Sender, RecipeHash: snap.RecipeHash, Root: snap.Root}
 	inputs := make(map[uint]string)
 	derivedInputs := make(map[uint]string)
 	actions := make(map[string]hexutil.Bytes)
 	var skips []uint
 	var expressions []recipes.Value
 	owned := make(map[uint]bool)
-	actionOwners := map[string]bool{}
+	inputOwners := make(map[uint]int)
+	actionOwners := make(map[string]int)
 	requirements := make([]RecipeRequirements, len(strategy.Providers))
 	ready := make([]bool, len(strategy.Providers))
 	plan.Outputs = make([][]provider.Output, len(strategy.Providers))
@@ -116,15 +118,16 @@ func (p *Planner) buildPlan(ctx context.Context, strategy Strategy, snap recipes
 				return plan, false, errors.New("multiple providers own the same recipe input")
 			}
 			owned[index] = true
+			inputOwners[index] = i
 			if len(requirements[i].Values) == 0 {
 				prefix.AvailableInputs[index] = true
 			}
 		}
 		for _, key := range requirements[i].Actions {
-			if actionOwners[key] {
+			if _, exists := actionOwners[key]; exists {
 				return plan, false, errors.New("multiple providers own the same recipe action")
 			}
-			actionOwners[key] = true
+			actionOwners[key] = i
 			if len(requirements[i].Values) > 0 {
 				prefix.BlockedActions[key] = true
 			}
@@ -158,6 +161,16 @@ func (p *Planner) buildPlan(ctx context.Context, strategy Strategy, snap recipes
 		}
 		frozen := make([]provider.Output, len(outputs))
 		for j, out := range outputs {
+			for index := range out.Inputs {
+				if owner, declared := inputOwners[index]; !declared || owner != i {
+					return errors.Errorf("provider %d returned undeclared input %d", i, index)
+				}
+			}
+			for key := range out.Actions {
+				if owner, declared := actionOwners[key]; !declared || owner != i {
+					return errors.Errorf("provider %d returned undeclared action", i)
+				}
+			}
 			frozen[j] = out.Clone()
 		}
 		outputs = frozen

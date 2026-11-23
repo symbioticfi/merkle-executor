@@ -34,7 +34,7 @@ type PreparedRecipe struct {
 // other independent candidates. Contract and gas rejection concern the envelope.
 type MemberError struct {
 	Index int
-	// Indices contains every inactive member after a successful canonical envelope.
+	// Indices contains every inactive member after a successful envelope.
 	// Index remains the first member for callers handling one error at a time.
 	Indices []int
 	Err     error
@@ -71,7 +71,8 @@ func DiscoverBatch(ctx context.Context, reader Reader, executors, accounts []com
 
 // DiscoverCandidates pins all candidates to one head and batches metadata,
 // shared roots and event evidence. A local member failure preserves independent
-// results; transport failures and the closing common block guard fail the group.
+// results; transport failures fail the group. Admission rereads everything at
+// a fresh head, so discovery needs no closing block guard.
 func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts []common.Address, caller common.Address, options PreparationOptions) ([]DiscoveryResult, error) {
 	if len(executors) == 0 || len(executors) != len(accounts) || caller == (common.Address{}) {
 		return nil, errors.New("executor batch requires matching identities and caller")
@@ -199,13 +200,6 @@ func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts 
 			}
 		}
 	}
-	closing, err := protocolio.ReadGroup(ctx, reader, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).Set(header.Number)})
-	if err != nil {
-		return nil, err
-	}
-	if err = verifyPins([]preparedPin{{header.Number.Uint64(), header.Hash()}}, closing.At); err != nil {
-		return nil, err
-	}
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -268,21 +262,23 @@ func decodeBatchSnapshots(snapshots []Snapshot, header *types.Header, reads *pro
 	return out, nil
 }
 
-// ValidatePreparedBatch authenticates all selected members at one fresh head,
-// simulates the exact transaction and closes every distinct block pin together.
+// ValidatePreparedBatch authenticates all selected members at one fresh head
+// and simulates the exact transaction there. Block hashes are not re-proven:
+// the recipe is bound by its on-chain hash and the executor re-checks every
+// commitment on inclusion, so a moved head costs at most a reverted send.
 // Cache entries become visible only after complete admission succeeds.
 // The optional maxGas budget defaults to 16,777,216 when omitted or zero and is
 // bounded by the fresh block gas limit. More than one budget is invalid.
 func ValidatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller common.Address, maxGas ...uint64) error {
-	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, common.Address{}, nil, maxGas)
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, common.Address{}, nil, true, maxGas)
 }
 
-// ValidatePreparedBatchForSender retains result and work validation, then checks
-// immediate AccessManager authorization and simulates the exact outer call at
-// the same fresh block. Forwarded plans contain one executor (which may batch
+// ValidatePreparedBatchForSender checks immediate AccessManager authorization,
+// the exact outer call and the executor's results under the signing EOA at the
+// same fresh block. Forwarded plans contain one executor (which may batch
 // several executions); independent executors are admitted on subsequent ticks.
 func ValidatePreparedBatchForSender(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller, sender common.Address, maxGas ...uint64) error {
-	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, sender, nil, maxGas)
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, witnesses, caller, sender, nil, true, maxGas)
 }
 
 // PreparedBatchSimulationRequest contains independent copies of authenticated
@@ -299,18 +295,29 @@ type PreparedBatchSimulationRequest struct {
 // external usefulness and settlement semantics; no inner return bytes are needed.
 type PreparedBatchSimulation func(context.Context, PreparedBatchSimulationRequest) error
 
-// ValidatePreparedBatchWithSimulation shares recipe, identity, role and canonical
-// guards with ValidatePreparedBatch. Its mandatory callback validates an external
+// ValidatePreparedBatchWithSimulation shares recipe, identity and role guards
+// with ValidatePreparedBatch. Its mandatory callback validates an external
 // envelope instead of generic result witnesses and HasWork classification.
 // The optional maxGas budget has the same defaults and bounds as that entry point.
 func ValidatePreparedBatchWithSimulation(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, caller common.Address, simulate PreparedBatchSimulation, maxGas ...uint64) error {
 	if simulate == nil {
 		return errors.New("external prepared batch simulation required")
 	}
-	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, nil, caller, common.Address{}, simulate, maxGas)
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, nil, caller, common.Address{}, simulate, true, maxGas)
 }
 
-func validatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller, sender common.Address, simulate PreparedBatchSimulation, maxGas []uint64) error {
+// ValidatePreparedRoutesWithSimulation authenticates each recipe's own caller at
+// the same fresh block and simulates the complete external transaction once.
+// The callback receives the outer executor as Caller and must exercise every
+// selected recipe, including any AccessManager forwarding.
+func ValidatePreparedRoutesWithSimulation(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, executor common.Address, simulate PreparedBatchSimulation, maxGas ...uint64) error {
+	if simulate == nil {
+		return errors.New("external prepared batch simulation required")
+	}
+	return validatePreparedBatch(ctx, reader, prepared, calls, leaves, nil, executor, common.Address{}, simulate, false, maxGas)
+}
+
+func validatePreparedBatch(ctx context.Context, reader Reader, prepared []PreparedRecipe, calls []ExecutorCall, leaves [][]common.Hash, witnesses []map[uint]string, caller, sender common.Address, simulate PreparedBatchSimulation, uniformCaller bool, maxGas []uint64) error {
 	if len(maxGas) > 1 {
 		return errors.New("one transaction gas budget allowed")
 	}
@@ -324,7 +331,7 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 	snapshots := make([]Snapshot, len(prepared))
 	for i, member := range prepared {
 		snapshot := member.Snapshot
-		if snapshot.Caller != caller || snapshot.Executor != calls[i].Executor || snapshot.Account == (common.Address{}) {
+		if snapshot.Caller == (common.Address{}) || (uniformCaller && snapshot.Caller != caller) || snapshot.Executor != calls[i].Executor || snapshot.Account == (common.Address{}) {
 			return errors.New("prepared batch identity mismatch")
 		}
 		hash, err := HashRecipe(member.Recipe)
@@ -355,10 +362,6 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 	if gasLimit == 0 {
 		return errors.New("positive block gas limit required")
 	}
-	pins, err := preparedPins(snapshots, current)
-	if err != nil {
-		return err
-	}
 	requests, indices := batchSnapshotRequests(snapshots, current.Number)
 	roleStart := len(requests)
 	type roleKey struct {
@@ -380,9 +383,11 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 			requests = append(requests, protocolio.ContractRead(snapshot.Account, accountABI.PackHasRole(leaf, snapshot.Executor), current.Number, true))
 		}
 	}
-	openingStart := len(requests)
-	requests = append(requests, pinReads(pins)...)
-	direct := simulate == nil && len(calls) == 1 && !isMulticall(calls[0].Data)
+	forwarded := sender != (common.Address{}) && sender != caller
+	if forwarded && len(calls) != 1 {
+		return errors.New("AccessManager execution requires one executor")
+	}
+	direct := simulate == nil && !forwarded && len(calls) == 1 && !isMulticall(calls[0].Data)
 	simulationIndex := len(requests)
 	if direct {
 		requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadCall, Call: ethereum.CallMsg{From: caller, To: &calls[0].Executor, Data: calls[0].Data, Gas: gasLimit}, Block: current.Number})
@@ -391,15 +396,12 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 	if err != nil {
 		return err
 	}
-	if err = verifyPins(pins, func(i int) protocolio.ReadResult { return reads.At(openingStart + i) }); err != nil {
-		return err
-	}
 	fresh, err := decodeBatchSnapshots(snapshots, current, reads, indices)
 	if err != nil {
 		return err
 	}
 	for i, snapshot := range snapshots {
-		if fresh[i].Account != snapshot.Account || fresh[i].Caller != caller || fresh[i].RecipeHash != snapshot.RecipeHash || fresh[i].RecipeBlock != snapshot.RecipeBlock || fresh[i].Root != snapshot.Root {
+		if fresh[i].Account != snapshot.Account || fresh[i].Caller != snapshot.Caller || fresh[i].RecipeHash != snapshot.RecipeHash || fresh[i].RecipeBlock != snapshot.RecipeBlock || fresh[i].Root != snapshot.Root {
 			return &MemberError{Index: i, Err: errors.New("executor identity, caller, recipe or root changed; prepare again")}
 		}
 	}
@@ -425,7 +427,22 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 		if len(calls) == 1 {
 			pin := snapshots[0]
 			pin.BlockNumber, pin.BlockHash, pin.Timestamp = current.Number.Uint64(), current.Hash(), current.Time
-			if isMulticall(calls[0].Data) {
+			if forwarded {
+				pin.Sender = sender
+				entries, _ := Executions(calls[0].Data)
+				returned, e := simulateForwarded(ctx, reader, pin, calls[0].Data, entries, gasLimit)
+				if e != nil {
+					return e
+				}
+				result := returned[0]
+				if isMulticall(calls[0].Data) {
+					result, e = batchArguments.Pack(returned)
+					if e != nil {
+						return e
+					}
+				}
+				results = [][]byte{result}
+			} else if isMulticall(calls[0].Data) {
 				backend, ok := reader.(BatchReader)
 				if !ok {
 					return errors.New("batch validation requires code-override support")
@@ -470,78 +487,11 @@ func validatePreparedBatch(ctx context.Context, reader Reader, prepared []Prepar
 			}
 		}
 	}
-	if sender != (common.Address{}) && sender != caller {
-		if len(calls) != 1 {
-			return errors.New("AccessManager execution requires one executor")
-		}
-		snapshot := snapshots[0]
-		snapshot.BlockNumber = current.Number.Uint64()
-		route, routeErr := RouteExecution(ctx, reader, snapshot, sender, calls[0].Data)
-		if routeErr != nil {
-			return &MemberError{Index: 0, Err: routeErr}
-		}
-		if _, routeErr = reader.CallContract(ctx, ethereum.CallMsg{From: sender, To: &route.Executor, Data: route.Data, Gas: gasLimit}, current.Number); routeErr != nil {
-			return simulationFailure(ctx, routeErr)
-		}
-	}
-	closing, err := protocolio.ReadGroup(ctx, reader, pinReads(pins)...)
-	if err != nil {
-		return err
-	}
-	if err = verifyPins(pins, closing.At); err != nil {
-		return err
-	}
 	for _, member := range prepared {
 		member.cache.put(member.pending)
 	}
 	if len(inactive) != 0 {
 		return &MemberError{Index: inactive[0], Indices: inactive, Err: provider.ErrNotReady}
-	}
-	return nil
-}
-
-type preparedPin struct {
-	number uint64
-	hash   common.Hash
-}
-
-func preparedPins(snapshots []Snapshot, current *types.Header) ([]preparedPin, error) {
-	pins := []preparedPin{{current.Number.Uint64(), current.Hash()}}
-	seen := map[uint64]common.Hash{current.Number.Uint64(): current.Hash()}
-	for _, snapshot := range snapshots {
-		if snapshot.BlockNumber > current.Number.Uint64() || snapshot.BlockHash == (common.Hash{}) {
-			return nil, errors.New("invalid prepared block pin")
-		}
-		if hash, exists := seen[snapshot.BlockNumber]; exists {
-			if hash != snapshot.BlockHash {
-				return nil, errors.New("conflicting prepared block hashes")
-			}
-			continue
-		}
-		seen[snapshot.BlockNumber] = snapshot.BlockHash
-		pins = append(pins, preparedPin{snapshot.BlockNumber, snapshot.BlockHash})
-	}
-	return pins, nil
-}
-func pinReads(pins []preparedPin) []protocolio.ReadRequest {
-	requests := make([]protocolio.ReadRequest, len(pins))
-	for i, pin := range pins {
-		requests[i] = protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(pin.number)}
-	}
-	return requests
-}
-func verifyPins(pins []preparedPin, result func(int) protocolio.ReadResult) error {
-	for i, pin := range pins {
-		member := result(i)
-		if member.Err != nil {
-			return errors.Errorf("check prepared block: %w", member.Err)
-		}
-		if err := protocolio.CheckHeader(member.Header, new(big.Int).SetUint64(pin.number)); err != nil {
-			return err
-		}
-		if member.Header.Hash() != pin.hash {
-			return errors.New("prepared execution block was reorganized")
-		}
 	}
 	return nil
 }

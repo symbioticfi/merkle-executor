@@ -56,7 +56,7 @@ func TestPreparedExternalSimulationUsesFreshPinnedCopiesWithoutResults(t *testin
 				request.BlockNumber.SetUint64(99)
 				return nil
 			})
-			if err != nil || callbacks != 1 || r.simulations != 0 || len(r.groups) != 2 {
+			if err != nil || callbacks != 1 || r.simulations != 0 || len(r.groups) != 1 {
 				t.Fatalf("external admission: err=%v callbacks=%d inner=%d groups=%d", err, callbacks, r.simulations, len(r.groups))
 			}
 			if !bytes.Equal(calls[0].Data, original) || calls[0].Executor != prepared[0].Snapshot.Executor || r.members[0].headers[11].Number.Uint64() != 11 {
@@ -71,26 +71,17 @@ func TestPreparedExternalSimulationUsesFreshPinnedCopiesWithoutResults(t *testin
 	}
 }
 
-func TestPreparedExternalSimulationRetainsAuthenticationAndClosingGuards(t *testing.T) {
-	for _, failure := range []string{"nil callback", "caller", "executor", "recipe", "calldata", "fresh caller", "fresh account", "fresh recipe", "fresh root", "role", "opening original reorg", "closing original reorg", "closing fresh reorg", "revert", "transport", "cancel"} {
+func TestPreparedExternalSimulationRetainsAuthentication(t *testing.T) {
+	for _, failure := range []string{"nil callback", "caller", "executor", "recipe", "calldata", "fresh caller", "fresh account", "fresh recipe", "fresh root", "role", "revert", "transport", "cancel"} {
 		t.Run(failure, func(t *testing.T) {
 			r, prepared, calls, leaves, cache := externalFixture(t, 1)
 			caller := r.members[0].caller
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			callbacks := 0
-			reorg := func(number uint64) {
-				header := types.CopyHeader(r.members[0].headers[number])
-				header.Extra = []byte{1}
-				r.members[0].headers[number] = header
-			}
 			simulate := PreparedBatchSimulation(func(context.Context, PreparedBatchSimulationRequest) error {
 				callbacks++
 				switch failure {
-				case "closing original reorg":
-					reorg(10)
-				case "closing fresh reorg":
-					reorg(11)
 				case "revert":
 					return repeatedProbeError{}
 				case "transport":
@@ -121,14 +112,12 @@ func TestPreparedExternalSimulationRetainsAuthenticationAndClosingGuards(t *test
 				r.members[0].root = common.Hash{99}
 			case "role":
 				r.members[0].allowed = false
-			case "opening original reorg":
-				reorg(10)
 			}
 			err := ValidatePreparedBatchWithSimulation(ctx, r, prepared, calls, leaves, caller, simulate)
 			if err == nil || cache.load(evidenceKey{chainID: "1", executor: prepared[0].Snapshot.Executor}) != nil || r.simulations != 0 {
 				t.Fatalf("failed external admission escaped guard: err=%v inner=%d", err, r.simulations)
 			}
-			wantCallback := failure == "closing original reorg" || failure == "closing fresh reorg" || failure == "revert" || failure == "transport" || failure == "cancel"
+			wantCallback := failure == "revert" || failure == "transport" || failure == "cancel"
 			if (callbacks == 1) != wantCallback {
 				t.Fatalf("authentication/callback order changed: callbacks=%d", callbacks)
 			}
@@ -164,5 +153,28 @@ func TestExternalEnvelopeOwnsUsefulnessWhileGenericChecksResults(t *testing.T) {
 	}
 	if err = ValidatePreparedBatch(t.Context(), r, prepared, calls, leaves, []map[uint]string{{0: "1"}}, r.members[0].caller); err == nil || errors.Is(err, provider.ErrNotReady) {
 		t.Fatalf("generic numerical witness validation changed: %v", err)
+	}
+}
+
+func TestPreparedExternalRoutesCheckEachCaller(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		r, prepared, calls, leaves, _ := externalFixture(t, 2)
+		prepared[1].Snapshot.Caller = common.Address{42}
+		r.members[1].caller = prepared[1].Snapshot.Caller
+		if changed {
+			r.members[1].caller = common.Address{43}
+		}
+		outer := common.Address{99}
+		called := 0
+		err := ValidatePreparedRoutesWithSimulation(t.Context(), r, prepared, calls, leaves, outer, func(_ context.Context, request PreparedBatchSimulationRequest) error {
+			called++
+			if request.Caller != outer || len(request.Calls) != 2 || request.BlockNumber.Uint64() != 11 {
+				t.Fatalf("combined simulation lost its execution context: %+v", request)
+			}
+			return nil
+		})
+		if changed && (err == nil || called != 0) || !changed && (err != nil || called != 1) {
+			t.Fatalf("changed=%v simulations=%d err=%v", changed, called, err)
+		}
 	}
 }

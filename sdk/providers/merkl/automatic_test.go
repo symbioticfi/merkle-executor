@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	binding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkldistributor"
 	multicall "github.com/symbioticfi/merkle-executor/sdk/bindings/multicall3"
@@ -94,15 +96,67 @@ func TestAutomaticPreservesCuratorMask(t *testing.T) {
 	}
 }
 
+// The first managed call authorizes a runtime token. The second pins token 0x201.
+func mixedClaimRecipe(t *testing.T, account common.Address) (recipes.Recipe, *recipes.Tree) {
+	t.Helper()
+	var r recipes.Recipe
+	tree := new(recipes.Tree)
+	for _, token := range []common.Address{{}, addr(0x201)} {
+		data, err := binding.NewMerklDistributor().TryPackClaim([]common.Address{account}, []common.Address{token}, []*big.Int{new(big.Int)}, [][][32]byte{{{}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf := recipes.Leaf{Target: addr(0x123), Value: new(big.Int), Data: data, DataMask: make([]byte, len(data))}
+		layout, err := claimLayoutOf(recipes.ManagedAction{Leaf: leaf}, account)
+		if err != nil || layout == nil {
+			t.Fatal(err)
+		}
+		words := []int{layout.amounts[0], layout.proofs[0][0]}
+		if token == (common.Address{}) {
+			words = append(words, layout.tokenWords[0])
+		}
+		for _, offset := range words {
+			copy(leaf.DataMask[offset:], bytes.Repeat([]byte{255}, 32))
+		}
+		leaf.Hash, err = recipes.HashLeaf(leaf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tree.Leaves = append(tree.Leaves, leaf)
+		step, err := recipes.Arguments("uint256", "bytes32[]", "uint256[][]").Pack(big.NewInt(1), [][32]byte{leaf.Hash}, [][]*big.Int{{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Steps = append(r.Steps, append([]byte{recipes.Manage}, step...))
+	}
+	a, b := tree.Leaves[0].Hash, tree.Leaves[1].Hash
+	tree.Leaves[0].Proof, tree.Leaves[1].Proof = []common.Hash{b}, []common.Hash{a}
+	if a.Cmp(b) > 0 {
+		a, b = b, a
+	}
+	tree.Root = crypto.Keccak256Hash(a[:], b[:])
+	return r, tree
+}
+
 func TestAutomaticPreparesAllFrontendClaimsWithOneRewardsFetch(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
 		claimedA, claimedB int64
 		corrupt            bool
 		literalGate        bool
+		absent             int
+		sharedInput        bool
+		mixed              bool
+		malformed          bool
 		want               string
 	}{
 		{name: "both positive"},
+		{name: "runtime before fixed token", mixed: true},
+		{name: "first optional token absent", absent: 1},
+		{name: "empty optional inventory", absent: 2},
+		{name: "mandatory token absent", literalGate: true, absent: 1, want: "reward absent"},
+		{name: "missing witness used by another step", absent: 1, sharedInput: true, want: "reward absent"},
+		{name: "invalid token beside absent optional claim", absent: 1, malformed: true, want: "malformed token address"},
 		{name: "idle A and positive B", claimedA: 100},
 		{name: "positive A and idle B", claimedB: 200},
 		{name: "all idle optional gates", claimedA: 100, claimedB: 200},
@@ -111,6 +165,15 @@ func TestAutomaticPreparesAllFrontendClaimsWithOneRewardsFetch(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, r, tree := frontendClaims(t)
+			if tc.mixed {
+				r, tree = mixedClaimRecipe(t, s.Account)
+			}
+			if tc.sharedInput {
+				// Use the first claim's cumulative Input in an independent financial calculation.
+				raw := make([]byte, 65)
+				raw[0], raw[5] = recipes.Min, recipes.Input
+				r.Steps = append(r.Steps, raw)
+			}
 			if tc.literalGate {
 				for _, step := range r.Steps {
 					if step[0] != recipes.Manage {
@@ -139,6 +202,10 @@ func TestAutomaticPreparesAllFrontendClaimsWithOneRewardsFetch(t *testing.T) {
 			rows := make([]wire.MerklReward, len(fixture.Rewards))
 			for i, reward := range fixture.Rewards {
 				rows[i] = wire.MerklReward{Token: wire.MerklToken{Address: reward.Token.Hex(), Decimals: 18}, Amount: reward.Cumulative, Claimed: "0", Pending: "0", Proofs: reward.Proof}
+			}
+			rows = rows[tc.absent:]
+			if tc.malformed {
+				rows[0].Token.Address = "invalid"
 			}
 			if tc.corrupt {
 				rows[0].Amount = "101"
@@ -217,17 +284,36 @@ func TestAutomaticPreparesAllFrontendClaimsWithOneRewardsFetch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(out.Actions) != 2 || fetches != 1 || reads != 1 {
+			wantReads := 1
+			if tc.absent == 2 {
+				wantReads = 0
+			}
+			if len(out.Actions) != 2 || fetches != 1 || reads != wantReads {
 				t.Fatalf("partial or repeated preparation: actions=%d HTTP=%d reads=%d", len(out.Actions), fetches, reads)
 			}
 			for i := 0; i < 2; i++ {
+				if tc.mixed {
+					data := out.Actions[fmt.Sprintf("%d:0", i)]
+					args, err := binding.NewMerklDistributor().GetABI().Methods["claim"].Inputs.Unpack(data[4:])
+					want := addr(int64(0x202 - i))
+					if err != nil || args[1].([]common.Address)[0] != want {
+						t.Fatalf("claim %d did not select %s: %v", i, want, err)
+					}
+					continue
+				}
 				wantCum, wantDelta := "200", big.NewInt(200-tc.claimedB).String()
 				if i == 0 {
 					wantCum, wantDelta = "100", big.NewInt(100-tc.claimedA).String()
 				}
+				if i < tc.absent {
+					wantCum, wantDelta = "0", "0"
+				}
 				if out.Inputs[uint(2*i)] != wantCum || out.Inputs[uint(2*i+1)] != wantDelta {
 					t.Fatalf("cumulative/delta differs: %v", out.Inputs)
 				}
+			}
+			if _, _, err := recipes.Assemble(r, tree, out.Inputs, out.Actions, nil); err != nil {
+				t.Fatalf("assemble original recipe: %v", err)
 			}
 			if out.Task != nil {
 				t.Fatal("synchronous claim retained settlement work")

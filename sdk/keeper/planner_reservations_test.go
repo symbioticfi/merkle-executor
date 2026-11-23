@@ -7,7 +7,6 @@ import (
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -56,9 +55,6 @@ func (r *reservationReader) CallContract(ctx context.Context, msg ethereum.CallM
 				return nil, errors.New("out of gas")
 			case "transport":
 				return nil, errors.New("RPC unavailable")
-			case "reorg":
-				r.header = types.CopyHeader(r.header)
-				r.header.Extra = []byte("reorganized during admission")
 			}
 		}
 	}
@@ -178,7 +174,7 @@ func TestPlannerTaskReservationPreservesDiscoveryFailure(t *testing.T) {
 }
 
 func TestPlannerTaskReservationKeepsSharedFailuresFatal(t *testing.T) {
-	for _, mode := range []string{"transport", "reorg"} {
+	for _, mode := range []string{"transport"} {
 		t.Run(mode, func(t *testing.T) {
 			p, r, strategies, _ := scaleFixture(t, 3)
 			r.accepted = map[int]bool{1: true, 2: true, 3: true}

@@ -1,9 +1,26 @@
 # Shared SDK and host ownership
 
 `github.com/symbioticfi/merkle-executor/sdk` is an independently versioned module.
-External hosts pin immutable `sdk/vX.Y.Z` releases. This repository builds its
-daemon against `./sdk` so local, CI and container checks use the same source.
-`make check` and `make integration` check both modules; the SDK also works alone.
+This repository builds its daemon against `./sdk` so local, CI and container
+checks use the same source. `make check` and `make integration` check both modules.
+
+## Install in an external host
+
+From a Go module with repository access, select a commit containing the SDK.
+These commands build the recipes package from commit `4063fc4`.
+
+```sh
+go get github.com/symbioticfi/merkle-executor/sdk/recipes@4063fc4425c6e5f4a9ad7e915d3c55b97936eb35
+go list -m github.com/symbioticfi/merkle-executor/sdk
+go build github.com/symbioticfi/merkle-executor/sdk/recipes
+```
+
+The selected version is `v0.0.0-20261116123341-4063fc4425c6`. Import SDK
+packages through `github.com/symbioticfi/merkle-executor/sdk/...` and commit the
+host's `go.mod` and `go.sum`. For a tagged SDK release, the repository tag
+`sdk/vX.Y.Z` corresponds to module version `vX.Y.Z`.
+
+## Runtime ownership
 
 The host supplies RPC/HTTP transports, signing credentials, provider registration,
 logging/metrics and process scheduling. SDK imports and constructors never read environment values or start workers.
@@ -27,11 +44,15 @@ one-element slices. The standalone discovery, preparation and validation helpers
 are removed, along with `PreparationOptions.VerifySimulation`; supply numerical
 witnesses to the shared validator. Both sizes receive the same commitment,
 identity, root, leaf-role, simulation and canonical-block checks.
+AccessManager forwarding uses the SDK chain client's pinned code reads and
+`eth_call` code overrides. A custom reader for forwarded numerical prefixes
+also implements `provider.CodeOverridesReader` for the two-address override.
 
 Providers implement `RecipeRequirements` and `PrepareRecipe`. They receive only
 an authenticated recipe/tree and snapshot. Outputs contain authorized inputs,
-masked actions, witnesses and optionally a process-local `provider.Task`.
-Stateless providers return no task. A task implements
+masked actions, witnesses and optionally a process-local `provider.Task`. Each
+output's input indices and action keys must appear in that provider's declared
+`RecipeRequirements`. Stateless providers return no task. A task implements
 `Advance(context.Context, provider.Snapshot) (provider.Progress, error)` and owns
 its typed progress in RAM. It runs only after canonical authorization, retaining
 exact order identity across in-process retries. Account reservations last until
