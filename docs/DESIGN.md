@@ -26,7 +26,7 @@ no environment variables.
 `DiscoverBatch` and `ValidatePreparedBatch` are the shared discovery and admission
 path for both one executor and many; a single executor uses one-element slices.
 `DiscoverBatch` opens one block pin for all candidate executors. Metadata, shared
-account roots, event logs and event headers are grouped into independent bounded
+account roots and event logs are grouped into independent bounded
 read stages. Exact committed bytes, including trailing ABI data, are retained.
 A bounded RAM recipe cache holds immutable authenticated event evidence only;
 fresh metadata, roots, roles and simulation are always checked again. Cache
@@ -137,8 +137,8 @@ polling loops. Shutdown explicitly stops and drains the shared manager; process
 exit still loses RAM ownership.
 
 External publication happens only after canonical account authorization. Tasks
-receive confirmed execution logs and a fresh pinned snapshot, with a closing
-canonical guard. CoW/RFQ API statuses alone do not establish on-chain settlement.
+receive confirmed execution logs and a fresh pinned snapshot; the keeper re-proves
+that snapshot and the execution receipt canonical before it records a task done. CoW/RFQ API statuses alone do not establish on-chain settlement.
 Native issuer request and later claim recipes remain separate; the daemon does
 not infer payout completion from a successful request.
 

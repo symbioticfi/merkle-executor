@@ -145,8 +145,8 @@ func TestRecipeCacheReusesExactBytesAndIsolatesMutableBuilds(t *testing.T) {
 		})
 	}
 }
-func TestRecipeCacheMissesAndRequiredHeaderFailures(t *testing.T) {
-	for _, mode := range []string{"commitment", "new block", "event reorg", "miss ignores old header", "matched error", "matched null", "matched wrong", "header before caller", "caller", "root", "role"} {
+func TestRecipeCacheMissesAndAdmissionFailures(t *testing.T) {
+	for _, mode := range []string{"commitment", "new block", "miss ignores old header", "hit ignores event header", "caller", "root", "role"} {
 		t.Run(mode, func(t *testing.T) {
 			r, c := cacheFixture(t, Recipe{})
 			if err := cachedPrepare(t, r, c, true, nil); err != nil {
@@ -169,20 +169,10 @@ func TestRecipeCacheMissesAndRequiredHeaderFailures(t *testing.T) {
 					r.badHeader = 8
 					r.headerMode = "error"
 				}
-			case "event reorg":
-				h := types.CopyHeader(r.headers[8])
-				h.Extra = []byte("new canonical event")
-				r.headers[8] = h
-				r.logs = []types.Log{r.recipeLog(t, admissionRecipe(t), 4)}
-				expectedLogs = 2
-			case "matched error", "matched null", "matched wrong", "header before caller":
+			case "hit ignores event header":
+				// HashRecipe == RecipeHash binds the cached body; the event block is never re-read.
 				r.badHeader = 8
-				r.headerMode = strings.TrimPrefix(mode, "matched ")
-				wantError = true
-				if mode == "header before caller" {
-					r.headerMode = "error"
-					r.caller = common.HexToAddress("0x8888")
-				}
+				r.headerMode = "error"
 			case "caller":
 				r.caller = common.HexToAddress("0x8888")
 				wantError = true
@@ -201,9 +191,6 @@ func TestRecipeCacheMissesAndRequiredHeaderFailures(t *testing.T) {
 			})
 			if (err != nil) != wantError || r.logReads != expectedLogs {
 				t.Fatalf("error=%v logs%d want%d", err, r.logReads, expectedLogs)
-			}
-			if mode == "header before caller" && !strings.Contains(err.Error(), "caller mismatch") {
-				t.Fatalf("event header masked unauthenticated caller: %v", err)
 			}
 		})
 	}
@@ -230,7 +217,7 @@ func TestRecipeCacheStoresOnlyAfterSuccessfulAdmission(t *testing.T) {
 	}
 }
 func TestRecipeCacheBoundedEvictionIsolationAndConcurrentReplacement(t *testing.T) {
-	base := &recipeEvidence{key: evidenceKey{"18446744073709551617", common.HexToAddress("0x01")}, recipe: Recipe{Queries: make([][]byte, 100)}, hash: common.HexToHash("0x01"), block: 8, eventHash: common.HexToHash("0x02")}
+	base := &recipeEvidence{key: evidenceKey{"18446744073709551617", common.HexToAddress("0x01")}, recipe: Recipe{Queries: make([][]byte, 100)}, hash: common.HexToHash("0x01"), block: 8}
 	cost := evidenceCost(base) + recipeCacheOverhead
 	if cost < 3200 {
 		t.Fatal("empty slice entries omitted from budget")

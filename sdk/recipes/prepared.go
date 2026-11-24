@@ -104,7 +104,6 @@ func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts 
 	results := make([]DiscoveryResult, len(snapshots))
 	hints := make([]*recipeEvidence, len(snapshots))
 	matched := make([]bool, len(snapshots))
-	eventIndices := map[uint64]int{}
 	logIndices := map[int]int{}
 	requests = nil
 	for i, snapshot := range snapshots {
@@ -125,12 +124,6 @@ func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts 
 			hints[i] = options.Cache.load(evidenceKey{chainID: options.ChainID.String(), executor: snapshot.Executor})
 			matched[i] = hints[i] != nil && hints[i].hash == snapshot.RecipeHash && hints[i].block == snapshot.RecipeBlock
 		}
-		if snapshot.RecipeBlock != snapshot.BlockNumber {
-			if _, exists := eventIndices[snapshot.RecipeBlock]; !exists {
-				eventIndices[snapshot.RecipeBlock] = len(requests)
-				requests = append(requests, protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(snapshot.RecipeBlock)})
-			}
-		}
 		if !matched[i] {
 			logIndices[i] = len(requests)
 			requests = append(requests, recipeLogRead(snapshot))
@@ -142,42 +135,27 @@ func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts 
 	}
 	var fallback []protocolio.ReadRequest
 	fallbackIndices := map[int]int{}
-	eventHeaders := make([]*types.Header, len(snapshots))
 	fromLogs := func(i int, result protocolio.ReadResult) {
 		if result.Err != nil {
 			results[i].Err = errors.Errorf("read recipe events: %w", result.Err)
 			return
 		}
-		recipe, eventHash, e := recipeFromLogs(snapshots[i], eventHeaders[i], result.Logs)
+		recipe, e := recipeFromLogs(snapshots[i], result.Logs)
 		if e != nil {
 			results[i].Err = e
 			return
 		}
-		setPreparedRecipe(&results[i].Prepared, recipe, eventHash, options.ChainID)
+		setPreparedRecipe(&results[i].Prepared, recipe, options.ChainID)
 	}
 	for i, snapshot := range snapshots {
 		if results[i].Err != nil {
 			continue
 		}
-		eventHeader := header
-		if snapshot.RecipeBlock != snapshot.BlockNumber {
-			result := evidence.At(eventIndices[snapshot.RecipeBlock])
-			if result.Err != nil {
-				results[i].Err = errors.Errorf("recipe event header: %w", result.Err)
-				continue
-			}
-			eventHeader = result.Header
-		}
-		if err = protocolio.CheckHeader(eventHeader, new(big.Int).SetUint64(snapshot.RecipeBlock)); err != nil {
-			results[i].Err = err
-			continue
-		}
-		eventHeaders[i] = eventHeader
-		if matched[i] && eventHeader.Hash() == hints[i].eventHash {
+		if matched[i] {
 			hash, hashErr := HashRecipe(hints[i].recipe)
 			_, inspectErr := Inspect(hints[i].recipe)
 			if hashErr == nil && inspectErr == nil && hash == snapshot.RecipeHash {
-				setPreparedRecipe(&results[i].Prepared, hints[i].recipe, eventHeader.Hash(), options.ChainID)
+				setPreparedRecipe(&results[i].Prepared, hints[i].recipe, options.ChainID)
 				continue
 			}
 		}
@@ -206,10 +184,10 @@ func DiscoverCandidates(ctx context.Context, reader Reader, executors, accounts 
 	return results, nil
 }
 
-func setPreparedRecipe(prepared *PreparedRecipe, recipe Recipe, eventHash common.Hash, chainID *big.Int) {
+func setPreparedRecipe(prepared *PreparedRecipe, recipe Recipe, chainID *big.Int) {
 	prepared.Recipe = recipe
 	if prepared.cache != nil {
-		pending := &recipeEvidence{key: evidenceKey{chainID: chainID.String(), executor: prepared.Snapshot.Executor}, recipe: CloneRecipe(recipe), hash: prepared.Snapshot.RecipeHash, block: prepared.Snapshot.RecipeBlock, eventHash: eventHash}
+		pending := &recipeEvidence{key: evidenceKey{chainID: chainID.String(), executor: prepared.Snapshot.Executor}, recipe: CloneRecipe(recipe), hash: prepared.Snapshot.RecipeHash, block: prepared.Snapshot.RecipeBlock}
 		if prepared.cache.retainable(pending) {
 			prepared.pending = pending
 		}

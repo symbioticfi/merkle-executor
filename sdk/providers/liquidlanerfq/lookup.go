@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	wire "github.com/symbioticfi/merkle-executor/sdk/protocoltypes"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 )
@@ -98,9 +97,6 @@ func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, 
 			if st.OrderID != "" && next.Match == "" {
 				return false, false, errors.New("RFQ saved order missing")
 			}
-			if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
-				return false, false, err
-			}
 			*lookup = lookupState{}
 			if next.Match != "" {
 				st.OrderID = next.Match
@@ -116,9 +112,6 @@ func (p *Provider) lookup(ctx context.Context, s provider.Snapshot, d prepared, 
 		}
 		// Commit only complete validated pages, before a later request can time out.
 		// The cursor alone never permits publication or settlement.
-		if err := protocolio.Canonical(ctx, p.chain, s); err != nil {
-			return false, false, err
-		}
 		if next.IDs == nil {
 			next.IDs = make(map[string]bool)
 			next.Cursors = make(map[string]bool)

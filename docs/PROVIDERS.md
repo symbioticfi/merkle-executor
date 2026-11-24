@@ -138,10 +138,10 @@ authenticated recipe bytes after metadata discovery, so these aggregates are a
 later stage. A recipe with numeric economics adds exactly one shared lens call
 regardless of field/provider count. Opening/canonical headers, recipe event evidence, current metadata/roles and
 original full simulation remain necessary separate stages. The 16 MiB recipe cache
-retains only canonical event bodies, never balances, roots, roles or quotes.
+retains only event bodies whose hash matches the on-chain commitment, never balances, roots, roles or quotes.
 
 `TestMerklPlannerNetworkRequestCounts` measures the automatic Merkl provider:
-7 cold / 6 warm preparation requests and 3 explicit revalidation requests for
+8 cold / 7 warm preparation requests and 3 explicit revalidation requests for
 its small recipe. `TestAnvilAutomaticMerklClaimFeedsRecipeBalance` verifies the normal daemon
 uses one shared lens and one rewards HTTP fetch for a claim followed by balance
 READ and a derived transfer. RPC counts are local fixture evidence, not latency or

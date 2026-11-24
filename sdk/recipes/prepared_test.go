@@ -255,13 +255,13 @@ func (r *preparedReader) BatchRead(ctx context.Context, requests []protocolio.Re
 	return out, nil
 }
 
-func TestDiscoverBatchSharesHeadRootAndEventHeader(t *testing.T) {
+func TestDiscoverBatchSharesHeadAndRoot(t *testing.T) {
 	r, executors, accounts := preparedFixture(t, 3)
 	prepared, err := DiscoverBatch(t.Context(), r, executors, accounts, r.members[0].caller, PreparationOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.heads != 1 || len(r.groups) != 2 || len(r.groups[0]) != 13 || len(r.groups[1]) != 4 {
+	if r.heads != 1 || len(r.groups) != 2 || len(r.groups[0]) != 13 || len(r.groups[1]) != 3 {
 		t.Fatalf("heads=%d groups=%v", r.heads, r.groups)
 	}
 	for i, member := range prepared {
@@ -340,7 +340,7 @@ func TestDiscoverBatchChunksLargeGroupsAndRejectsInvalidIdentity(t *testing.T) {
 	}
 }
 
-func TestDiscoverBatchCacheReauthenticatesEventAndIsolatesBodies(t *testing.T) {
+func TestDiscoverBatchCacheSkipsEventReadsAndIsolatesBodies(t *testing.T) {
 	r, executors, accounts := preparedFixture(t, 1)
 	options := PreparationOptions{ChainID: big.NewInt(1), Cache: NewRecipeCache(1, 1<<20)}
 	prepared, err := DiscoverBatch(t.Context(), r, executors, accounts, r.members[0].caller, options)
@@ -361,8 +361,8 @@ func TestDiscoverBatchCacheReauthenticatesEventAndIsolatesBodies(t *testing.T) {
 	}
 	for _, group := range r.groups {
 		for _, request := range group {
-			if request.Kind == protocolio.ReadLogs {
-				t.Fatal("warm cache rediscovered logs")
+			if request.Kind == protocolio.ReadLogs || request.Kind == protocolio.ReadHeader {
+				t.Fatal("warm cache re-read event evidence")
 			}
 		}
 	}
@@ -370,10 +370,6 @@ func TestDiscoverBatchCacheReauthenticatesEventAndIsolatesBodies(t *testing.T) {
 	prepared, err = DiscoverBatch(t.Context(), r, executors, accounts, r.members[0].caller, options)
 	if err != nil || prepared[0].Recipe.Steps[0][0] != Call {
 		t.Fatalf("cached body mutated: %v", err)
-	}
-	r.members[0].headers[8] = nil
-	if _, err = DiscoverBatch(t.Context(), r, executors, accounts, r.members[0].caller, options); err == nil {
-		t.Fatal("matched cache hint bypassed missing canonical event header")
 	}
 }
 

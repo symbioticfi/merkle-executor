@@ -27,11 +27,11 @@ state on disk.
 admission entry points for one or many executors; use one-element slices for one.
 Discovery shares a block pin and independent read stages across executors.
 Validation checks selected calls, leaves, numerical witnesses and the exact final
-envelope together, then closes canonical pins.
+envelope together at a fresh block.
 Immutable recipe cache evidence publishes only after successful admission.
 Hosts executing authorized calls inside an external transaction envelope use
 `ValidatePreparedBatchWithSimulation` with a mandatory simulation callback. It
-shares recipe, fresh identity/role and opening/closing canonical guards; the
+shares recipe and fresh identity/role guards; the
 callback receives copied calls, caller, fresh block and gas limit and must
 simulate those exact calls inside the unchanged complete envelope. External
 usefulness and settlement belong to the host: this entry point accepts no

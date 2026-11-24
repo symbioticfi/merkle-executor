@@ -170,10 +170,9 @@ func TestDiscoverPinsAndChoosesLatestEvent(t *testing.T) {
 
 func TestDiscoverRejectsWrongEventEvidence(t *testing.T) {
 	cases := map[string]func(*fakeReader){
-		"missing":    func(r *fakeReader) { r.logs = nil },
-		"removed":    func(r *fakeReader) { r.logs[0].Removed = true },
-		"block hash": func(r *fakeReader) { r.logs[0].BlockHash = common.Hash{} },
-		"duplicate":  func(r *fakeReader) { r.logs = append(r.logs, r.logs[0]) },
+		"missing":   func(r *fakeReader) { r.logs = nil },
+		"removed":   func(r *fakeReader) { r.logs[0].Removed = true },
+		"duplicate": func(r *fakeReader) { r.logs = append(r.logs, r.logs[0]) },
 		"later distinct commitment": func(r *fakeReader) {
 			log := r.logs[0]
 			log.Index++
@@ -261,38 +260,30 @@ func (r headerFaultReader) HeaderByNumber(ctx context.Context, block *big.Int) (
 }
 
 func TestSharedDiscoveryRejectsMalformedHeaders(t *testing.T) {
-	for _, phase := range []string{"head", "event"} {
-		for _, fault := range []string{"null", "missing number", "negative", "overflow", "wrong height"} {
-			if phase == "head" && fault == "wrong height" {
-				continue // A latest head has no externally requested height.
-			}
-			t.Run(phase+"/"+fault, func(t *testing.T) {
-				base := fakeChain(t, admissionRecipe(t))
-				reader := headerFaultReader{Reader: base, fault: func(block *big.Int, header *types.Header) *types.Header {
-					selected := phase == "head" && block == nil || phase == "event" && block != nil && block.Uint64() == 8
-					if !selected {
-						return header
-					}
-					if fault == "null" {
-						return nil
-					}
-					header = types.CopyHeader(header)
-					switch fault {
-					case "missing number":
-						header.Number = nil
-					case "negative":
-						header.Number = big.NewInt(-1)
-					case "overflow":
-						header.Number = new(big.Int).Lsh(big.NewInt(1), 65)
-					case "wrong height":
-						header.Number = new(big.Int).Add(header.Number, big.NewInt(1))
-					}
+	for _, fault := range []string{"null", "missing number", "negative", "overflow"} {
+		t.Run("head/"+fault, func(t *testing.T) {
+			base := fakeChain(t, admissionRecipe(t))
+			reader := headerFaultReader{Reader: base, fault: func(block *big.Int, header *types.Header) *types.Header {
+				if block != nil {
 					return header
-				}}
-				if _, err := DiscoverBatch(t.Context(), reader, []common.Address{base.executor}, []common.Address{base.account}, base.caller, PreparationOptions{}); err == nil {
-					t.Fatal("malformed shared discovery header accepted")
 				}
-			})
-		}
+				if fault == "null" {
+					return nil
+				}
+				header = types.CopyHeader(header)
+				switch fault {
+				case "missing number":
+					header.Number = nil
+				case "negative":
+					header.Number = big.NewInt(-1)
+				case "overflow":
+					header.Number = new(big.Int).Lsh(big.NewInt(1), 65)
+				}
+				return header
+			}}
+			if _, err := DiscoverBatch(t.Context(), reader, []common.Address{base.executor}, []common.Address{base.account}, base.caller, PreparationOptions{}); err == nil {
+				t.Fatal("malformed shared discovery header accepted")
+			}
+		})
 	}
 }

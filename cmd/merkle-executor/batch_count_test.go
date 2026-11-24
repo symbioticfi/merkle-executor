@@ -237,11 +237,12 @@ func TestMerklPlannerNetworkRequestCounts(t *testing.T) {
 					requests, arrays, methods = 0, 0, 0
 					mu.Unlock()
 					plan, err := planner.Prepare(t.Context(), keeper.Strategy{Config: keeper.Config{Account: account.Hex(), Executor: target.Hex(), Tree: path}, Providers: []keeper.Provider{p}})
-					// A moved head adds no reads: block hashes are not re-proven.
-					wantMethods, wantRequests, wantArrays := 9, 8, 1
+					// A moved head adds no reads: block hashes are not re-proven, and a warm
+					// cache hit skips the recipe event logs.
+					wantMethods, wantRequests, wantArrays := 8, 8, 0
 					if warm {
 						wantMethods--
-						wantArrays--
+						wantRequests--
 					}
 					mu.Lock()
 					gotRequests, gotArrays, gotMethods := requests, arrays, methods
