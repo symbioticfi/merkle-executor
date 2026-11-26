@@ -117,7 +117,7 @@ func TestPrepareCumulativeSelfClaim(t *testing.T) {
 }
 
 func TestPrepareIdlesOnlyAfterValidEmptyWork(t *testing.T) {
-	for _, test := range []string{"no-chain", "no-token", "fully-claimed", "bad-proof", "redirected", "rpc-error", "malformed-response"} {
+	for _, test := range []string{"no-chain", "no-token", "pending-only", "invalid-pending", "fully-claimed", "bad-proof", "redirected", "rpc-error", "malformed-response"} {
 		t.Run(test, func(t *testing.T) {
 			sibling := common.HexToHash("0x" + strings.Repeat("11", 32))
 			root := common.HexToHash("0xd98400418a73f31e4b681498ddc089b9c9b92f409942f76789590c1cae24f0ab")
@@ -128,6 +128,13 @@ func TestPrepareIdlesOnlyAfterValidEmptyWork(t *testing.T) {
 				entries = []wire.MerklEntry{}
 			case "no-token":
 				entries[0].Rewards = []wire.MerklReward{}
+			case "pending-only", "invalid-pending":
+				reward.Amount, reward.Claimed, reward.Pending = "0", "0", "3"
+				reward.Proofs = []string{}
+				if test == "invalid-pending" {
+					reward.Pending = ""
+				}
+				entries[0].Rewards[0] = reward
 			case "malformed-response":
 				entries[0].Rewards = nil
 			}
@@ -175,7 +182,7 @@ func TestPrepareIdlesOnlyAfterValidEmptyWork(t *testing.T) {
 			}
 			out, e := p.Prepare(context.Background(), provider.Snapshot{ChainID: big.NewInt(1), BlockNumber: big.NewInt(12), Account: addr(3), Timestamp: 1000})
 			switch test {
-			case "bad-proof", "redirected", "rpc-error", "malformed-response":
+			case "invalid-pending", "bad-proof", "redirected", "rpc-error", "malformed-response":
 				if e == nil || errors.Is(e, provider.ErrNotReady) {
 					t.Fatalf("invalid response became idle: %+v %v", out, e)
 				}
@@ -184,7 +191,7 @@ func TestPrepareIdlesOnlyAfterValidEmptyWork(t *testing.T) {
 			if !errors.Is(e, provider.ErrNotReady) || len(out.Actions) != 0 {
 				t.Fatalf("valid empty work was not idle: %+v %v", out, e)
 			}
-			if (test == "no-chain" || test == "no-token") && rpcCalls != 0 {
+			if (test == "no-chain" || test == "no-token" || test == "pending-only") && rpcCalls != 0 {
 				t.Fatal("empty rewards performed unnecessary claim reads")
 			}
 		})
