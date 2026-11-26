@@ -16,6 +16,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/iris"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
@@ -35,7 +36,31 @@ func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
 	if deps.Chain == nil {
 		return nil, errors.New("native claims require chain reader")
 	}
-	return &Provider{chain: deps.Chain}, nil
+	bondClaims, err := iris.NewAutomatic(deps)
+	if err != nil {
+		return nil, err
+	}
+	return automatic{native: &Provider{chain: deps.Chain}, bonds: bondClaims}, nil
+}
+
+// Native issuer claims have no queries. Guarded bond claims supply only a pod input.
+type automatic struct {
+	native, bonds keeper.Provider
+}
+
+func (p automatic) forRecipe(r recipes.Recipe) keeper.Provider {
+	if len(r.Queries) == 0 {
+		return p.native
+	}
+	return p.bonds
+}
+
+func (p automatic) RecipeRequirements(s provider.Snapshot, r recipes.Recipe, t *recipes.Tree) (keeper.RecipeRequirements, error) {
+	return p.forRecipe(r).RecipeRequirements(s, r, t)
+}
+
+func (p automatic) PrepareRecipe(ctx context.Context, s provider.Snapshot, r recipes.Recipe, t *recipes.Tree, results map[uint]*big.Int) ([]provider.Output, error) {
+	return p.forRecipe(r).PrepareRecipe(ctx, s, r, t, results)
 }
 
 // A native claim is one unconditional call with executor-supplied calldata.
