@@ -24,14 +24,13 @@ type chainReader interface {
 	NonceAt(context.Context, common.Address, *big.Int) (uint64, error)
 }
 
-type Provider struct{ chain chainReader }
+type Provider struct{ chain provider.Reader }
 
 func NewAutomatic(deps provider.Deps) (keeper.Provider, error) {
-	chain, ok := deps.Chain.(chainReader)
-	if !ok {
-		return nil, errors.New("Iris claims require a pinned contract nonce reader")
+	if deps.Chain == nil {
+		return nil, errors.New("Iris claims require a chain reader")
 	}
-	return &Provider{chain: chain}, nil
+	return &Provider{chain: deps.Chain}, nil
 }
 
 func (*Provider) RecipeRequirements(s provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (keeper.RecipeRequirements, error) {
@@ -55,7 +54,11 @@ func (p *Provider) PrepareRecipe(ctx context.Context, s provider.Snapshot, recip
 	}
 
 	// Core starts at CREATE nonce one and creates exactly one pod per accepted loan.
-	count, err := p.chain.NonceAt(ctx, mainnetCore, s.BlockNumber)
+	chain, ok := p.chain.(chainReader)
+	if !ok {
+		return nil, errors.New("Iris claims require a pinned contract nonce reader")
+	}
+	count, err := chain.NonceAt(ctx, mainnetCore, s.BlockNumber)
 	if err != nil {
 		return nil, errors.Errorf("read Iris core nonce: %w", err)
 	}
