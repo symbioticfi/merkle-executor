@@ -85,6 +85,15 @@ func indexRewards(entries []wire.MerklEntry, chainID int64) (rewardSet, error) {
 			selected[token] = reward
 		}
 	}
+	// Pending rewards have no finalized leaf and must stay out of claim selection.
+	for token, reward := range selected {
+		if reward.Amount != "0" || reward.Claimed != "0" || len(reward.Proofs) != 0 {
+			continue
+		}
+		if _, err := parse.Uint256(reward.Pending); err == nil && reward.Token.Decimals >= 0 && reward.Token.Decimals <= 255 {
+			delete(selected, token)
+		}
+	}
 	return selected, nil
 }
 
