@@ -1,0 +1,132 @@
+[
+  {
+    "type": "function",
+    "name": "getLoan",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "type": "address",
+        "name": "pod"
+      }
+    ],
+    "outputs": [
+      {
+        "type": "tuple",
+        "name": "",
+        "components": [
+          {
+            "type": "address",
+            "name": "borrower"
+          },
+          {
+            "type": "address",
+            "name": "solver"
+          },
+          {
+            "type": "address",
+            "name": "collateralToken"
+          },
+          {
+            "type": "address",
+            "name": "debtToken"
+          },
+          {
+            "type": "uint128",
+            "name": "venueBitmap"
+          },
+          {
+            "type": "uint32",
+            "name": "maturity"
+          },
+          {
+            "type": "uint32",
+            "name": "overduePeriod"
+          },
+          {
+            "type": "uint16",
+            "name": "fixedRate"
+          },
+          {
+            "type": "uint16",
+            "name": "overdueRate"
+          },
+          {
+            "type": "uint16",
+            "name": "bondLltv"
+          },
+          {
+            "type": "uint16",
+            "name": "fee"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "getPosition",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "type": "address",
+        "name": "pod"
+      }
+    ],
+    "outputs": [
+      {
+        "type": "tuple",
+        "name": "",
+        "components": [
+          {
+            "type": "uint128",
+            "name": "collateral"
+          },
+          {
+            "type": "uint128",
+            "name": "debt"
+          },
+          {
+            "type": "uint128",
+            "name": "bond"
+          },
+          {
+            "type": "uint128",
+            "name": "bondRequirement"
+          },
+          {
+            "type": "uint128",
+            "name": "collateralIndex"
+          },
+          {
+            "type": "uint128",
+            "name": "debtIndex"
+          },
+          {
+            "type": "uint128",
+            "name": "fixedLeg"
+          },
+          {
+            "type": "uint128",
+            "name": "floatingLeg"
+          },
+          {
+            "type": "uint128",
+            "name": "surplus"
+          },
+          {
+            "type": "uint32",
+            "name": "lastUpdate"
+          },
+          {
+            "type": "uint8",
+            "name": "venueId"
+          },
+          {
+            "type": "bytes",
+            "name": "data"
+          }
+        ]
+      }
+    ]
+  }
+]
