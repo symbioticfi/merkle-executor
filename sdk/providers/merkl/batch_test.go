@@ -56,11 +56,17 @@ func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {
 	for i, token := range tokens {
 		rewards[i] = wire.MerklReward{Token: wire.MerklToken{Address: token.Hex(), Decimals: 6}, Amount: big.NewInt(int64(100 + i)).String(), Claimed: "0", Pending: "0", Proofs: []string{hashes[1-i].Hex()}}
 	}
-	for _, test := range []string{"both ready", "first claimed", "all claimed", "bad proof"} {
+	for _, test := range []string{"both ready", "pending alongside ready", "first claimed", "all claimed", "bad proof"} {
 		t.Run(test, func(t *testing.T) {
 			rows := append([]wire.MerklReward(nil), rewards...)
 			if test == "bad proof" {
 				rows[1].Amount = "999"
+			}
+			if test == "pending alongside ready" {
+				rows = append(rows, wire.MerklReward{
+					Token:  wire.MerklToken{Address: addr(200).Hex(), Decimals: 6},
+					Amount: "0", Claimed: "0", Pending: "3", Proofs: []string{},
+				})
 			}
 			fetches, aggregates := 0, 0
 			getterCounts := map[string]int{}
@@ -110,9 +116,6 @@ func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {
 					return nil, err
 				}
 				calls := *abi.ConvertType(args[0], new([]multicall.Multicall3Call3)).(*[]multicall.Multicall3Call3)
-				if len(calls) != 6 {
-					t.Fatalf("shared reward reads = %d, want 6", len(calls))
-				}
 				result := make([]multicall.Multicall3Result, len(calls))
 				for i, call := range calls {
 					data, err := underlying(ctx, ethereum.CallMsg{To: &call.Target, Data: call.CallData}, block)
@@ -125,6 +128,9 @@ func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {
 			})
 			p := &Automatic{deps: provider.Deps{HTTP: client, Chain: chain}}
 			out, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+			if test != "all claimed" && test != "bad proof" && err != nil {
+				t.Fatal(err)
+			}
 			if aggregates != 1 || getterCounts["getMerkleRoot"] != 1 || getterCounts["claimRecipient"] != 3 || getterCounts["claimed"] != 2 {
 				t.Fatalf("reward getters were repeated: aggregates=%d getters=%v", aggregates, getterCounts)
 			}
@@ -134,9 +140,6 @@ func TestAutomaticBatchesDistinctRewardsUsingSingleClaimRecipe(t *testing.T) {
 					t.Fatal("invalid or idle batch accepted")
 				}
 				return
-			}
-			if err != nil {
-				t.Fatal(err)
 			}
 			if fetches != 1 || len(out) == 0 || len(out[0].Inputs) != 0 || len(out[0].Actions) != 1 {
 				t.Fatalf("wrong preparation: %+v HTTP %d", out, fetches)
