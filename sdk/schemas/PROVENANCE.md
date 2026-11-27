@@ -87,3 +87,8 @@ fixture sources and deployment evidence boundary.
   masked input, while owner and receiver are pinned to the account.
   `cmd/merkle-executor/testdata/merkl/FixtureThreeF.sol` supplies local test
   contracts only. Its ABI and bytecode are built by the adjacent `generate.py`.
+
+Iris bond claims use the two view methods in [Iris core's IIris.sol](https://github.com/iris-credit/iris-core/blob/d7ca766b50cc98ecade909d969dddc302297aa11/src/interfaces/IIris.sol).
+The provider supplies the pod input only for the standalone Curator bond claim recipe on Ethereum.
+The committed recipe verifies the solver and the settlement fields, derives the full bond amount,
+and pins the MerkleAccount as receiver.
